@@ -8,6 +8,27 @@ from __future__ import annotations
 import torch
 import torch.nn.functional
 
+from torch_geometric.nn import fps
+
+
+def fps_points(point_clouds: torch.Tensor, downsample_points: int = 1024) -> torch.Tensor:
+    B, N, D = point_clouds.shape[-3], point_clouds.shape[-2], point_clouds.shape[-1]
+    point_clouds = point_clouds.reshape(-1, N, D)
+
+    batch_size, num_points, num_dims = point_clouds.shape
+    flattened_points = point_clouds.reshape(-1, num_dims)
+
+    batch_indices = torch.arange(batch_size, device=point_clouds.device)
+    batch = batch_indices.repeat_interleave(num_points)
+
+    ratio = float(downsample_points) / float(num_points)
+
+    sampled_idx = fps(point_clouds[:, :, :3].reshape(-1, 3), batch, ratio=ratio, batch_size=batch_size)
+
+    sampled_points = flattened_points[sampled_idx]
+    sampled_points_per_cloud = sampled_points.size(0) // batch_size
+    return sampled_points.reshape(batch_size, sampled_points_per_cloud, num_dims)
+
 
 def create_axis_remap_function(forward: str = "x", left: str = "y", up: str = "z", device: str = "cpu"):
     """Creates a function to remap and reorient the axes of input tensors.
