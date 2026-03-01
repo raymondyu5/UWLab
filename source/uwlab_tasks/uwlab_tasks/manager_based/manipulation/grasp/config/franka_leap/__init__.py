@@ -1,0 +1,15 @@
+# Copyright (c) 2024-2026, The UW Lab Project Developers.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+import gymnasium as gym
+
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCup-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeap",
+    },
+    disable_env_checker=True,
+)

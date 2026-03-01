@@ -1,0 +1,166 @@
+# Copyright (c) 2024-2026, The UW Lab Project Developers.
+# All Rights Reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Exact port of FrankaGraspRew from:
+# IsaacLab/source/isaaclab_tasks/.../utils/grasp/franka_grasp_rew.py
+#
+# Changes from IsaacLab version:
+# - asset_name parameterized (was "right_hand" hardcoded)
+# - object_name parameterized (was env_cfg["params"]["spawn_multi_assets_name"])
+# - fingers_name_list parameterized (was env_cfg["params"]["contact_sensor"]["spawn_contact_list"])
+# - target_pos parameterized (was env_cfg["params"]["right_target_manipulated_object_pose"][:3])
+# - init_height parameterized (was computed from RigidObject config pos[2])
+# - finger_reward_scale kept exactly as original (palm_lower weight 0.5, fingertip 1.0, etc.)
+# - Contact sensor prim paths adapted: {ENV_REGEX_NS}/Robot/{link_name} instead of
+#   {ENV_REGEX_NS}/right_hand/right_hand/{link_name}
+# - Sensor names: {link_name}_contact instead of right_{link_name}_contact
+# - Wrist sensor: {ENV_REGEX_NS}/Robot/panda_link6, name: panda_link6_contact
+
+from __future__ import annotations
+
+import torch
+import isaaclab.utils.math as math_utils
+from isaaclab.sensors.contact_sensor import ContactSensorCfg
+
+
+class GraspReward:
+
+    def __init__(
+        self,
+        asset_name: str,
+        object_name: str,
+        fingers_name_list: list,
+        init_height: float,
+        target_pos: tuple,
+        num_envs: int | None = None,
+    ):
+        self.asset_name = asset_name
+        self.object_name = object_name
+        self.fingers_name_list = fingers_name_list
+        self.init_height = init_height
+        self.target_pos = target_pos
+        self._num_envs = num_envs
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Reward scale per finger: [palm_lower, fingertip, thumb_fingertip, fingertip_2, fingertip_3]
+        self.finger_reward_scale = torch.as_tensor([0.5, 1.0, 2, 1.5, 1.0]).to(
+            self.device).unsqueeze(0)
+
+    def _get_target_pose_tensor(self, num_envs, device):
+        return torch.tensor(
+            [[self.target_pos[0], self.target_pos[1], self.target_pos[2],
+              1.0, 0.0, 0.0, 0.0]],
+            device=device, dtype=torch.float32).repeat(num_envs, 1)
+
+    def _get_init_height_tensor(self, num_envs, device):
+        return torch.full((num_envs,), self.init_height, device=device, dtype=torch.float32)
+
+    def setup_additional(self, scene_cfg):
+        wrist_sensor = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda_link6",
+            update_period=0.0,
+            history_length=3,
+            filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
+            debug_vis=False)
+        setattr(scene_cfg, "panda_link6_contact", wrist_sensor)
+
+    def setup_finger_sensors(self, scene_cfg, object_prim_name: str = "Object"):
+        filter_expr = ["{ENV_REGEX_NS}/" + object_prim_name]
+        for link_name in self.fingers_name_list:
+            sensor = ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/" + link_name,
+                update_period=0.0,
+                history_length=3,
+                filter_prim_paths_expr=filter_expr,
+                debug_vis=False)
+            setattr(scene_cfg, f"{link_name}_contact", sensor)
+
+    def grasp_rewards(self, env):
+        self.get_object_info(env)
+        self.get_finger_info(env)
+        self.get_contact_info(env)
+
+        rewards_finger2object = self.finger2object_rewards(env)
+        rewards03_contact = self.object2fingercontact_rewards(env)
+        rewards04_lift = self.liftobject_rewards(env)
+        rewards04_link6 = self.penalty_contact(env)
+
+        return rewards04_lift + rewards_finger2object + rewards03_contact + rewards04_link6
+
+    def penalty_contact(self, env):
+        sensor = env.scene["panda_link6_contact"]
+        force_data = torch.linalg.norm(
+            sensor._data.net_forces_w.reshape(env.num_envs, 3), dim=1).unsqueeze(1)
+        penalty_contact = torch.clip((force_data > 4).int() * 2 - 1, 0.0, 1.0) * -15
+        return penalty_contact.reshape(-1)
+
+    def liftobject_rewards(self, env):
+        init_height = self._get_init_height_tensor(env.num_envs, env.device)
+        lift_reward = torch.clip(self.object_pose[:, 2] - init_height, -0.1, 0.5)
+        lift_reward = torch.clip(torch.clip(lift_reward / 0.4, -0.1, 1.0) * 80, -2, 60)
+
+        self.lift_reward_scale = (self.object_pose[:, 2] - init_height >= 0.02).int()
+
+        target_dist = torch.linalg.norm(self.object_target_dev, dim=1)
+        target_dist_reward = torch.clip(1 - target_dist / 0.3, -0.1, 1.0) * 30
+        x_penalty = torch.clip(
+            (abs(self.object_target_dev[:, 0])) / 0.20, 0, 1.5) * -5 * self.lift_reward_scale
+
+        still_or_not = abs(self.target_in_object_angle) < 0.1
+
+        scale_topple = self.lift_reward_scale * 20 + 1
+        topple_reward = torch.clip(
+            torch.clip(still_or_not.int() * 2 - 1, -1, 0.2) * scale_topple, -1, 3)
+        reward = (lift_reward + self.lift_reward_scale + target_dist_reward * self.lift_reward_scale
+                  + x_penalty + topple_reward * 1.0)
+        return reward
+
+    def object2fingercontact_rewards(self, env):
+        self.finger_rewards_scale = (torch.sum(self.contact_or_not, dim=1) >= 2).int()
+        return torch.sum(self.contact_or_not, dim=1) * 3 + self.finger_rewards_scale * 2.0
+
+    def finger2object_rewards(self, env):
+        finger_dist = torch.clip(
+            torch.linalg.norm(self.finger_object_dev, dim=2), 0.02, 0.8)
+        reward = torch.clip((1.0 / (0.1 + finger_dist)) - 2.0, 0.0, 4.5)
+        reward = torch.sum(reward, dim=1) / len(self.fingers_name_list) * 3.0
+        return reward
+
+    def get_finger_info(self, env):
+        self.finger_pose = []
+        for name in self.fingers_name_list:
+            finger = env.scene[name]
+            finger_pose = finger._data.root_state_w[:, :7].clone()
+            finger_pose[:, :3] -= env.scene.env_origins
+            self.finger_pose.append(finger_pose.unsqueeze(1))
+        self.finger_pose = torch.cat(self.finger_pose, dim=1)
+        finger_object_pose = self.object_pose.clone().unsqueeze(1).repeat_interleave(
+            len(self.fingers_name_list), dim=1)
+        self.finger_object_dev = (finger_object_pose[..., :3] - self.finger_pose[..., :, :3])
+
+    def get_object_info(self, env):
+        target_pose = self._get_target_pose_tensor(env.num_envs, env.device)
+        target_pose[:, 3:7] = env.scene[self.object_name]._data.default_root_state[:, 3:7].clone()
+
+        self.object_pose = env.scene[self.object_name]._data.root_state_w[:, :7].clone()
+        self.object_pose[:, :3] -= env.scene.env_origins
+        self.object_target_dev = target_pose[:, :3].clone() - self.object_pose[:, :3].clone()
+
+        delta_quat = math_utils.quat_mul(
+            target_pose[:, 3:7].clone(),
+            math_utils.quat_inv(self.object_pose[:, 3:7]))
+        detla_euler = math_utils.euler_xyz_from_quat(delta_quat)[:2]
+        delta_xy_rotation = torch.cat(
+            [detla_euler[0].unsqueeze(1), detla_euler[1].unsqueeze(1)], dim=1)
+        self.target_in_object_angle = torch.sum(delta_xy_rotation, dim=1)
+
+    def get_contact_info(self, env):
+        sensor_data = []
+        for name in self.fingers_name_list:
+            sensor = env.scene[f"{name}_contact"]
+            force_data = torch.linalg.norm(
+                sensor._data.force_matrix_w.reshape(env.num_envs, 3), dim=1).unsqueeze(1)
+            sensor_data.append(force_data)
+        self.contact_or_not = (torch.cat(sensor_data, dim=1) > 4.0).int()
