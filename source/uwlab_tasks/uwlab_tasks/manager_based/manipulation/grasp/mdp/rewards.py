@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import torch
 import isaaclab.utils.math as math_utils
+from isaaclab.assets import RigidObjectCfg
 from isaaclab.sensors.contact_sensor import ContactSensorCfg
 
 
@@ -57,6 +58,16 @@ class GraspReward:
     def _get_init_height_tensor(self, num_envs, device):
         return torch.full((num_envs,), self.init_height, device=device, dtype=torch.float32)
 
+    # Maps plain finger name -> sensor link name in the sensor USD
+    # fingertip/fingertip_2/fingertip_3 have dedicated sensor prims; palm_lower and thumb_fingertip do not
+    _FINGER_SENSOR_LINK = {
+        "palm_lower": "palm_lower",
+        "fingertip": "fingertip_sensor",
+        "thumb_fingertip": "thumb_sensor",
+        "fingertip_2": "fingertip_2_sensor",
+        "fingertip_3": "fingertip_3_sensor",
+    }
+
     def setup_additional(self, scene_cfg):
         wrist_sensor = ContactSensorCfg(
             prim_path="{ENV_REGEX_NS}/Robot/panda_link6",
@@ -66,11 +77,23 @@ class GraspReward:
             debug_vis=False)
         setattr(scene_cfg, "panda_link6_contact", wrist_sensor)
 
+    def setup_finger_entities(self, scene_cfg):
+        # Register each finger as a RigidObjectCfg(spawn=None) scene entity so
+        # env.scene[name] works for pose queries in get_finger_info.
+        # Prim paths mirror IsaacLab's spanwn_robot_hand: {ENV_REGEX_NS}/Robot/right_hand/{link_name}
+        for link_name in self.fingers_name_list:
+            rigid_cfg = RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + link_name,
+                spawn=None,
+            )
+            setattr(scene_cfg, link_name, rigid_cfg)
+
     def setup_finger_sensors(self, scene_cfg, object_prim_name: str = "Object"):
         filter_expr = ["{ENV_REGEX_NS}/" + object_prim_name]
         for link_name in self.fingers_name_list:
+            sensor_link = self._FINGER_SENSOR_LINK.get(link_name, link_name)
             sensor = ContactSensorCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/" + link_name,
+                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + sensor_link,
                 update_period=0.0,
                 history_length=3,
                 filter_prim_paths_expr=filter_expr,
@@ -164,3 +187,25 @@ class GraspReward:
                 sensor._data.force_matrix_w.reshape(env.num_envs, 3), dim=1).unsqueeze(1)
             sensor_data.append(force_data)
         self.contact_or_not = (torch.cat(sensor_data, dim=1) > 4.0).int()
+
+    # --- Obs term callables ---
+    # These read shared state set by grasp_rewards (which runs before obs terms).
+    # Wire them as ObsTerm(func=...) in the task __post_init__ after grasp_rewards.
+
+    def obs_target_object_pose(self, env):
+        # 7D: target xyz (from config) + current object rotation
+        target_pose = self._get_target_pose_tensor(env.num_envs, env.device)
+        target_pose[:, 3:7] = env.scene[self.object_name]._data.root_state_w[:, 3:7].clone()
+        return target_pose
+
+    def obs_manipulated_object_pose(self, env):
+        # 7D: current object pose in env-relative world frame
+        return self.object_pose
+
+    def obs_contact(self, env):
+        # (N, num_fingers): binary contact per finger
+        return self.contact_or_not
+
+    def obs_object_in_tip(self, env):
+        # (N, num_fingers*3): finger-to-object displacement vectors, flattened
+        return self.finger_object_dev.reshape(env.num_envs, -1)

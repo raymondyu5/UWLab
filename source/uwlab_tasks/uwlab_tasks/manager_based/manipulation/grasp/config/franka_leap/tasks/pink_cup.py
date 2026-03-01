@@ -93,8 +93,14 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             target_pos=PINK_CUP_TARGET_POS,
         )
         grasp_rew.setup_additional(self.scene)
+        grasp_rew.setup_finger_entities(self.scene)
         grasp_rew.setup_finger_sensors(self.scene, object_prim_name="Object")
         self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
+
+        self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
+        self.observations.policy.manipulated_object_pose = ObsTerm(func=grasp_rew.obs_manipulated_object_pose)
+        self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
+        self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
         # --- Instantiate SynthesizePC and wire as seg_pc obs term ---
         synth_pc = SynthesizePC(
