@@ -18,6 +18,37 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers import SceneEntityCfg
 
 
+def _sample_spherical_point(origin, radius, theta_range_rad, phi_range_rad, num_envs, device):
+    theta = torch.empty(num_envs, device=device).uniform_(*theta_range_rad)
+    phi = torch.empty(num_envs, device=device).uniform_(*phi_range_rad)
+    x = radius * torch.sin(phi) * torch.cos(theta)
+    y = radius * torch.sin(phi) * torch.sin(theta)
+    z = radius * torch.cos(phi)
+    offset = torch.stack([x, y, z], dim=1)
+    if origin.ndim == 1:
+        origin = origin.unsqueeze(0).expand(num_envs, -1)
+    return origin + offset
+
+
+def reset_camera_pose(
+    env,
+    env_ids: torch.Tensor,
+    camera_name: str,
+    random_pose_range: tuple,
+    theta_range_rad: tuple,
+    phi_range_rad: tuple,
+):
+    random_pose_range = torch.as_tensor(random_pose_range, device=env.device)
+    bbox = random_pose_range[:6].reshape(2, 3)
+    radius = torch.rand(env.num_envs, device=env.device) * (
+        random_pose_range[7] - random_pose_range[6]) + random_pose_range[6]
+    look_at = torch.rand((env.num_envs, 3), device=env.device) * (bbox[1] - bbox[0]) + bbox[0]
+    eye = _sample_spherical_point(look_at, radius, theta_range_rad, phi_range_rad, env.num_envs, env.device)
+    eye += env.scene.env_origins
+    look_at += env.scene.env_origins
+    env.scene[camera_name].set_world_poses_from_view(eye, look_at, env_ids=env_ids)
+
+
 def reset_robot_joints(
     env,
     env_ids: torch.Tensor,

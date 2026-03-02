@@ -49,6 +49,12 @@ class GraspReward:
         self.finger_reward_scale = torch.as_tensor([0.5, 1.0, 2, 1.5, 1.0]).to(
             self.device).unsqueeze(0)
 
+        # Shared state set by grasp_rewards each step; initialized to None.
+        # Obs methods fall back to scene data if called before first grasp_rewards run.
+        self.object_pose = None
+        self.contact_or_not = None
+        self.finger_object_dev = None
+
     def _get_target_pose_tensor(self, num_envs, device):
         return torch.tensor(
             [[self.target_pos[0], self.target_pos[1], self.target_pos[2],
@@ -200,12 +206,18 @@ class GraspReward:
 
     def obs_manipulated_object_pose(self, env):
         # 7D: current object pose in env-relative world frame
+        if self.object_pose is None:
+            self.get_object_info(env)
         return self.object_pose
 
     def obs_contact(self, env):
         # (N, num_fingers): binary contact per finger
+        if self.contact_or_not is None:
+            self.get_contact_info(env)
         return self.contact_or_not
 
     def obs_object_in_tip(self, env):
         # (N, num_fingers*3): finger-to-object displacement vectors, flattened
+        if self.finger_object_dev is None:
+            self.get_finger_info(env)
         return self.finger_object_dev.reshape(env.num_envs, -1)

@@ -6,10 +6,10 @@
 import gymnasium as gym
 
 gym.register(
-    id="UW-FrankaLeap-GraspPinkCup-v0",
+    id="UW-FrankaLeap-GraspPinkCup-JointAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeap",
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapJointAbs",
     },
     disable_env_checker=True,
 )

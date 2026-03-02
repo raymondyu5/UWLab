@@ -5,4 +5,4 @@
 
 from .observations import ee_pose_w, joint_pos_w, SynthesizePC
 from .rewards import GraspReward
-from .events import reset_robot_joints, reset_object_pose
+from .events import reset_robot_joints, reset_object_pose, reset_camera_pose

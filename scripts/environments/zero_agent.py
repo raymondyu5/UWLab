@@ -18,6 +18,8 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--save_video", type=str, default=None, help="Path to save video (e.g. /tmp/out.mp4). Requires --enable_cameras.")
+parser.add_argument("--num_steps", type=int, default=200, help="Number of steps when saving video.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -53,14 +55,29 @@ def main():
     print(f"[INFO]: Gym action space: {env.action_space}")
     # reset environment
     env.reset()
+
+    frames = []
+    step = 0
+
     # simulate environment
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
-            # compute zero actions
             actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-            # apply actions
             env.step(actions)
+
+        if args_cli.save_video:
+            # Read RGB from first env's camera sensor (shape: H x W x 3, uint8)
+            camera = env.unwrapped.scene["camera"]
+            rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy()
+            frames.append(rgb)
+            step += 1
+            if step >= args_cli.num_steps:
+                break
+
+    if args_cli.save_video and frames:
+        import imageio
+        imageio.mimwrite(args_cli.save_video, frames, fps=30)
+        print(f"[INFO]: Video saved to {args_cli.save_video}")
 
     # close the simulator
     env.close()

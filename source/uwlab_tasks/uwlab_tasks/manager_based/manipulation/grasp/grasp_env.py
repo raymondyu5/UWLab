@@ -7,6 +7,7 @@ from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp import time_out
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -39,13 +40,32 @@ class GraspSceneCfg(InteractiveSceneCfg):
     ground = AssetBaseCfg(
         prim_path="/World/GroundPlane",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0, 0, -1.0]),
-        spawn=sim_utils.GroundPlaneCfg(size=(1000.0, 1000.0)),
+        spawn=sim_utils.UsdFileCfg(usd_path="/workspace/uwlab/assets/table/default_environment.usd"),
         collision_group=-1,
     )
 
     dome_light = AssetBaseCfg(
         prim_path="/World/Light",
         spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
+    )
+
+    camera = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/Camera",
+        update_period=0.03,
+        height=480,
+        width=480,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.1, 1.0e5),
+        ),
+        offset=CameraCfg.OffsetCfg(
+            pos=(2.0, 0.5, 0.8),
+            rot=(0.4619, -0.1913, 0.4619, -0.7391),
+            convention="ros",
+        ),
     )
 
 

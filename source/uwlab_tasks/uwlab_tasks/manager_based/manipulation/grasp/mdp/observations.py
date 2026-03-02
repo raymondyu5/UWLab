@@ -117,7 +117,7 @@ class SynthesizePC:
             print("[INFO] Using synthetic pointcloud")
             self._printed_msg = True
 
-        return {"seg_pc": sampled_pcd.permute(0, 2, 1)}
+        return sampled_pcd.permute(0, 2, 1)
 
     def init_mesh(self, env):
         self.num_envs = env.num_envs
