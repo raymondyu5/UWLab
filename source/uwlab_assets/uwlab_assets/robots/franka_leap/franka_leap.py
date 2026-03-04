@@ -22,7 +22,7 @@ FRANKA_LEAP_ASSETS_DIR = "/workspace/uwlab/assets/robot/franka_leap"
 ##
 
 FRANKA_LEAP_EE_BODY = "panda_link7"
-FRANKA_LEAP_EE_OFFSET = (0.00179505, 0.00132118, 0.10697597)  # (x, y, z) metres
+FRANKA_LEAP_EE_OFFSET = (0.0, 0.0, 0.107)  # (x, y, z) metres
 
 ##
 # Actuator configs — matched to IsaacLab training values
