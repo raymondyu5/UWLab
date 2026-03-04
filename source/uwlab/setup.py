@@ -20,6 +20,7 @@ INSTALL_REQUIRES = [
     "pybullet",
     "torch_geometric",
     "torch_cluster",
+    "diffusion_policy @ git+https://github.com/real-stanford/diffusion_policy.git",
 ]
 
 PYTORCH_INDEX_URL = ["https://download.pytorch.org/whl/cu118"]
