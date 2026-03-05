@@ -29,18 +29,9 @@ class FrankaLeapGraspEnv(grasp_env.GraspEnv):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
 
-
-
     def __post_init__(self):
         super().__post_init__()
         # Wire EE pose obs with Franka-LEAP calibration values
         self.observations.policy.ee_pose.params["asset_cfg"] = SceneEntityCfg("robot")
         self.observations.policy.ee_pose.params["ee_body_name"] = franka_leap.FRANKA_LEAP_EE_BODY
         self.observations.policy.ee_pose.params["ee_offset"] = franka_leap.FRANKA_LEAP_EE_OFFSET
-
-        self.physics_hz = 60.0 # physics update frequency (number of physics updates per second)
-        self.decimation = 6 # control update period (number of physics updates per control update)
-        
-        self.dt = 1 / self.physics_hz # physics update period (seconds per physics update)
-        self.control_hz = 1 / (self.dt * self.decimation) # control update frequency (number of control updates per second)
-    

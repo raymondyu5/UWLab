@@ -65,7 +65,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         super().__post_init__()
 
         self.horizon = PINK_CUP_HORIZON
-        self.episode_length_s = self.horizon * self.decimation * self.dt
+        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
 
         # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
