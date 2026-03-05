@@ -1,0 +1,60 @@
+horizon: 4
+n_obs_steps: 1
+n_action_steps: 4
+
+dataset:
+  data_path: ???        # required: path to directory containing episode_*.zarr
+  load_list: [all]
+  num_demo: 150
+  obs_keys: [right_hand_joint_pos, right_ee_pose]
+  action_key: actions
+  image_keys: [seg_pc]
+  pad_before: 0
+  pad_after: 3
+  val_ratio: 0.05
+  downsample_points: 2048
+  pcd_noise: 0.02
+  noise_extrinsic: true
+  noise_extrinsic_parameter: [0.05, 0.2]
+  obs_noise: {}
+
+pointnet:
+  in_channels: 3
+  local_channels: [64, 64, 64, 128, 1024]
+  global_channels: [512, 256]
+  use_bn: false
+
+policy:
+  sigma: 0.0
+  num_inference_steps: 5
+  diffusion_step_embed_dim: 256
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: true
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: false
+
+training:
+  device: cuda:0
+  seed: 42
+  lr: 1.0e-4
+  weight_decay: 1.0e-6
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 1000
+  ema_power: 0.75
+  val_every: 10
+  checkpoint_every: 100
+  resume: false
+  use_wandb: false
+  wandb_project: uwlab_bc
+  wandb_run_name: null
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}

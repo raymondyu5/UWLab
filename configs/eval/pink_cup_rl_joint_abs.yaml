@@ -1,0 +1,15 @@
+task_id: UW-FrankaLeap-GraspPinkCup-JointAbs-v0
+checkpoint: ???   # required: path to .zip file (e.g. logs/sb3/task/model.zip)
+device: cuda:0
+num_envs: 1
+episode_steps: 200
+num_warmup_steps: 5
+spawn: cardinal_3x3
+record_video: false
+record_plots: true
+
+object_default_pos: [0.55, 0.0, 0.11]
+object_default_rot: [0.707, 0.707, 0.0, 0.0]
+object_reset_height: 0.11
+
+# success criterion defined in pink_cup.py:GraspPinkCupFrankaLeap.is_success()
