@@ -124,6 +124,7 @@ class GraspPinkCupFrankaLeapJointAbs(grasp_franka_leap.FrankaLeapGraspEnv):
                 "asset_cfg": SceneEntityCfg("robot"),
                 "arm_joint_pos": PINK_CUP_ARM_RESET,
                 "hand_joint_pos": PINK_CUP_HAND_RESET,
+                "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
             },
         )
         # Camera pose randomization — exact params from rl_env_ycb_cam_custom_init_pink_cup.yaml

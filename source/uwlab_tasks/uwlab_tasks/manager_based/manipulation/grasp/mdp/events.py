@@ -55,11 +55,25 @@ def reset_robot_joints(
     asset_cfg: SceneEntityCfg,
     arm_joint_pos: list,
     hand_joint_pos: list,
+    arm_joint_limits: dict | None = None,
 ):
     robot = env.scene[asset_cfg.name]
     num_envs_reset = len(env_ids)
 
     arm_pos = torch.tensor(arm_joint_pos, device=env.device, dtype=torch.float32)
+    if arm_joint_limits is not None:
+        order = [f"panda_joint{i}" for i in range(1, 8)]
+        low = torch.tensor(
+            [arm_joint_limits[j][0] for j in order],
+            device=env.device,
+            dtype=torch.float32,
+        )
+        high = torch.tensor(
+            [arm_joint_limits[j][1] for j in order],
+            device=env.device,
+            dtype=torch.float32,
+        )
+        arm_pos = arm_pos.clamp(low, high)
     hand_pos = torch.tensor(hand_joint_pos, device=env.device, dtype=torch.float32)
     joint_pos = torch.cat([arm_pos, hand_pos], dim=0).unsqueeze(0).repeat(num_envs_reset, 1)
     joint_vel = torch.zeros_like(joint_pos)

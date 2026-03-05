@@ -68,6 +68,7 @@ _build
 
 # Tests
 tests/
+ai_logs/
 
 # Docker history
 .uw-lab-docker-history
