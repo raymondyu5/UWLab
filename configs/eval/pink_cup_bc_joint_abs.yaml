@@ -1,0 +1,11 @@
+task_id: UW-FrankaLeap-GraspPinkCup-JointAbs-v0
+checkpoint: # remember to update !!  
+device: cuda:0
+num_envs: 1
+action_horizon: 1   # steps to execute before re-querying policy
+num_warmup_steps: 5  # hold position steps after reset before policy runs
+spawn: cardinal_3x3  # YAML name under configs/eval/spawns/
+record_video: false
+record_plots: true
+
+# object pose and success criterion read from env cfg (pink_cup.py)

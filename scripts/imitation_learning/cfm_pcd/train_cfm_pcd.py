@@ -16,13 +16,13 @@ from uwlab.policy.backbone.pcd.pointnet import PointNet
 from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
 from uwlab.policy.train_cfm_workspace import TrainCFMWorkspace
-from uwlab_tasks.manager_based.manipulation.grasp.dataset.zarr_dataset import SimZarrDataset
+from uwlab_tasks.manager_based.manipulation.grasp.dataset.zarr_dataset import ZarrDataset
 
 
 @hydra.main(config_path="../../../configs/bc", config_name="train_cfm_pcd", version_base=None)
 def main(cfg: DictConfig):
     # dataset
-    dataset = SimZarrDataset(
+    dataset = ZarrDataset(
         data_path=cfg.dataset.data_path,
         load_list=list(cfg.dataset.load_list),
         num_demo=cfg.dataset.num_demo,
