@@ -21,36 +21,19 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import GraspReward, SynthesizePC, reset_robot_joints, reset_object_pose, reset_camera_pose
 from .. import grasp_franka_leap
+from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST, ARM_RESET, HAND_RESET
 
 # Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
 # pos: [0.55, 0.0, 0.11], rot: axis=[0], angles=[1.57] -> X-axis 90deg -> quat (0.707, 0.707, 0, 0)
 # scale: [1.0, 1.0, 1.0] — the 0.35 scale in recenter_ycb.yaml is baked into rigid_object.usd already
 # pose_range: x: [-0.05, 0.05], y: [-0.05, 0.05], z: [0,0], roll: [0,0], yaw: [0,0]
 
+PINK_CUP_HORIZON = 200
+PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40) # from yaml
+
+
 PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
 PINK_CUP_MESH = "/workspace/uwlab/assets/pink_cup/textured_recentered.obj"
-ARM_MESH_DIR = "/workspace/uwlab/assets/robot/franka_leap/raw_mesh"
-HAND_MESH_DIR = "/workspace/uwlab/assets/robot/franka_leap/raw_mesh"
-
-# From rl_env_ycb_synthetic_pc_custom_init_pink_cup.yaml:
-#   right_reset_joint_pose (arm, 7D)
-PINK_CUP_ARM_RESET = [
-    3.1088299e-01, 4.0700440e-03, -3.1125304e-01, -2.0509737e+00,
-    1.4107295e-03, 2.0548446e+00, 7.8060406e-01,
-]
-#   right_reset_hand_joint_pose (hand, 16D)
-PINK_CUP_HAND_RESET = [
-    0.35281801223754883, 0.6442744731903076, 0.29912877082824707, 0.34514832496643066,
-    -0.03681302070617676, -0.06749272346496582, -0.09357023239135742, -0.14725971221923828,
-    0.0659637451171875, 0.43411898612976074, 0.05982780456542969, 0.013808250427246094,
-    0.03221607208251953, -0.009201288223266602, 0.029148101806640625, 0.0046045780181884766,
-]
-
-# Target pose for lift reward: right_target_manipulated_object_pose from YAML
-PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40)
-
-FINGERS_NAME_LIST = ["palm_lower", "fingertip", "thumb_fingertip", "fingertip_2", "fingertip_3"]
-
 
 @configclass
 class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
@@ -76,12 +59,13 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 @configclass
 class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
+    
 
     def __post_init__(self):
         super().__post_init__()
 
-        # horizon=200, decimation=3, dt=1/60 → episode_length_s = 200 * 3 / 60
-        self.episode_length_s = 200 * 3 / 60.0
+        self.horizon = PINK_CUP_HORIZON
+        self.episode_length_s = self.horizon * self.decimation * self.dt
 
         # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
@@ -97,6 +81,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
 
         self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
+        
         self.observations.policy.manipulated_object_pose = ObsTerm(func=grasp_rew.obs_manipulated_object_pose)
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
@@ -121,8 +106,8 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("robot"),
-                "arm_joint_pos": PINK_CUP_ARM_RESET,
-                "hand_joint_pos": PINK_CUP_HAND_RESET,
+                "arm_joint_pos": ARM_RESET,
+                "hand_joint_pos": HAND_RESET,
                 "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
             },
         )
