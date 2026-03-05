@@ -6,7 +6,7 @@ dataset:
   data_path: ???        # required: path to directory containing episode_*.zarr
   load_list: [all]
   num_demo: 150
-  obs_keys: [right_hand_joint_pos, right_ee_pose]
+  obs_keys: [arm_joint_pos, hand_joint_pos, ee_pose]
   action_key: actions
   image_keys: [seg_pc]
   pad_before: 0

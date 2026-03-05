@@ -95,7 +95,7 @@ def _load_zarr_key(store, key: str) -> np.ndarray:
     raise KeyError(f"Key '{key}' not found in zarr store")
 
 
-class SimZarrDataset(Dataset):
+class ZarrDataset(Dataset):
     """
     Dataset for loading sim zarr episodes for BC training.
 
@@ -238,7 +238,7 @@ class SimZarrDataset(Dataset):
             noise_extrinsic_parameter=noise_extrinsic_parameter,
         )
 
-    def get_validation_dataset(self) -> "SimZarrDataset":
+    def get_validation_dataset(self) -> "ZarrDataset":
         val_set = copy.copy(self)
         val_set.sampler = PCDSequenceSampler(
             replay_buffer=self.replay_buffer,
