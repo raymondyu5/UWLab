@@ -64,7 +64,7 @@ def main():
         with torch.inference_mode():
             actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
             env.step(actions)
-
+        
         if args_cli.save_video:
             # Read RGB from first env's camera sensor (shape: H x W x 3, uint8)
             camera = env.unwrapped.scene["camera"]

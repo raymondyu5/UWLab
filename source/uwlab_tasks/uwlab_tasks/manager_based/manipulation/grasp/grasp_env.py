@@ -24,7 +24,7 @@ from isaaclab.utils import configclass
 from . import mdp
 
 DEFAULT_GRASP_HORIZON = 100
-DEFAULT_GRASP_DECIMATION = 6
+DEFAULT_GRASP_DECIMATION = 3
 DEFAULT_GRASP_PHYSICS_HZ = 60.0
 
 @configclass
@@ -154,11 +154,6 @@ class GraspEnv(ManagerBasedRLEnvCfg):
         self.physics_hz = DEFAULT_GRASP_PHYSICS_HZ  
         self.horizon = DEFAULT_GRASP_HORIZON
         
-        self.sim.dt = 1.0 / self.physics_hz
-        self.sim.render_interval = self.decimation
-        self.control_hz = 1 / (self.sim.dt * self.decimation) # control update frequency (number of control updates per second)
-        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
-
         self.sim = SimulationCfg(
             physics_material=RigidBodyMaterialCfg(
                 static_friction=1.0,
@@ -170,5 +165,11 @@ class GraspEnv(ManagerBasedRLEnvCfg):
                 gpu_max_rigid_patch_count=2**23,
             ),
         )
+
+        self.sim.dt = 1.0 / self.physics_hz
+        self.sim.render_interval = self.decimation
+        self.control_hz = 1 / (self.sim.dt * self.decimation) # control update frequency (number of control updates per second)
+        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
+
 
         self.scene.replicate_physics = False

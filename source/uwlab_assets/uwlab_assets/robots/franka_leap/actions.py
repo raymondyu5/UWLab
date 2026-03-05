@@ -20,6 +20,7 @@ from .bounded_differential_ik_action import BoundedDifferentialInverseKinematics
 # Individual action terms (all enforce FRANKA_LEAP_ARM_JOINT_LIMITS for the arm)
 ##
 
+
 # Unbounded 23-DOF joint position (for rare use when limits must be bypassed)
 FRANKA_LEAP_JOINT_POSITION_UNBOUNDED = JointPositionActionCfg(
     asset_name="robot",
@@ -49,7 +50,7 @@ FRANKA_LEAP_IK_REL_ARM = BoundedDifferentialInverseKinematicsActionCfg(
         use_relative_mode=True,
         ik_method="dls",
     ),
-    body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
+    body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=fl.FRANKA_LEAP_EE_OFFSET),
     arm_joint_limits=dict(fl.FRANKA_LEAP_ARM_JOINT_LIMITS),
 )
 
@@ -63,7 +64,7 @@ FRANKA_LEAP_IK_ABS_ARM = BoundedDifferentialInverseKinematicsActionCfg(
         use_relative_mode=False,
         ik_method="dls",
     ),
-    body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
+    body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=fl.FRANKA_LEAP_EE_OFFSET),
     arm_joint_limits=dict(fl.FRANKA_LEAP_ARM_JOINT_LIMITS),
 )
 

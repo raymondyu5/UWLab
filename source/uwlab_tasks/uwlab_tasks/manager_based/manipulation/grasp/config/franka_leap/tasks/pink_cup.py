@@ -19,9 +19,9 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import GraspReward, SynthesizePC, reset_robot_joints, reset_object_pose, reset_camera_pose
+from ....mdp import GraspReward, SynthesizePC, reset_object_pose
 from .. import grasp_franka_leap
-from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST, ARM_RESET, HAND_RESET
+from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 # Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
 # pos: [0.55, 0.0, 0.11], rot: axis=[0], angles=[1.57] -> X-axis 90deg -> quat (0.707, 0.707, 0, 0)
@@ -67,7 +67,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         self.horizon = PINK_CUP_HORIZON
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
 
-        # --- Instantiate GraspReward and add finger contact sensors ---
+        # # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
             asset_name="robot",
             object_name="object",
@@ -78,10 +78,9 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         grasp_rew.setup_additional(self.scene)
         grasp_rew.setup_finger_entities(self.scene)
         grasp_rew.setup_finger_sensors(self.scene, object_prim_name="Object")
-        self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
 
+        self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
         self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
-        
         self.observations.policy.manipulated_object_pose = ObsTerm(func=grasp_rew.obs_manipulated_object_pose)
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
@@ -99,31 +98,6 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             num_downsample_points=2048,
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.synthesize_env)
-
-        # --- Reset events ---
-        self.events.reset_robot = EventTerm(
-            func=reset_robot_joints,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("robot"),
-                "arm_joint_pos": ARM_RESET,
-                "hand_joint_pos": HAND_RESET,
-                "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
-            },
-        )
-        # Camera pose randomization — exact params from rl_env_ycb_cam_custom_init_pink_cup.yaml
-        # random_pose_range: [x_min, y_min, z_min, x_max, y_max, z_max, radius_min, radius_max]
-        # phi_range_rad: elevation [1.0, 1.66] (~57-95°), theta_range_rad: azimuth [0.0, 0.5]
-        self.events.reset_camera = EventTerm(
-            func=reset_camera_pose,
-            mode="reset",
-            params={
-                "camera_name": "camera",
-                "random_pose_range": (0.4, -0.15, 0.10, 0.6, 0.15, 0.25, 0.8, 1.7),
-                "theta_range_rad": (0.0, 0.5),
-                "phi_range_rad": (1.0, 1.66),
-            },
-        )
 
         self.events.reset_object = EventTerm(
             func=reset_object_pose,
