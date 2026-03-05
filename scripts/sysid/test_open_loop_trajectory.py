@@ -377,11 +377,11 @@ def main():
         raise ValueError("--action_type must be provided.")
 
     if args_cli.action_type == 'delta_ee':
-        task = "UW-FrankaLeap-GraspPinkCup-IkRel-v0"
+        task = "UW-FrankaLeap-IkRel-v0"
     elif args_cli.action_type == 'abs_ee':
-        task = "UW-FrankaLeap-GraspPinkCup-IkAbs-v0"
+        task = "UW-FrankaLeap-IkAbs-v0"
     elif args_cli.action_type == 'joint':
-        task = "UW-FrankaLeap-GraspPinkCup-JointAbs-v0"
+        task = "UW-FrankaLeap-JointAbs-v0"
     else:
         raise ValueError(f"Invalid action type: {args_cli.action_type}")
 

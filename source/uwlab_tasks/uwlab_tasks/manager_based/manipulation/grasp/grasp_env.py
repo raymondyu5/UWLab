@@ -30,7 +30,7 @@ DEFAULT_GRASP_PHYSICS_HZ = 60.0
 @configclass
 class GraspSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = MISSING
-    object: RigidObjectCfg = MISSING
+    grasp_object: RigidObjectCfg = MISSING
 
     table = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
@@ -125,7 +125,7 @@ class EventCfg:
         func=mdp.reset_object_pose,
         mode="reset",
         params={
-            "asset_cfg": SceneEntityCfg("object"),
+            "asset_cfg": SceneEntityCfg("grasp_object"),
             "default_pos": MISSING,
             "default_rot_quat": MISSING,
             "pose_range": MISSING,

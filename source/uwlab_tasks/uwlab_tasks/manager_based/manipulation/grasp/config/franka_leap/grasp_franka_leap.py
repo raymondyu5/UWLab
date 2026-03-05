@@ -19,6 +19,13 @@ from ...mdp import ee_pose_w, reset_robot_joints, reset_camera_pose
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 
+from isaaclab.assets import RigidObjectCfg
+import isaaclab.sim as sim_utils
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
+
+# Empty env needs a spawned prim at GraspObject (spawn=None would cause "Could not find prim").
+# Use a tiny invisible cuboid so the scene has no visible object
 
 
 ############################################
@@ -82,9 +89,33 @@ class FrankaLeapGraspEnv(grasp_env.GraspEnv):
         )
 
 @configclass
+class FrankaLeapEmptySceneCfg(FrankaLeapGraspSceneCfg):
+    # Must spawn a real prim: with spawn=None the asset only wraps existing prims, so the path would not exist.
+    # Use a tiny cuboid so the scene has no visible object.
+    grasp_object = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/GraspObject",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.55, 0.0, 0.11),
+            rot=(0.707, 0.707, 0.0, 0.0),
+        ),
+        spawn=CuboidCfg(
+            size=(0.001, 0.001, 0.001),  # 1mm cube, effectively invisible,
+            rigid_props=RigidBodyPropertiesCfg(
+                kinematic_enabled=False,
+                disable_gravity=False,
+                max_depenetration_velocity=5.0,
+            ),
+        ),
+    )
+
+@configclass
 class FrankaLeapEmptyGraspEnv(FrankaLeapGraspEnv):
+    scene: FrankaLeapEmptySceneCfg = FrankaLeapEmptySceneCfg(
+        num_envs=1, env_spacing=2.5)
+
     def __post_init__(self):
         super().__post_init__()
+        self.events.reset_object= None
 
 @configclass
 class GraspFrankaLeapJointAbs(FrankaLeapEmptyGraspEnv):

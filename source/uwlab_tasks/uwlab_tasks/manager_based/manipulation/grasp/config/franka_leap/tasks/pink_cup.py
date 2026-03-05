@@ -39,8 +39,8 @@ PINK_CUP_MESH = "/workspace/uwlab/assets/pink_cup/textured_recentered.obj"
 
 @configclass
 class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
-    object = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Object",
+    grasp_object = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/GraspObject",
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=(0.55, 0.0, 0.11),
             rot=(0.707, 0.707, 0.0, 0.0),
@@ -67,7 +67,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
 
     def is_success(self, env) -> torch.Tensor:
         """Returns bool tensor (num_envs,): True if object is lifted above SUCCESS_HEIGHT."""
-        obj = env.scene["object"]
+        obj = env.scene["grasp_object"]
         pos = obj.data.root_pos_w - env.scene.env_origins
         return pos[:, 2] >= SUCCESS_HEIGHT
 
@@ -75,7 +75,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         super().__post_init__()
 
         # Default object spawn pose from scene config (set in __post_init__); used by eval scripts.
-        init = self.scene.object.init_state
+        init = self.scene.grasp_object.init_state
         self.object_spawn_defaults = {
             "default_pos": tuple(init.pos),
             "default_rot": tuple(init.rot),
@@ -88,14 +88,14 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         # # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
             asset_name="robot",
-            object_name="object",
+            object_name="grasp_object",
             fingers_name_list=FINGERS_NAME_LIST,
             init_height=0.11,
             target_pos=PINK_CUP_TARGET_POS,
         )
         grasp_rew.setup_additional(self.scene)
         grasp_rew.setup_finger_entities(self.scene)
-        grasp_rew.setup_finger_sensors(self.scene, object_prim_name="Object")
+        grasp_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
 
         self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
         self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
@@ -106,7 +106,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         # --- Instantiate SynthesizePC and wire as seg_pc obs term ---
         synth_pc = SynthesizePC(
             asset_name="robot",
-            object_name="object",
+            object_name="grasp_object",
             arm_mesh_dir=ARM_MESH_DIR,
             hand_mesh_dir=HAND_MESH_DIR,
             object_mesh_path=PINK_CUP_MESH,
@@ -121,7 +121,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             func=reset_object_pose,
             mode="reset",
             params={
-                "asset_cfg": SceneEntityCfg("object"),
+                "asset_cfg": SceneEntityCfg("grasp_object"),
                 "default_pos": (0.55, 0.0, 0.11),
                 "default_rot_quat": (0.707, 0.707, 0.0, 0.0),
                 "pose_range": {
