@@ -65,16 +65,6 @@ SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
 class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
 
-    @property
-    def object_spawn_defaults(self) -> dict:
-        """Default object spawn pose, read from scene config. Used by eval scripts."""
-        init = self.scene.object.init_state
-        return {
-            "default_pos": tuple(init.pos),
-            "default_rot": tuple(init.rot),
-            "reset_height": float(init.pos[2]),
-        }
-
     def is_success(self, env) -> torch.Tensor:
         """Returns bool tensor (num_envs,): True if object is lifted above SUCCESS_HEIGHT."""
         obj = env.scene["object"]
@@ -83,6 +73,14 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Default object spawn pose from scene config (set in __post_init__); used by eval scripts.
+        init = self.scene.object.init_state
+        self.object_spawn_defaults = {
+            "default_pos": tuple(init.pos),
+            "default_rot": tuple(init.rot),
+            "reset_height": float(init.pos[2]),
+        }
 
         self.horizon = PINK_CUP_HORIZON
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
