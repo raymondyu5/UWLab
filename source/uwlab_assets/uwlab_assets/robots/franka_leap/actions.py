@@ -53,6 +53,21 @@ FRANKA_LEAP_IK_REL_ARM = BoundedDifferentialInverseKinematicsActionCfg(
     arm_joint_limits=dict(fl.FRANKA_LEAP_ARM_JOINT_LIMITS),
 )
 
+# IK-relative arm (6D delta EE pose), arm targets clamped to limits; used alongside hand joint position
+FRANKA_LEAP_IK_ABS_ARM = BoundedDifferentialInverseKinematicsActionCfg(
+    asset_name="robot",
+    joint_names=["panda_joint.*"],
+    body_name="panda_link7",
+    controller=DifferentialIKControllerCfg(
+        command_type="pose",
+        use_relative_mode=False,
+        ik_method="dls",
+    ),
+    body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
+    arm_joint_limits=dict(fl.FRANKA_LEAP_ARM_JOINT_LIMITS),
+)
+
+
 # Absolute joint position for hand only (16-DOF)
 FRANKA_LEAP_HAND_JOINT_POSITION = JointPositionActionCfg(
     asset_name="robot",
@@ -75,4 +90,12 @@ class FrankaLeapJointPositionAction:
 class FrankaLeapIkRelArmHandJointAction:
     """IK-relative arm (6D) + absolute hand joint position (16D)."""
     arm_action = FRANKA_LEAP_IK_REL_ARM
+    hand_action = FRANKA_LEAP_HAND_JOINT_POSITION
+
+
+
+@configclass
+class FrankaLeapIkAbsArmHandJointAction:
+    """IK-absolute arm (6D) + absolute hand joint position (16D)."""
+    arm_action = FRANKA_LEAP_IK_ABS_ARM
     hand_action = FRANKA_LEAP_HAND_JOINT_POSITION

@@ -61,22 +61,25 @@ FRANKA_LEAP_ARM_JOINT_FRICTION_URDF = {
 }
 
 # Franka arm: high-PD config used for IK / joint position control
+# Dict params must only include joints for that actuator; Isaac Lab resolves by matching keys to joint_names_expr.
+_ARM_SHOULDER_JOINTS = [f"panda_joint{i}" for i in range(1, 5)]
+_ARM_FOREARM_JOINTS = [f"panda_joint{i}" for i in range(5, 8)]
 FRANKA_LEAP_ARM_ACTUATOR_CFG = {
     "panda_shoulder": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[1-4]"],
-        effort_limit=86.0,
-        velocity_limit=1.575,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
         stiffness=400.0,
-        damping=FRANKA_LEAP_ARM_JOINT_DAMPING_URDF,
-        friction=FRANKA_LEAP_ARM_JOINT_FRICTION_URDF,
+        damping={j: FRANKA_LEAP_ARM_JOINT_DAMPING_URDF[j] for j in _ARM_SHOULDER_JOINTS},
+        friction={j: FRANKA_LEAP_ARM_JOINT_FRICTION_URDF[j] for j in _ARM_SHOULDER_JOINTS},
     ),
     "panda_forearm": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[5-7]"],
-        effort_limit=11.5,
-        velocity_limit=2.01,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
         stiffness=400.0,
-        damping=FRANKA_LEAP_ARM_JOINT_DAMPING_URDF,
-        friction=FRANKA_LEAP_ARM_JOINT_FRICTION_URDF,
+        damping={j: FRANKA_LEAP_ARM_JOINT_DAMPING_URDF[j] for j in _ARM_FOREARM_JOINTS},
+        friction={j: FRANKA_LEAP_ARM_JOINT_FRICTION_URDF[j] for j in _ARM_FOREARM_JOINTS},
     ),
 }
 
@@ -88,8 +91,8 @@ FRANKA_LEAP_HAND_ACTUATOR_CFG = {
         damping=1.0,
         armature=0.001,
         friction=0.2,
-        velocity_limit=8.48,
-        effort_limit=0.95,
+        velocity_limit_sim=8.48,
+        effort_limit_sim=0.95,
     ),
 }
 

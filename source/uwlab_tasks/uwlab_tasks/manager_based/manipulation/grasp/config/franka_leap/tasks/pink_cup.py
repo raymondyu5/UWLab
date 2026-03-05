@@ -74,9 +74,8 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 
 
 @configclass
-class GraspPinkCupFrankaLeapJointAbs(grasp_franka_leap.FrankaLeapGraspEnv):
+class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
-    actions = franka_leap.FrankaLeapJointPositionAction()
 
     def __post_init__(self):
         super().__post_init__()
@@ -159,3 +158,15 @@ class GraspPinkCupFrankaLeapJointAbs(grasp_franka_leap.FrankaLeapGraspEnv):
                 "reset_height": 0.11,
             },
         )
+
+@configclass
+class GraspPinkCupFrankaLeapJointAbs(GraspPinkCupFrankaLeap):
+    actions = franka_leap.FrankaLeapJointPositionAction()
+
+@configclass
+class GraspPinkCupFrankaLeapIkRel(GraspPinkCupFrankaLeap):
+    actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
+
+@configclass
+class GraspPinkCupFrankaLeapIkAbs(GraspPinkCupFrankaLeap):
+    actions = franka_leap.FrankaLeapIkAbsArmHandJointAction()

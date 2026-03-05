@@ -13,3 +13,24 @@ gym.register(
     },
     disable_env_checker=True,
 )
+
+
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCup-IkRel-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkRel",
+    },
+    disable_env_checker=True,
+)
+
+
+
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCup-IkAbs-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkAbs",
+    },
+    disable_env_checker=True,
+)
