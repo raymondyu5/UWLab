@@ -24,6 +24,11 @@ parser.add_argument("--output_dir", type=str, default="logs/sysid/open_loop_traj
 parser.add_argument("--trajectory_file", type=str, default=None, help="Path to the trajectory file.")
 parser.add_argument("--action_type", type=str, choices=['delta_ee', 'abs_ee', 'joint'], default='joint', help="Type of action to use.")
 
+parser.add_argument(
+    "--debug_cameras",
+    action="store_true",
+    help="Capture one frame from each candidate camera and save a comparison grid to output_dir, then exit.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -128,6 +133,34 @@ def _extract_sim_observation(env, obs) -> dict:
         "joint_positions": arm_joints,
         "gripper_position": hand_joints,
     }
+
+
+# For --debug_cameras: list of camera names to compare (fixed_camera is set from eye+look_at on reset).
+CAMERA_CANDIDATES = ["fixed_camera"]
+
+def save_camera_candidates_comparison(env, output_dir: str, candidate_names: list):
+    """Capture one frame from each candidate camera and save a labeled grid for visual comparison."""
+    scene = env.unwrapped.scene
+    n = len(candidate_names)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 5 * nrows))
+    axes = np.atleast_2d(axes)
+    for idx, name in enumerate(candidate_names):
+        ax = axes.flat[idx]
+        cam = scene[name]
+        rgb = cam.data.output["rgb"][0, ..., :3].cpu().numpy()
+        ax.imshow(rgb)
+        ax.set_title(name, fontsize=11)
+        ax.axis("off")
+    for idx in range(n, axes.size):
+        axes.flat[idx].axis("off")
+    plt.suptitle("Camera extrinsics candidates (pick the view that matches your real setup)", fontsize=14)
+    plt.tight_layout()
+    path = os.path.join(output_dir, "camera_candidates.png")
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[INFO]: Saved camera comparison to {path}")
 
 
 def compare_trajectories(real_obs_list: list, sim_results: dict, output_dir: str):
@@ -313,7 +346,7 @@ def compare_trajectories(real_obs_list: list, sim_results: dict, output_dir: str
     return metrics
 
 
-def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_dir: str, action_type: str):
+def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_dir: str, action_type: str, camera_name: str = "fixed_camera"):
     """Replay an open loop trajectory."""
 
     # Ensure the episode horizon in seconds is at least as long as the trajectory.
@@ -329,7 +362,7 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
     obs_list = [_extract_sim_observation(env, obs)]
     frames = []
 
-    camera = env.unwrapped.scene["camera"]
+    camera = env.unwrapped.scene[camera_name]
     action_space_shape = env.action_space.shape
     expected_action_dim = action_space_shape[-1]
     num_steps = len(traj_actions)
@@ -367,20 +400,11 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
 
 def main():
     """Zero actions agent with Isaac Lab environment."""
-    # Load episode and build actions in the requested action space
-    traj_obs, traj_actions = load_episode(args_cli.trajectory_file, args_cli.action_type)
-
-
-    if args_cli.trajectory_file is None:
-        raise ValueError("--trajectory_file must be provided.")
-    if args_cli.action_type is None:
-        raise ValueError("--action_type must be provided.")
-
-    if args_cli.action_type == 'delta_ee':
+    if args_cli.action_type == "delta_ee":
         task = "UW-FrankaLeap-IkRel-v0"
-    elif args_cli.action_type == 'abs_ee':
+    elif args_cli.action_type == "abs_ee":
         task = "UW-FrankaLeap-IkAbs-v0"
-    elif args_cli.action_type == 'joint':
+    elif args_cli.action_type == "joint":
         task = "UW-FrankaLeap-JointAbs-v0"
     else:
         raise ValueError(f"Invalid action type: {args_cli.action_type}")
@@ -388,24 +412,36 @@ def main():
     output_dir = args_cli.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    # parse configuration
     num_envs = args_cli.num_envs if args_cli.num_envs is not None else 1
     env_cfg = parse_env_cfg(
         task, device=args_cli.device, num_envs=num_envs, use_fabric=not args_cli.disable_fabric
     )
 
+    if args_cli.debug_cameras:
+        env_cfg.episode_length_s = 10.0
+        env = gym.make(task, cfg=env_cfg)
+        print("[INFO]: Resetting environment for camera debug...")
+        env.reset()
+        save_camera_candidates_comparison(env, output_dir, CAMERA_CANDIDATES)
+        print("[INFO]: Use --camera <name> for videos (e.g. fixed_camera_no_inv). Exiting.")
+        return
+
+    if args_cli.trajectory_file is None:
+        raise ValueError("--trajectory_file must be provided.")
+
+    traj_obs, traj_actions = load_episode(args_cli.trajectory_file, args_cli.action_type)
     env_cfg.episode_length_s = len(traj_actions) * env_cfg.decimation * env_cfg.sim.dt
-    # create environment
     env = gym.make(task, cfg=env_cfg)
 
-
-    # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
     print(f"[INFO]: Gym action space: {env.action_space}")
     print(f"[INFO]: Episode length: {env_cfg.episode_length_s}")
     print(f"[INFO]: Max episode steps: {env.unwrapped.max_episode_length}")
+    
 
-    sim_obs = replay_open_loop_trajectory(env, traj_obs, traj_actions, output_dir, args_cli.action_type)
+    sim_obs = replay_open_loop_trajectory(
+        env, traj_obs, traj_actions, output_dir, args_cli.action_type
+    )
     metrics = compare_trajectories(traj_obs, sim_obs, output_dir)
 
     metrics_path = os.path.join(output_dir, "open_loop_metrics.json")

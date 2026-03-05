@@ -52,7 +52,8 @@ class GraspSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
     )
 
-    camera = CameraCfg(
+    # Camera for training: randomized by reset_camera.
+    train_camera = CameraCfg(
         prim_path="{ENV_REGEX_NS}/Camera",
         update_period=0.03,
         height=480,
@@ -67,6 +68,29 @@ class GraspSceneCfg(InteractiveSceneCfg):
         offset=CameraCfg.OffsetCfg(
             pos=(2.0, 0.5, 0.8),
             rot=(0.4619, -0.1913, 0.4619, -0.7391),
+            convention="ros",
+        ),
+    )
+
+    # Fixed camera for eval/video. NOTE: Pose is set on reset via set_world_poses_from_view (event
+    # reset_fixed_camera) using eye_offset and look_at_offset relative to env origin. Default
+    # offset here is only used before first reset; adjust eye_offset/look_at_offset in
+    # grasp_franka_leap.py to match your setup.
+    fixed_camera = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/FixedCamera",
+        update_period=0.03,
+        height=480,
+        width=480,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.1, 1.0e5),
+        ),
+        offset=CameraCfg.OffsetCfg( # NOTE: this pose is a placeholder, disregarded after reset
+            pos=(1.4327373524611016, 0.03400519659762369, 0.23022719394288885),
+            rot=(1.0, 0.0, 0.0, 0.0),
             convention="ros",
         ),
     )

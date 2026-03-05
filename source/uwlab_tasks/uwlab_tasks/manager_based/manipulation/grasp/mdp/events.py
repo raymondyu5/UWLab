@@ -49,6 +49,24 @@ def reset_camera_pose(
     env.scene[camera_name].set_world_poses_from_view(eye, look_at, env_ids=env_ids)
 
 
+def set_fixed_camera_view(
+    env,
+    env_ids: torch.Tensor,
+    camera_name: str,
+    eye_offset: tuple[float, float, float],
+    look_at_offset: tuple[float, float, float],
+):
+    """Set camera pose from eye position and look-at target (offsets relative to env origin)."""
+    device = env.scene.env_origins.device
+    eye = env.scene.env_origins[env_ids] + torch.tensor(
+        eye_offset, device=device, dtype=torch.float32
+    ).unsqueeze(0).expand(len(env_ids), 3)
+    look_at = env.scene.env_origins[env_ids] + torch.tensor(
+        look_at_offset, device=device, dtype=torch.float32
+    ).unsqueeze(0).expand(len(env_ids), 3)
+    env.scene[camera_name].set_world_poses_from_view(eye, look_at, env_ids=env_ids)
+
+
 def reset_robot_joints(
     env,
     env_ids: torch.Tensor,

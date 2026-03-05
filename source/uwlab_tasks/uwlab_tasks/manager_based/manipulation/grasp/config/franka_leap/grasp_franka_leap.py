@@ -15,7 +15,7 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from ... import grasp_env
-from ...mdp import ee_pose_w, reset_robot_joints, reset_camera_pose
+from ...mdp import ee_pose_w, reset_robot_joints, reset_camera_pose, set_fixed_camera_view
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 
@@ -81,12 +81,24 @@ class FrankaLeapGraspEnv(grasp_env.GraspEnv):
             func=reset_camera_pose,
             mode="reset",
             params={
-                "camera_name": "camera",
+                "camera_name": "train_camera",
                 "random_pose_range": (0.4, -0.15, 0.10, 0.6, 0.15, 0.25, 0.8, 1.7),
                 "theta_range_rad": (0.0, 0.5),
                 "phi_range_rad": (1.0, 1.66),
             },
         )
+        # Fixed camera: set from eye + look_at on every reset (position relative to robot base).
+        self.events.reset_fixed_camera = EventTerm(
+            func=set_fixed_camera_view,
+            mode="reset",
+            params={
+                "camera_name": "fixed_camera",
+                "eye_offset": (1.4327373524611016, 0.2400519659762369, 0.6),
+                "look_at_offset": (0.0, -0.15, 0.0),
+            },
+        )
+
+
 
 @configclass
 class FrankaLeapEmptySceneCfg(FrankaLeapGraspSceneCfg):
