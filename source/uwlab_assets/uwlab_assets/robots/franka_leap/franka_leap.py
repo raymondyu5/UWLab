@@ -32,17 +32,68 @@ FRANKA_LEAP_EE_OFFSET = (0.0, 0.0, 0.107)  # (x, y, z) metres
 FRANKA_LEAP_ARM_ACTUATOR_CFG = {
     "panda_shoulder": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[1-4]"],
-        effort_limit=87.0,
-        velocity_limit=1.875,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
         stiffness=400.0,
         damping=80.0,
     ),
     "panda_forearm": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[5-7]"],
-        effort_limit=40.0,
-        velocity_limit=2.31,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
         stiffness=400.0,
         damping=80.0,
+    ),
+}
+
+# p and d gains from the real robot
+FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG = {
+    "panda_link1": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint1"],
+        stiffness=40.0,
+        damping=4.0,
+    ),  
+    "panda_link2": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[2]"],
+        stiffness=30.0,
+        damping=6.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+    ),
+    "panda_link3": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[3]"],
+        stiffness=50.0,
+        damping=5.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+    ),
+    "panda_link4": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[4]"],
+        stiffness=25.0,
+        damping=5.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+    ),
+    "panda_link5": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[5]"],
+        stiffness=35.0,
+        damping=3.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
+    ),
+    "panda_link6": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[6]"],
+        stiffness=25.0,
+        damping=2.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
+    ),
+    "panda_link7": ImplicitActuatorCfg(
+        joint_names_expr=["panda_joint[7]"],
+        stiffness=10.0,
+        damping=1.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
     ),
 }
 
@@ -85,15 +136,14 @@ FRANKA_LEAP_DEFAULT_JOINT_POS = FRANKA_LEAP_DEFAULT_ARM_JOINT_POS | FRANKA_LEAP_
 ##
 # Joint limits (Franka arm only — used to clamp reset poses)
 ##
-
 FRANKA_LEAP_ARM_JOINT_LIMITS = {
-    "panda_joint1": (-2.80, 2.80),
-    "panda_joint2": (-1.66, 1.66),
-    "panda_joint3": (-2.80, 2.80),
-    "panda_joint4": (-2.97, -0.17),
-    "panda_joint5": (-2.80, 2.80),
-    "panda_joint6": (0.08, 3.65),
-    "panda_joint7": (-2.80, 2.80),
+    "panda_joint1": (-2.60, 2.60),
+    "panda_joint2": (-1.46, 1.46),
+    "panda_joint3": (-2.60, 2.60),
+    "panda_joint4": (-2.77, -0.37),
+    "panda_joint5": (-2.60, 2.60),
+    "panda_joint6": (0.28, 3.45),
+    "panda_joint7": (-2.60, 2.60),
 }
 
 ##
@@ -124,3 +174,4 @@ FRANKA_LEAP_ARTICULATION = ArticulationCfg(
 
 IMPLICIT_FRANKA_LEAP = FRANKA_LEAP_ARTICULATION.copy()
 IMPLICIT_FRANKA_LEAP.actuators = FRANKA_LEAP_ARM_ACTUATOR_CFG | FRANKA_LEAP_HAND_ACTUATOR_CFG
+
