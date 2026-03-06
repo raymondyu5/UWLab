@@ -65,6 +65,9 @@ class EvalLogger:
     def end_episode(self, success: bool):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
+        if self.record_video:
+            self._write_episode_video(len(self._episodes), self._current)
+            self._current["frames"] = []  # free memory
         self._episodes.append(self._current)
         self._current = None
 
@@ -73,8 +76,6 @@ class EvalLogger:
         if self.record_plots:
             self._write_trajectory_plot()
             self._write_heatmap()
-        if self.record_video:
-            self._write_videos()
         return results
 
     def _write_results(self) -> dict:
@@ -170,12 +171,12 @@ class EvalLogger:
         plt.close()
         print(f"[EvalLogger] heatmap -> {out_path}")
 
-    def _write_videos(self):
+    def _write_episode_video(self, episode_idx: int, ep: dict):
         import imageio
-        for i, ep in enumerate(self._episodes):
-            frames = ep.get("frames", [])
-            if not frames:
-                continue
-            tag = "success" if ep["success"] else "fail"
-            out_path = os.path.join(self.output_dir, "videos", f"episode_{i:03d}_{tag}.mp4")
-            imageio.mimsave(out_path, frames, fps=30)
+        frames = ep.get("frames", [])
+        if not frames:
+            return
+        tag = "success" if ep["success"] else "fail"
+        out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
+        imageio.mimsave(out_path, frames, fps=30)
+        print(f"[EvalLogger] video -> {out_path}")

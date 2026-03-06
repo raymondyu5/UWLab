@@ -77,3 +77,4 @@ data/
 # Docker history
 .uw-lab-docker-history
 assets/
+third_party/pip_packages/
