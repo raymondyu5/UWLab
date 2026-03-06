@@ -72,6 +72,26 @@ class PourBottleSceneCfg(GraspBottleSceneCfg):
 class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: PourBottleSceneCfg = PourBottleSceneCfg(num_envs=1, env_spacing=2.5)
 
+    def is_success(self, env) -> torch.Tensor:
+        # Cap tip XY within 5cm of cup center and above cup_z + 0.07
+        # (matches IsaacLab eval_bc_policy.py pour success criterion)
+        bottle = env.scene["grasp_object"]
+        cup = env.scene["pink_cup"]
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins       # (N, 3)
+        bottle_quat = bottle.data.root_quat_w                              # (N, 4) w,x,y,z
+        cup_pos = cup.data.root_pos_w - env.scene.env_origins             # (N, 3)
+
+        cap_offset = torch.tensor(list(BOTTLE_CAP_OFFSET), device=env.device)  # (3,)
+        # Rotate cap offset by bottle quaternion: v' = v + 2w*(q×v) + 2*(q×(q×v))
+        w = bottle_quat[:, 0:1]
+        q = bottle_quat[:, 1:]   # xyz
+        t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
+        tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
+
+        xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
+        above_cup = tip_pos[:, 2] > (cup_pos[:, 2] + 0.07)
+        return (xy_dist < 0.05) & above_cup
+
     def __post_init__(self):
         super().__post_init__()
 

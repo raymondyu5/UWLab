@@ -116,6 +116,11 @@ class ObservationsCfg:
             },
         )
 
+        hand_joint_pos = ObsTerm(
+            func=mdp.hand_joint_pos_w,
+            params={"asset_cfg": SceneEntityCfg("robot"), "num_arm_joints": 7},
+        )
+
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False

@@ -39,6 +39,7 @@ BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
 BOTTLE_SPAWN_ROT = (0.707, 0.0, 0.0, -0.707)
 BOTTLE_TARGET_POS = (0.60, 0.10, 0.40)
 BOTTLE_HORIZON = 180
+BOTTLE_SUCCESS_HEIGHT = 0.25
 
 
 @configclass
@@ -65,6 +66,11 @@ class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 @configclass
 class GraspBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: GraspBottleSceneCfg = GraspBottleSceneCfg(num_envs=1, env_spacing=2.5)
+
+    def is_success(self, env) -> torch.Tensor:
+        obj = env.scene["grasp_object"]
+        pos = obj.data.root_pos_w - env.scene.env_origins
+        return pos[:, 2] >= BOTTLE_SUCCESS_HEIGHT
 
     def __post_init__(self):
         super().__post_init__()

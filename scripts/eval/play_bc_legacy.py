@@ -150,7 +150,6 @@ def main():
                    render_mode="rgb_array" if args_cli.record_video else None)
 
     isaac_env = env.unwrapped
-    warmup_act = isaac_env.cfg.warmup_action(isaac_env)
     episode_steps = int(isaac_env.max_episode_length)
 
     output_dir = args_cli.output_dir or os.path.join(args_cli.checkpoint, "eval_legacy")
@@ -163,6 +162,7 @@ def main():
             obs_raw, _ = env.reset()
             policy_obs = obs_raw["policy"]
 
+            warmup_act = isaac_env.cfg.warmup_action(isaac_env)
             for _ in range(args_cli.num_warmup_steps):
                 obs_raw, _, _, _, _ = env.step(warmup_act)
             policy_obs = obs_raw["policy"]
