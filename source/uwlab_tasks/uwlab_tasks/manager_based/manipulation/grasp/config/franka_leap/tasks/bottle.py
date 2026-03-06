@@ -31,11 +31,11 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 # pose_range: x±10cm, y±10cm
 # target_pos: same as pink cup (0.60, 0.10, 0.40)
 
-BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object.usd"
+BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object_com.usd"
 BOTTLE_MESH = "/workspace/uwlab/assets/bourbon/textured_recentered.obj"
 
 BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
-# -90deg around Z = (0.707, 0, 0, -0.707); local +X (cap) maps to world -Y at spawn
+# -90deg around Z = (0.707, 0, 0, -0.707); local -X (cap) maps to world +Y at spawn
 BOTTLE_SPAWN_ROT = (0.707, 0.0, 0.0, -0.707)
 BOTTLE_TARGET_POS = (0.60, 0.10, 0.40)
 BOTTLE_HORIZON = 180

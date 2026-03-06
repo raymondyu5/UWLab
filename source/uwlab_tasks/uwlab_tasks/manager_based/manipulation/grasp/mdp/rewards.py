@@ -266,8 +266,8 @@ class PourReward:
         # Reward scale per finger: [palm_lower, thumb_fingertip, fingertip, fingertip_2, fingertip_3]
         self.finger_reward_scale = torch.as_tensor([0.5, 1.0, 2, 1.5, 1.0]).to(
             self.device).unsqueeze(0)
-        # Grasp target: 10cm toward bottle body from center (away from cap end)
-        self.grasp_target_offset = torch.tensor([-0.10, 0.0, 0.0], dtype=torch.float32)
+        # Grasp target: 6cm toward body end from center (cap is at -X, body at +X)
+        self.grasp_target_offset = torch.tensor([0.06, 0.0, 0.0], dtype=torch.float32)
 
         # Reset references — populated by capture_reset_references event, None until first reset
         self.cup_reset_pos_ref = None    # (num_envs, 3)
@@ -412,7 +412,7 @@ class PourReward:
 
         target = torch.zeros_like(self.tip_pos)
         target[:, :2] = self.cup_center_xy
-        target[:, 2] = self.cup_top_z + 0.03
+        target[:, 2] = self.cup_top_z + 0.11
         dist_3d = torch.linalg.norm(self.tip_pos - target, dim=1)
         dist_3d = torch.nan_to_num(dist_3d, nan=10.0, posinf=10.0, neginf=10.0)
         lifted = (self.object_pose[:, 2] - reset_init_height >= 0.05).float()
@@ -510,7 +510,7 @@ class PourReward:
 
         desired_cap_pos = torch.zeros(env.num_envs, 3, device=env.device)
         desired_cap_pos[:, :2] = cup_center_xy
-        desired_cap_pos[:, 2] = cup_top_z + 0.03
+        desired_cap_pos[:, 2] = cup_top_z + 0.11
 
         target_pos = desired_cap_pos - cap_offset_world
 

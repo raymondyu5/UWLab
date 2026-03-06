@@ -41,8 +41,8 @@ from .pink_cup import PINK_CUP_USD
 PINK_CUP_POUR_POS = (0.55, 0.10, 0.11)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
-# Bottle cap offset in local +X frame: 13.22cm (from pour_config.bottle_cap_offset)
-BOTTLE_CAP_OFFSET = (0.132179, 0.0, 0.0)
+# Bottle cap offset in local -X frame: 13.22cm (cap is at X=-0.132 in mesh frame)
+BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
 
 POUR_HORIZON = 180
 
@@ -89,7 +89,7 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
 
         xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
-        above_cup = tip_pos[:, 2] > (cup_pos[:, 2] + 0.07)
+        above_cup = tip_pos[:, 2] > (cup_pos[:, 2] + 0.26)
         return (xy_dist < 0.05) & above_cup
 
     def __post_init__(self):
