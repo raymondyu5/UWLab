@@ -38,14 +38,15 @@ def reset_camera_pose(
     theta_range_rad: tuple,
     phi_range_rad: tuple,
 ):
+    num_reset = len(env_ids)
     random_pose_range = torch.as_tensor(random_pose_range, device=env.device)
     bbox = random_pose_range[:6].reshape(2, 3)
-    radius = torch.rand(env.num_envs, device=env.device) * (
+    radius = torch.rand(num_reset, device=env.device) * (
         random_pose_range[7] - random_pose_range[6]) + random_pose_range[6]
-    look_at = torch.rand((env.num_envs, 3), device=env.device) * (bbox[1] - bbox[0]) + bbox[0]
-    eye = _sample_spherical_point(look_at, radius, theta_range_rad, phi_range_rad, env.num_envs, env.device)
-    eye += env.scene.env_origins
-    look_at += env.scene.env_origins
+    look_at = torch.rand((num_reset, 3), device=env.device) * (bbox[1] - bbox[0]) + bbox[0]
+    eye = _sample_spherical_point(look_at, radius, theta_range_rad, phi_range_rad, num_reset, env.device)
+    eye += env.scene.env_origins[env_ids]
+    look_at += env.scene.env_origins[env_ids]
     env.scene[camera_name].set_world_poses_from_view(eye, look_at, env_ids=env_ids)
 
 
@@ -143,8 +144,8 @@ def reset_object_pose(
     velocities = root_states[:, 7:13] + rand_samples_vel
 
     target_state = torch.cat([positions, orientations, velocities], dim=-1)
-    # Overwrite z with fixed reset_height (matches IsaacLab line 162)
-    target_state[:, 2] = reset_height
+    # Overwrite Z: reset_height is env-local, so add env origin Z to get world Z
+    target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height
 
     asset.write_root_pose_to_sim(target_state[:, :7], env_ids=env_ids)
     asset.write_root_velocity_to_sim(target_state[:, 7:], env_ids=env_ids)

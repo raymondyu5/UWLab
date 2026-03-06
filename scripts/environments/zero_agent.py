@@ -67,7 +67,9 @@ def main():
         
         if args_cli.save_video:
             # Read RGB from first env's camera sensor (shape: H x W x 3, uint8)
-            camera = env.unwrapped.scene["camera"]
+            scene = env.unwrapped.scene
+            camera_key = "fixed_camera" if "fixed_camera" in scene.keys() else "camera"
+            camera = scene[camera_key]
             rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy()
             frames.append(rgb)
             step += 1
