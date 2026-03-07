@@ -103,7 +103,7 @@ import torch.nn as nn
 import wandb
 import yaml
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback
+
 from stable_baselines3.common.logger import KVWriter, configure as sb3_configure
 
 from isaaclab.utils.io import dump_yaml
@@ -160,6 +160,16 @@ def _load_cfg(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def _short_task(task: str) -> str:
+    """'UW-FrankaLeap-GraspBottle-IkRel-v0' -> 'GraspBottle'"""
+    import re
+    name = task
+    if name.startswith("UW-FrankaLeap-"):
+        name = name[len("UW-FrankaLeap-"):]
+    name = re.sub(r"-(IkRel-)?v\d+$", "", name)
+    return name
+
+
 def main():
     cfg = _load_cfg(args_cli.cfg)
     ppo_cfg = cfg["ppo"]
@@ -172,11 +182,14 @@ def main():
     eval_interval = args_cli.eval_interval or eval_cfg["interval"]
     eval_spawn = args_cli.eval_spawn or eval_cfg["spawn"]
 
-    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_dir = os.path.abspath(os.path.join("logs", "rfs", args_cli.task, run_info))
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+    run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}"
+    log_dir = os.path.abspath(os.path.join("logs", "rfs", run_name))
+    print(f"[INFO] Run: {run_name}")
     print(f"[INFO] Logging to: {log_dir}")
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    (Path(log_dir) / "command.txt").write_text(" ".join(sys.orig_argv))
+    command = " ".join(sys.orig_argv)
+    (Path(log_dir) / "command.txt").write_text(command)
 
     env_cfg = parse_env_cfg(
         args_cli.task,
@@ -217,7 +230,8 @@ def main():
     if args_cli.wandb_project:
         wandb.init(
             project=args_cli.wandb_project,
-            name=args_cli.wandb_run_name or run_info,
+            name=run_name,
+            notes=command,
             config={**vars(args_cli), **cfg},
         )
 
@@ -251,8 +265,6 @@ def main():
     sb3_logger.output_formats.append(WandbOutputFormat())
     agent.set_logger(sb3_logger)
 
-    ckpt_cb = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
-
     spawn_cfg = load_spawn_cfg(eval_spawn, "configs/eval/spawns")
     horizon = getattr(env_cfg, "horizon", 200)
     eval_cb = RFSEvalCallback(
@@ -269,7 +281,7 @@ def main():
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
             total_timesteps=200_000_000,
-            callback=[ckpt_cb, eval_cb],
+            callback=[eval_cb],
             progress_bar=True,
             log_interval=1,
         )

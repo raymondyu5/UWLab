@@ -79,6 +79,10 @@ class RFSEvalCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         self._rollout_count += 1
         if self._rollout_count % self.eval_interval == 0:
+            ckpt_path = os.path.join(self.log_dir, f"model_{self._rollout_count:06d}")
+            self.model.save(ckpt_path)
+            if self.verbose:
+                print(f"[RFSEvalCallback] Saved checkpoint: {ckpt_path}.zip")
             self._run_eval()
 
     def _on_step(self) -> bool:
