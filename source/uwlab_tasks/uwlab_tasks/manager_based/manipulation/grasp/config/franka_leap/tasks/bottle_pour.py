@@ -21,7 +21,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import PourReward, SynthesizePC, reset_object_pose
+from ....mdp import PourReward, SynthesizePC, reset_object_pose, reset_table_block
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
@@ -71,6 +71,7 @@ class PourBottleSceneCfg(GraspBottleSceneCfg):
 @configclass
 class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: PourBottleSceneCfg = PourBottleSceneCfg(num_envs=1, env_spacing=2.5)
+    table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
     def is_success(self, env) -> torch.Tensor:
         # Cap tip XY within 5cm of cup center and above cup_z + 0.07
@@ -141,6 +142,15 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.synthesize_env)
 
+        self.events.reset_table_block = EventTerm(
+            func=reset_table_block,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("table_block"),
+                "z_range": self.table_z_range,
+            },
+        )
+
         # Reset bottle
         self.events.reset_object = EventTerm(
             func=reset_object_pose,
@@ -158,6 +168,7 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
                     "yaw": (0.0, 0.0),
                 },
                 "reset_height": BOTTLE_SPAWN_POS[2],
+                "table_block_name": "table_block",
             },
         )
 
@@ -178,6 +189,7 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
                     "yaw": (0.0, 0.0),
                 },
                 "reset_height": PINK_CUP_POUR_POS[2],  # 0.07
+                "table_block_name": "table_block",
             },
         )
 

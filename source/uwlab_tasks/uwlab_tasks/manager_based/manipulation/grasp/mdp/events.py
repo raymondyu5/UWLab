@@ -100,6 +100,20 @@ def reset_robot_joints(
     robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
 
+def reset_table_block(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    z_range: tuple,
+):
+    block = env.scene[asset_cfg.name]
+    z_offsets = torch.empty(len(env_ids), device=env.device).uniform_(*z_range)
+    root_state = block.data.default_root_state[env_ids].clone()
+    root_state[:, :3] += env.scene.env_origins[env_ids]
+    root_state[:, 2] += z_offsets
+    block.write_root_pose_to_sim(root_state[:, :7], env_ids=env_ids)
+
+
 def reset_object_pose(
     env,
     env_ids: torch.Tensor,
@@ -108,6 +122,7 @@ def reset_object_pose(
     default_rot_quat: tuple,
     pose_range: dict,
     reset_height: float,
+    table_block_name: str | None = None,
 ):
     asset = env.scene[asset_cfg.name]
 
@@ -144,8 +159,18 @@ def reset_object_pose(
     velocities = root_states[:, 7:13] + rand_samples_vel
 
     target_state = torch.cat([positions, orientations, velocities], dim=-1)
-    # Overwrite Z: reset_height is env-local, so add env origin Z to get world Z
-    target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height
+    # Overwrite Z: reset_height is env-local, so add env origin Z to get world Z.
+    # If a table_block is provided, add its Z offset (how much it was raised from default).
+    if table_block_name is not None:
+        block = env.scene[table_block_name]
+        block_z_offset = (
+            block.data.root_state_w[env_ids, 2]
+            - env.scene.env_origins[env_ids, 2]
+            - block.data.default_root_state[env_ids, 2]
+        )
+        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height + block_z_offset
+    else:
+        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height
 
     asset.write_root_pose_to_sim(target_state[:, :7], env_ids=env_ids)
     asset.write_root_velocity_to_sim(target_state[:, 7:], env_ids=env_ids)

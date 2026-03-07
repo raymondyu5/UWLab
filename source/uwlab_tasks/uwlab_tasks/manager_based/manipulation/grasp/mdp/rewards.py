@@ -54,6 +54,17 @@ class GraspReward:
         self.object_pose = None
         self.contact_or_not = None
         self.finger_object_dev = None
+        self.reset_init_height = None  # (num_envs,) — captured after reset; None until first capture
+
+    def capture_reset_height(self, env, env_ids):
+        """Capture actual object Z after reset (accounts for table height randomization).
+        Wire as EventTerm(mode='reset') AFTER reset_object in the task config.
+        """
+        if self.reset_init_height is None:
+            self.reset_init_height = torch.zeros(env.num_envs, device=env.device)
+        obj = env.scene[self.object_name]
+        obj_z_local = obj.data.root_state_w[env_ids, 2] - env.scene.env_origins[env_ids, 2]
+        self.reset_init_height[env_ids] = obj_z_local
 
     def _get_target_pose_tensor(self, num_envs, device):
         return torch.tensor(
@@ -62,6 +73,8 @@ class GraspReward:
             device=device, dtype=torch.float32).repeat(num_envs, 1)
 
     def _get_init_height_tensor(self, num_envs, device):
+        if self.reset_init_height is not None:
+            return self.reset_init_height.to(device)
         return torch.full((num_envs,), self.init_height, device=device, dtype=torch.float32)
 
     # Maps plain finger name -> sensor link name in the sensor USD

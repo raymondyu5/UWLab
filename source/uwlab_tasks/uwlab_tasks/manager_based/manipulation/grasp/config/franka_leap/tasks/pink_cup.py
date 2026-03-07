@@ -12,6 +12,7 @@ import torch
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import RigidObjectCfg
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -21,7 +22,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import GraspReward, SynthesizePC, reset_object_pose
+from ....mdp import GraspReward, SynthesizePC, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
@@ -57,6 +58,19 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
         ),
     )
 
+    table_block = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/TableBlock",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=sim_utils.UsdFileCfg(
+            usd_path="/workspace/uwlab/assets/table/table_block.usd",
+            scale=(1.2, 1.0, 0.10),
+            rigid_props=RigidBodyPropertiesCfg(
+                kinematic_enabled=True,
+                disable_gravity=False,
+            ),
+        ),
+    )
+
 
 SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
 
@@ -64,12 +78,19 @@ SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
 @configclass
 class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
+    table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
     def is_success(self, env) -> torch.Tensor:
         """Returns bool tensor (num_envs,): True if object is lifted above SUCCESS_HEIGHT."""
         obj = env.scene["grasp_object"]
         pos = obj.data.root_pos_w - env.scene.env_origins
-        return pos[:, 2] >= SUCCESS_HEIGHT
+        block = env.scene["table_block"]
+        table_z_offset = (
+            block.data.root_state_w[:, 2]
+            - env.scene.env_origins[:, 2]
+            - block.data.default_root_state[:, 2]
+        )
+        return pos[:, 2] >= (SUCCESS_HEIGHT + table_z_offset)
 
     def __post_init__(self):
         super().__post_init__()
@@ -117,6 +138,15 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.synthesize_env)
 
+        self.events.reset_table_block = EventTerm(
+            func=reset_table_block,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("table_block"),
+                "z_range": self.table_z_range,
+            },
+        )
+
         self.events.reset_object = EventTerm(
             func=reset_object_pose,
             mode="reset",
@@ -133,6 +163,38 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
                     "yaw": (0.0, 0.0),
                 },
                 "reset_height": 0.11,
+                "table_block_name": "table_block",
+            },
+        )
+
+        self.events.capture_reset_height = EventTerm(
+            func=grasp_rew.capture_reset_height,
+            mode="reset",
+            params={},
+        )
+
+        self.events.randomize_object_material = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_material,
+            mode="reset",
+            min_step_count_between_reset=800, # expensive to run everytie, so just do it every 800 steps
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "static_friction_range": (0.3, 1.5),
+                "dynamic_friction_range": (0.3, 1.2),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 64,
+            },
+        )
+
+        self.events.randomize_object_mass = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_mass,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "mass_distribution_params": (0.8, 1.5),
+                "operation": "scale",
+                "distribution": "uniform",
             },
         )
 

@@ -150,6 +150,8 @@ class EventCfg:
         },
     )
 
+    reset_table_block = None  # Set to EventTerm in tasks that use table height randomization
+
     reset_object = EventTerm(
         func=mdp.reset_object_pose,
         mode="reset",

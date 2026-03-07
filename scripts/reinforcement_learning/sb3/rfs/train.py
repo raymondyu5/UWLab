@@ -120,6 +120,33 @@ from uwlab.eval.spawn import load_spawn_cfg
 _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
 
 
+from stable_baselines3.common.callbacks import BaseCallback
+
+
+class WandbRewardTermCallback(BaseCallback):
+    """Logs individual Isaac reward terms to wandb at the end of each rollout."""
+
+    def __init__(self, isaac_env, verbose=0):
+        super().__init__(verbose)
+        self._isaac_env = isaac_env
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if wandb.run is None:
+            return
+        try:
+            mgr = self._isaac_env.unwrapped.reward_manager
+            log_dict = {
+                f"rewards/{name}": val.mean().item()
+                for name, val in mgr.episode_sums.items()
+            }
+            wandb.log(log_dict, step=self.num_timesteps)
+        except Exception:
+            pass
+
+
 class WandbOutputFormat(KVWriter):
     """Forwards SB3 logger flushes directly to wandb.
 
@@ -277,11 +304,12 @@ def main():
         record_plots=not args_cli.no_eval_plots and eval_cfg["record_plots"],
         verbose=1,
     )
+    reward_term_cb = WandbRewardTermCallback(env)
 
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
             total_timesteps=200_000_000,
-            callback=[eval_cb],
+            callback=[eval_cb, reward_term_cb],
             progress_bar=True,
             log_interval=1,
         )

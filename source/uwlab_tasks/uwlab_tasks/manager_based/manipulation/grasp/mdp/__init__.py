@@ -8,6 +8,7 @@ from .rewards import GraspReward, PourReward
 from .events import (
     reset_robot_joints,
     reset_object_pose,
+    reset_table_block,
     reset_camera_pose,
     set_fixed_camera_view,
 )
