@@ -78,12 +78,6 @@ class RFSEvalCallback(BaseCallback):
 
     def _on_rollout_end(self) -> None:
         self._rollout_count += 1
-
-        if wandb.run is not None:
-            metrics = {k: v for k, v in self.logger.name_to_value.items() if v is not None}
-            if metrics:
-                wandb.log(metrics, step=self.num_timesteps)
-
         if self._rollout_count % self.eval_interval == 0:
             self._run_eval()
 

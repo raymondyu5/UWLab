@@ -104,6 +104,7 @@ import wandb
 import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.logger import KVWriter, configure as sb3_configure
 
 from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper
@@ -117,6 +118,31 @@ from uwlab.eval.spawn import load_spawn_cfg
 
 
 _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
+
+
+class WandbOutputFormat(KVWriter):
+    """Forwards SB3 logger flushes directly to wandb.
+
+    SB3 calls write() via _dump_logs() after both collect_rollouts() and train(),
+    so ep_rew_mean, value_loss, etc. are all present at flush time.
+    """
+
+    def write(self, key_values, key_excluded, step=0):
+        if wandb.run is None:
+            return
+        log_dict = {}
+        for (key, value), (_, excluded) in zip(
+            sorted(key_values.items()), sorted(key_excluded.items())
+        ):
+            if excluded is not None and "wandb" in excluded:
+                continue
+            if isinstance(value, (int, float, np.floating, np.integer)):
+                log_dict[key] = float(value)
+        if log_dict:
+            wandb.log(log_dict, step=step)
+
+    def close(self):
+        pass
 
 
 def _parse_dims(s: str):
@@ -220,6 +246,10 @@ def main():
     agent = PPO("MultiInputPolicy", sb3_env, **agent_kwargs)
     if args_cli.checkpoint is not None:
         agent = PPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
+
+    sb3_logger = sb3_configure(folder=None, format_strings=[])
+    sb3_logger.output_formats.append(WandbOutputFormat())
+    agent.set_logger(sb3_logger)
 
     ckpt_cb = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
 
