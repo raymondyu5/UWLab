@@ -117,17 +117,20 @@ class CFMPCDPolicy(BaseImagePolicy):
         return F.mse_loss(pred, ut)
 
     @torch.no_grad()
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], noise=None) -> Dict[str, torch.Tensor]:
         nobs = self.normalizer.normalize(obs_dict)
 
         B = next(iter(nobs.values())).shape[0]
         global_cond = self._encode_obs(nobs, B)
 
-        trajectory = torch.randn(
-            (B, self.horizon, self.action_dim),
-            device=self.device,
-            dtype=self.dtype,
-        )
+        if noise is not None:
+            trajectory = noise.to(device=self.device, dtype=self.dtype)
+        else:
+            trajectory = torch.randn(
+                (B, self.horizon, self.action_dim),
+                device=self.device,
+                dtype=self.dtype,
+            )
 
         trajectory = _rk2(
             self.model,

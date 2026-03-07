@@ -51,6 +51,9 @@ parser.add_argument("--record_video", action="store_true",
                     help="Save per-episode videos from fixed_camera (requires --enable_cameras)")
 parser.add_argument("--output_dir", type=str, default=None,
                     help="Where to save results. Defaults to <checkpoint>/eval_legacy/")
+parser.add_argument("--spawn", type=str, default=None,
+                    help="Spawn config name in configs/eval/spawns/ (e.g. 'cardinal_3x3'). "
+                         "If set, num_episodes is ignored and episodes are drawn from the spawn grid.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
@@ -70,6 +73,7 @@ from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
 from uwlab.eval.bc_obs_formatter import BCObsFormatter
 from uwlab.eval.eval_logger import EvalLogger
+from uwlab.eval.spawn import load_spawn_cfg, SpawnPose
 
 import uwlab_tasks  # noqa: F401
 
@@ -124,11 +128,10 @@ def _build_policy(state_dict, cfg, device: torch.device) -> CFMPCDPolicy:
     return policy
 
 
-def _get_frame(isaac_env) -> np.ndarray:
-    """Grab the latest RGB frame from fixed_camera. Returns (H, W, 3) uint8."""
-    cam = isaac_env.scene["fixed_camera"]
-    frame = cam.data.output["rgb"][0].cpu().numpy()  # (H, W, 4) RGBA
-    return frame[:, :, :3]
+def _get_frame(env) -> np.ndarray:
+    """Grab the latest RGB frame via env.render(). Returns (H, W, 3) uint8."""
+    frame = env.render()  # (H, W, 3) or None
+    return frame
 
 
 def main():
@@ -157,17 +160,48 @@ def main():
 
     ee_cfg = SceneEntityCfg("robot")
 
+    # Build episode list: either spawn grid or plain resets.
+    if args_cli.spawn:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        _uwlab_dir = os.path.abspath(os.path.join(_script_dir, "../../"))
+        spawn_cfg = load_spawn_cfg(args_cli.spawn, os.path.join(_uwlab_dir, "configs/eval/spawns"))
+        poses = spawn_cfg.poses if spawn_cfg.poses else [SpawnPose()]
+        episode_list = [(pose, trial)
+                        for pose in poses
+                        for trial in range(spawn_cfg.num_trials)]
+    else:
+        episode_list = [(None, ep) for ep in range(args_cli.num_episodes)]
+
+    def _reset_env(pose):
+        obs_raw, _ = env.reset()
+        if pose is not None:
+            obj = isaac_env.scene["grasp_object"]
+            defaults = isaac_env.cfg.object_spawn_defaults
+            default_pos = torch.tensor(defaults["default_pos"], dtype=torch.float32, device=device)
+            default_rot = torch.tensor(defaults["default_rot"], dtype=torch.float32, device=device)
+            new_pos = default_pos.clone()
+            new_pos[0] += pose.x
+            new_pos[1] += pose.y
+            root_state = obj.data.default_root_state.clone()
+            root_state[:, :3] = new_pos.unsqueeze(0) + isaac_env.scene.env_origins
+            root_state[:, 3:7] = default_rot.unsqueeze(0)
+            root_state[:, 7:] = 0.0
+            obj.write_root_state_to_sim(root_state)
+            isaac_env.sim.step()
+            obs_raw = {"policy": isaac_env.observation_manager.compute()["policy"]}
+        warmup_act = isaac_env.cfg.warmup_action(isaac_env)
+        for _ in range(args_cli.num_warmup_steps):
+            obs_raw, _, _, _, _ = env.step(warmup_act)
+        return obs_raw
+
     with torch.inference_mode():
-        for ep in range(args_cli.num_episodes):
-            obs_raw, _ = env.reset()
-            policy_obs = obs_raw["policy"]
+        for ep_idx, (pose, _) in enumerate(episode_list):
+            obs_raw = _reset_env(pose)
+            policy_obs = obs_raw["policy"] if isinstance(obs_raw, dict) else obs_raw
 
-            warmup_act = isaac_env.cfg.warmup_action(isaac_env)
-            for _ in range(args_cli.num_warmup_steps):
-                obs_raw, _, _, _, _ = env.step(warmup_act)
-            policy_obs = obs_raw["policy"]
-
-            logger.begin_episode()
+            spawn_name = pose.name if pose is not None else None
+            spawn_pose_dict = {"x": pose.x, "y": pose.y, "yaw": pose.yaw} if pose is not None else None
+            logger.begin_episode(spawn_name, spawn_pose_dict)
             action_seq = None
             success = False
 
@@ -181,9 +215,9 @@ def main():
                 action_step = action_seq[:, action_idx]  # (B, A)
 
                 obs_raw, _, terminated, truncated, _ = env.step(action_step)
-                policy_obs = obs_raw["policy"]
+                policy_obs = obs_raw["policy"] if isinstance(obs_raw, dict) else obs_raw
 
-                frame = _get_frame(isaac_env) if args_cli.record_video else None
+                frame = _get_frame(env) if args_cli.record_video else None
                 obj = isaac_env.scene["grasp_object"]
                 obj_pose = (obj.data.root_pos_w - isaac_env.scene.env_origins).cpu().numpy()[0]
                 ee_pose_tensor = ee_pose_w(isaac_env, asset_cfg=ee_cfg,
@@ -197,7 +231,7 @@ def main():
                     break
 
             logger.end_episode(success)
-            print(f"[play_bc_legacy] Episode {ep+1}/{args_cli.num_episodes}: "
+            print(f"[play_bc_legacy] Episode {ep_idx+1}/{len(episode_list)}: "
                   f"{'SUCCESS' if success else 'fail'}")
 
     results = logger.finalize()

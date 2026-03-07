@@ -1,0 +1,12 @@
+# Narrow ±5cm spawn grid for bottle pour eval (matches training pose_range).
+poses:
+  - {name: center,       x:  0.0,    y:  0.0,    yaw: 0.0}
+  - {name: right,        x:  0.0,    y: -0.05,  yaw: 0.0}
+  - {name: left,         x:  0.0,    y:  0.05,  yaw: 0.0}
+  - {name: top,          x:  0.05,   y:  0.0,   yaw: 0.0}
+  - {name: bottom,       x: -0.05,   y:  0.0,   yaw: 0.0}
+  - {name: top_right,    x:  0.05,   y: -0.05, yaw: 0.0}
+  - {name: top_left,     x:  0.05,   y:  0.05, yaw: 0.0}
+  - {name: bottom_right, x: -0.05,   y: -0.05, yaw: 0.0}
+  - {name: bottom_left,  x: -0.05,   y:  0.05, yaw: 0.0}
+num_trials: 4

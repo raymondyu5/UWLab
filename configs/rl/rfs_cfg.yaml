@@ -1,0 +1,47 @@
+# RFS (Residual Flow Steering RL) training config.
+# All algorithm parameters live here; CLI only handles env/infra args.
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  learning_rate: 0.0003
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu   # elu | tanh | relu
+
+rfs:
+  # Slices of the CFM action dim (22D for IkRel) that receive noise / residual.
+  # Format: "start:end". Leave empty string for no noise or no residual.
+  noise_dims: "0:22"       # full action gets PPO noise
+  residual_dims: "6:22"    # hand dims (6:22) get PPO residual
+
+  residual_step: 1         # env substeps per PPO step; rewards accumulate
+
+  # Residual scale: PPO residual output in [-1,1] is multiplied by this.
+  # From IsaacLab action_range[-1] = 0.1 (the hand residual bound in rad).
+  residual_scale: 0.1
+
+  # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
+  # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
+  clip_actions: true
+
+  # Finger smoothing (LPFilter). alpha=0.3 matches IsaacLab finger_smoothing config
+  # (rl_env_ycb_synthetic_pc_custom_init.yaml: finger_smoothing: enabled: true, alpha: 0.3).
+  finger_smooth_alpha: 0.3
+
+  num_warmup_steps: 10
+
+eval:
+  interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)
+  spawn: "cardinal_3x3"    # spawn config name in configs/eval/spawns/
+  record_video: true
+  record_plots: true

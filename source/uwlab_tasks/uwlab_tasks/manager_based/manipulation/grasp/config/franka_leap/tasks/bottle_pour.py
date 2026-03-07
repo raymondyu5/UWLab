@@ -35,10 +35,10 @@ from .bottle import (
 )
 from .pink_cup import PINK_CUP_USD
 
-# Pink cup pour-task spawn values from rl_env_bourbon_pour_pink_cup_delta_joint.yaml (pour_config):
+# Pink cup pour-task spawn values from rl_env_bourbon_pour_pink_cup_synthetic_pc_force_pert.yaml (pour_config):
 # cup_pos: [0.55, 0.10, 0.07], rot: X-axis 90deg = (0.707, 0.707, 0, 0) (w,x,y,z)
 # cup_pose_range: x±5cm, y [0, +5cm]
-PINK_CUP_POUR_POS = (0.55, 0.10, 0.11)
+PINK_CUP_POUR_POS = (0.55, 0.10, 0.07)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
 # Bottle cap offset in local -X frame: 13.22cm (cap is at X=-0.132 in mesh frame)
@@ -95,6 +95,16 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     def __post_init__(self):
         super().__post_init__()
 
+        self.scene.train_camera = None
+        self.scene.fixed_camera = None
+        self.events.reset_camera = None
+        self.events.reset_fixed_camera = None
+
+        self.object_spawn_defaults = {
+            "default_pos": list(BOTTLE_SPAWN_POS),
+            "default_rot": list(BOTTLE_SPAWN_ROT),
+        }
+
         self.horizon = POUR_HORIZON
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
 
@@ -140,8 +150,8 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
                 "default_pos": BOTTLE_SPAWN_POS,
                 "default_rot_quat": BOTTLE_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.10, 0.10),
-                    "y": (-0.10, 0.10),
+                    "x": (-0.05, 0.05),
+                    "y": (-0.05, 0.05),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
@@ -167,7 +177,7 @@ class PourBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
-                "reset_height": PINK_CUP_POUR_POS[2],  # 0.11
+                "reset_height": PINK_CUP_POUR_POS[2],  # 0.07
             },
         )
 

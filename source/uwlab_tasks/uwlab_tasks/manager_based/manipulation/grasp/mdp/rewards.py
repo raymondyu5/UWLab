@@ -115,8 +115,12 @@ class GraspReward:
         rewards03_contact = self.object2fingercontact_rewards(env)
         rewards04_lift = self.liftobject_rewards(env)
         rewards04_link6 = self.penalty_contact(env)
+        joint_vel_penalty = self._joint_vel_l2(env)
+        action_rate_penalty = self._action_rate_l2(env)
 
-        return rewards04_lift + rewards_finger2object + rewards03_contact + rewards04_link6
+        return (rewards04_lift + rewards_finger2object + rewards03_contact + rewards04_link6
+                - joint_vel_penalty * 1.0e-2
+                - action_rate_penalty * 5e-2)
 
     def penalty_contact(self, env):
         sensor = env.scene["panda_link6_contact"]
@@ -221,6 +225,15 @@ class GraspReward:
         if self.finger_object_dev is None:
             self.get_finger_info(env)
         return self.finger_object_dev.reshape(env.num_envs, -1)
+
+
+    def _joint_vel_l2(self, env):
+        robot = env.scene[self.asset_name]
+        return torch.sum(robot.data.joint_vel ** 2, dim=1)
+
+    def _action_rate_l2(self, env):
+        return torch.sum(
+            (env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
 
 
 class PourReward:

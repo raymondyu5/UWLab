@@ -75,6 +75,18 @@ class GraspBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
     def __post_init__(self):
         super().__post_init__()
 
+        self.scene.train_camera = None
+        self.scene.fixed_camera = None
+        self.events.reset_camera = None
+        self.events.reset_fixed_camera = None
+
+        self.observations.policy.hand_joint_pos = None
+
+        self.object_spawn_defaults = {
+            "default_pos": list(BOTTLE_SPAWN_POS),
+            "default_rot": list(BOTTLE_SPAWN_ROT),
+        }
+
         self.horizon = BOTTLE_HORIZON
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
 
