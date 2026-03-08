@@ -158,14 +158,9 @@ class SynthesizePC:
                 mesh_name = "palm_lower"
             elif "palm_upper" in link_name:
                 mesh_name = "palm_upper"
-            elif "thumb" in link_name:
-                mesh_name = link_name
             else:
-                parts = link_name.split("_")
-                if parts[-1].isdigit():
-                    mesh_name = "_".join(parts[:-1])
-                else:
-                    mesh_name = "_".join(parts)
+                # Use the link_name so each finger has its own mesh (pip.obj, pip_2.obj, etc.)
+                mesh_name = link_name
 
             mesh_path = os.path.join(self.hand_mesh_dir, f"{mesh_name}.obj")
             print(f"Loading hand mesh: {link_name} -> {mesh_name} -> {mesh_path}")

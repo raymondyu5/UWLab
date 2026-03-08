@@ -62,9 +62,11 @@ class EvalLogger:
         if frame is not None and self.record_video:
             self._current["frames"].append(frame)
 
-    def end_episode(self, success: bool):
+    def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
+        self._current["n_success"] = n_success
+        self._current["n_total"] = n_total
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
@@ -78,23 +80,34 @@ class EvalLogger:
         return results
 
     def _write_results(self) -> dict:
-        n_total = len(self._episodes)
-        assert n_total > 0, "finalize() called with no episodes recorded"
-        n_success = sum(e["success"] for e in self._episodes)
-        success_rate = n_success / n_total
+        n_episodes = len(self._episodes)
+        assert n_episodes > 0, "finalize() called with no episodes recorded"
+        n_success = sum(
+            (e["n_success"] if e.get("n_success") is not None else (1 if e["success"] else 0))
+            for e in self._episodes
+        )
+        n_total = sum(
+            (e["n_total"] if e.get("n_total") is not None else 1) for e in self._episodes
+        )
+        success_rate = n_success / n_total if n_total > 0 else 0.0
 
         records = []
         for i, ep in enumerate(self._episodes):
-            records.append({
+            rec = {
                 "episode": i,
                 "success": ep["success"],
                 "spawn_name": ep["spawn_name"],
                 "spawn_pose": ep["spawn_pose"],
-            })
+            }
+            if ep.get("n_success") is not None and ep.get("n_total") is not None:
+                rec["n_success"] = ep["n_success"]
+                rec["n_total"] = ep["n_total"]
+            records.append(rec)
 
         summary = {
-            "n_episodes": n_total,
+            "n_episodes": n_episodes,
             "n_success": n_success,
+            "n_total": n_total,
             "success_rate": success_rate,
             "episodes": records,
         }
@@ -111,7 +124,8 @@ class EvalLogger:
 
         for ep in self._episodes:
             obj_poses = np.stack(ep["object_poses"], axis=0)  # (T, 3)
-            color = "green" if ep["success"] else "red"
+            success_val = ep["success"]
+            color = "green" if (success_val if isinstance(success_val, bool) else success_val >= 0.5) else "red"
             ax.plot(obj_poses[:, 2], color=color, alpha=0.5, linewidth=0.8)
 
         ax.set_title("Object height over episode")
@@ -130,8 +144,8 @@ class EvalLogger:
         if not named_episodes:
             return
 
-        # Group by spawn name, collect unique x/y positions.
-        spawn_results: Dict[str, List[bool]] = {}
+        # Group by spawn name, collect n_success/n_total or legacy bool successes.
+        spawn_results: Dict[str, List[Tuple[int, int] | bool]] = {}
         spawn_xy: Dict[str, Tuple[float, float]] = {}
         for ep in named_episodes:
             name = ep["spawn_name"]
@@ -139,7 +153,10 @@ class EvalLogger:
                 spawn_results[name] = []
                 pose = ep["spawn_pose"] or {}
                 spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
-            spawn_results[name].append(ep["success"])
+            if ep.get("n_success") is not None and ep.get("n_total") is not None:
+                spawn_results[name].append((ep["n_success"], ep["n_total"]))
+            else:
+                spawn_results[name].append(1 if ep["success"] else 0)
 
         # Build sorted unique axes so grid is aligned.
         xs = sorted(set(v[0] for v in spawn_xy.values()))
@@ -147,12 +164,19 @@ class EvalLogger:
         grid = np.full((len(xs), len(ys)), np.nan)
         labels = [["" for _ in ys] for _ in xs]
 
-        for name, successes in spawn_results.items():
+        for name, results in spawn_results.items():
             x, y = spawn_xy[name]
-            r = np.mean(successes)
             i, j = xs.index(x), ys.index(y)
+            if results and isinstance(results[0], tuple):
+                n_succ = sum(r[0] for r in results)
+                n_tot = sum(r[1] for r in results)
+                r = n_succ / n_tot if n_tot > 0 else 0.0
+                labels[i][j] = f"{r:.0%}\n({n_succ}/{n_tot})"
+            else:
+                successes = [int(r) for r in results]
+                r = np.mean(successes)
+                labels[i][j] = f"{r:.0%}\n({sum(successes)}/{len(successes)})"
             grid[i, j] = r
-            labels[i][j] = f"{r:.0%}\n({sum(successes)}/{len(successes)})"
 
         fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
         im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
@@ -181,7 +205,8 @@ class EvalLogger:
         frames = ep.get("frames", [])
         if not frames:
             return
-        tag = "success" if ep["success"] else "fail"
+        success_val = ep["success"]
+        tag = "success" if (success_val if isinstance(success_val, bool) else success_val >= 0.5) else "fail"
         out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
         imageio.mimsave(out_path, frames, fps=30)
         print(f"[EvalLogger] video -> {out_path}")

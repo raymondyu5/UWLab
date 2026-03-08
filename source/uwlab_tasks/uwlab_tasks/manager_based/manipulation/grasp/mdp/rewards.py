@@ -132,8 +132,8 @@ class GraspReward:
         action_rate_penalty = self._action_rate_l2(env)
 
         return (rewards04_lift + rewards_finger2object + rewards03_contact + rewards04_link6
-                - joint_vel_penalty * 1.0e-2
-                - action_rate_penalty * 5e-2)
+                - joint_vel_penalty * 1.0e-3
+                - action_rate_penalty * 5e-3)
 
     def penalty_contact(self, env):
         sensor = env.scene["panda_link6_contact"]
@@ -432,32 +432,28 @@ class PourReward:
         return torch.sum(self.contact_or_not.to(torch.float32), dim=1) + finger_rewards_scale * 1.0
 
     def cap_to_target_rewards(self, env):
-        """Reward moving bottle cap to 3cm above cup center. Gated by 5cm lift."""
+        """Reward moving bottle cap to 11cm above cup center. Ungated."""
         self._compute_tip_pos()
-        reset_init_height = self._get_reset_init_height(env)
 
         target = torch.zeros_like(self.tip_pos)
         target[:, :2] = self.cup_center_xy
         target[:, 2] = self.cup_top_z + 0.11
         dist_3d = torch.linalg.norm(self.tip_pos - target, dim=1)
         dist_3d = torch.nan_to_num(dist_3d, nan=10.0, posinf=10.0, neginf=10.0)
-        lifted = (self.object_pose[:, 2] - reset_init_height >= 0.05).float()
-        return torch.clip(1 - dist_3d / 0.5, 0.0, 1.0) * 20 * lifted
+        return torch.clip(1 - dist_3d / 0.5, 0.0, 1.0) * 20
 
     def pour_orientation_rewards(self, env):
         """Reward keeping bottle at spawn orientation. Gated by 5cm lift."""
         if self.default_bottle_quat is None or torch.all(self.default_bottle_quat == 0):
             return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
 
-        reset_init_height = self._get_reset_init_height(env)
         delta_quat = math_utils.quat_mul(
             self.object_pose[:, 3:7],
             math_utils.quat_inv(self.default_bottle_quat))
         axis_angle = math_utils.axis_angle_from_quat(delta_quat)
         rotation_magnitude = torch.linalg.norm(axis_angle, dim=1)
         rotation_magnitude = torch.nan_to_num(rotation_magnitude, nan=1.0, posinf=1.0, neginf=0.0)
-        lifted = (self.object_pose[:, 2] - reset_init_height >= 0.05).float()
-        return torch.clip(1 - rotation_magnitude / 0.5, 0.0, 1.0) * 5 * lifted
+        return torch.clip(1 - rotation_magnitude / 0.5, 0.0, 1.0) * 5
 
     def cup_topple_penalty(self, env):
         """Penalize knocking over the cup relative to its spawn orientation."""
@@ -606,7 +602,16 @@ class PourReward:
         return self.contact_or_not
 
     def obs_object_in_tip(self, env):
-        """(N, num_fingers*3) finger-to-object displacement vectors, flattened."""
-        if self.finger_object_dev is None:
+        """(N, num_fingers*3) bottle-center-to-finger displacement vectors, flattened.
+
+        Uses raw bottle center (no grasp_target_offset) to match IsaacLab's
+        SingleHandPourObs.object_in_tip exactly. get_finger_info() uses the offset
+        for reward shaping but that must not bleed into the PPO obs.
+        """
+        if self.object_pose is None:
+            self.get_object_info(env)
+        if self.finger_pose is None:
             self.get_finger_info(env)
-        return self.finger_object_dev.reshape(env.num_envs, -1)
+        object_pos = self.object_pose[:, :3].unsqueeze(1)          # (B, 1, 3)
+        dev = object_pos - self.finger_pose[..., :3]               # (B, num_fingers, 3)
+        return dev.reshape(env.num_envs, -1)
