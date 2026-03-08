@@ -14,6 +14,12 @@ import isaaclab.utils.math as math_utils
 from isaaclab.managers import SceneEntityCfg
 from uwlab.utils.math import fps_points
 
+# For SamplePC: sample from USD (same geometry as sim)
+from isaaclab.sim.utils import get_first_matching_child_prim
+from pxr import UsdPhysics
+
+from ...reset_states.mdp import utils as reset_states_utils
+
 try:
     import pymeshlab
     HAS_PYMESHLAB = True
@@ -199,3 +205,167 @@ class SynthesizePC:
         vertices = torch.tensor(obj_mesh.vertices, dtype=torch.float32).to(env.device)
         downsample_vertices = fps_points(vertices.unsqueeze(0), self.num_object_pcd)
         self.object_mesh[:] = downsample_vertices
+
+
+##
+# Sampled point cloud observation (Option B: same geometry as sim)
+# Samples arm, hand, and object from USD colliders so all points align with the simulated geometry.
+# Same public API as SynthesizePC (arm_mesh_dir, hand_mesh_dir, object_mesh_path accepted but ignored).
+##
+
+
+class SamplePC:
+
+    def __init__(
+        self,
+        asset_name: str,
+        object_name: str,
+        arm_mesh_dir: str,
+        hand_mesh_dir: str,
+        object_mesh_path: str,
+        num_arm_pcd: int = 64,
+        num_hand_pcd: int = 64,
+        num_object_pcd: int = 512,
+        num_downsample_points: int = 2048,
+        object_prim_path_pattern: str | None = None,
+    ):
+        self.asset_name = asset_name
+        self.object_name = object_name
+        self.arm_mesh_dir = arm_mesh_dir
+        self.hand_mesh_dir = hand_mesh_dir
+        self.object_mesh_path = object_mesh_path
+        self.num_arm_pcd = num_arm_pcd
+        self.num_hand_pcd = num_hand_pcd
+        self.num_object_pcd = num_object_pcd
+        self.num_downsample_points = num_downsample_points
+        self._object_prim_path_pattern = object_prim_path_pattern
+        self.mesh_init = False
+        self._printed_msg = False
+
+    def synthesize_env(self, env):
+        if not self.mesh_init:
+            self.init_mesh(env)
+
+        robot_link_state = env.scene[self.asset_name]._data.body_pose_w.clone()
+        robot_link_state[:, :, :3] -= env.scene.env_origins.unsqueeze(1).repeat_interleave(
+            robot_link_state.shape[1], dim=1)
+
+        arm_parts = []
+        for i, pattern in enumerate(self._arm_prim_patterns):
+            if pattern is None:
+                arm_parts.append(torch.zeros(env.num_envs, self.num_arm_pcd, 3, device=env.device, dtype=torch.float32))
+                continue
+            pc = reset_states_utils.sample_object_point_cloud(
+                num_envs=env.num_envs,
+                num_points=self.num_arm_pcd,
+                prim_path_pattern=pattern,
+                device=env.device,
+            )
+            if pc is None:
+                arm_parts.append(torch.zeros(env.num_envs, self.num_arm_pcd, 3, device=env.device, dtype=torch.float32))
+                continue
+            arm_parts.append(math_utils.transform_points(
+                pc, robot_link_state[:, i, :3], robot_link_state[:, i, 3:7]))
+
+        hand_parts = []
+        for j, pattern in enumerate(self._hand_prim_patterns):
+            if pattern is None:
+                hand_parts.append(torch.zeros(env.num_envs, self.num_hand_pcd, 3, device=env.device, dtype=torch.float32))
+                continue
+            pc = reset_states_utils.sample_object_point_cloud(
+                num_envs=env.num_envs,
+                num_points=self.num_hand_pcd,
+                prim_path_pattern=pattern,
+                device=env.device,
+            )
+            if pc is None:
+                hand_parts.append(torch.zeros(env.num_envs, self.num_hand_pcd, 3, device=env.device, dtype=torch.float32))
+                continue
+            link_idx = len(self.arm_names) + j
+            hand_parts.append(math_utils.transform_points(
+                pc, robot_link_state[:, link_idx, :3], robot_link_state[:, link_idx, 3:7]))
+
+        arm_vertices = torch.cat(arm_parts, dim=1)
+        hand_vertices = torch.cat(hand_parts, dim=1)
+
+        object_vertices_root = reset_states_utils.sample_object_point_cloud(
+            num_envs=env.num_envs,
+            num_points=self.num_object_pcd,
+            prim_path_pattern=self._object_prim_path_pattern,
+            device=env.device,
+        )
+        object_state = env.scene[self.object_name]._data.root_pose_w.clone()
+        object_state[:, :3] -= env.scene.env_origins
+        if object_vertices_root is None:
+            if not getattr(self, "_object_mesh_fallback_loaded", False):
+                print(
+                    "[SamplePC] No USD colliders for object; using mesh file fallback"
+                    f" (object_mesh_path={self.object_mesh_path!r})"
+                )
+                self._load_object_mesh_fallback(env)
+                self._object_mesh_fallback_loaded = True
+            object_vertices = math_utils.transform_points(
+                self._object_mesh_fallback, object_state[..., :3], object_state[..., 3:7])
+        else:
+            object_vertices = math_utils.transform_points(
+                object_vertices_root, object_state[..., :3], object_state[..., 3:7])
+
+        all_pcd = torch.cat([arm_vertices, hand_vertices, object_vertices], dim=1)
+        points_index = torch.randperm(all_pcd.shape[1]).to(env.device)
+        sampled_pcd = all_pcd[:, points_index[:self.num_downsample_points]]
+
+        if not self._printed_msg:
+            print("[INFO] Using sampled pointcloud (arm/hand/object from USD)")
+            self._printed_msg = True
+
+        return sampled_pcd.permute(0, 2, 1)
+
+    def init_mesh(self, env):
+        self.num_envs = env.num_envs
+        robot_asset = env.scene[self.asset_name]
+        self.arm_names = robot_asset.body_names[:8]
+        self.hand_names = robot_asset.body_names[8:]
+        robot_prim_env0 = robot_asset.cfg.prim_path.replace(".*", "0", 1)
+
+        self._arm_prim_patterns = []
+        for name in self.arm_names:
+            prim = get_first_matching_child_prim(
+                robot_prim_env0,
+                predicate=lambda p, bn=name: p.GetName() == bn and p.HasAPI(UsdPhysics.RigidBodyAPI),
+            )
+            if prim is not None:
+                self._arm_prim_patterns.append(str(prim.GetPath()).replace("env_0", "env_.*", 1))
+            else:
+                self._arm_prim_patterns.append(None)
+
+        self._hand_prim_patterns = []
+        for link_name in self.hand_names:
+            if "sensor" in link_name.lower():
+                print(f"SamplePC: skipping sensor link {link_name} (no mesh)")
+                self._hand_prim_patterns.append(None)
+                continue
+            prim = get_first_matching_child_prim(
+                robot_prim_env0,
+                predicate=lambda p, bn=link_name: p.GetName() == bn and p.HasAPI(UsdPhysics.RigidBodyAPI),
+            )
+            if prim is not None:
+                self._hand_prim_patterns.append(str(prim.GetPath()).replace("env_0", "env_.*", 1))
+            else:
+                self._hand_prim_patterns.append(None)
+
+        if self._object_prim_path_pattern is None:
+            self._object_prim_path_pattern = env.scene[self.object_name].cfg.prim_path
+        self.mesh_init = True
+
+    def _load_object_mesh_fallback(self, env):
+        """Load object mesh from file when USD has no colliders (same as SynthesizePC)."""
+        mesh_path = self.object_mesh_path
+        if not os.path.isabs(mesh_path):
+            mesh_path = os.path.abspath(mesh_path)
+        obj_mesh = trimesh.load(mesh_path)
+        obj_mesh = trimesh.util.concatenate(obj_mesh)
+        vertices = torch.tensor(obj_mesh.vertices, dtype=torch.float32).to(env.device)
+        downsample = fps_points(vertices.unsqueeze(0), self.num_object_pcd)
+        self._object_mesh_fallback = downsample.expand(
+            env.num_envs, self.num_object_pcd, 3
+        ).clone()

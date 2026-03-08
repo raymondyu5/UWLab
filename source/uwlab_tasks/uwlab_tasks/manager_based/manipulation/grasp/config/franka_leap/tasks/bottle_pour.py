@@ -21,7 +21,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import PourReward, SynthesizePC, reset_object_pose, reset_table_block
+from ....mdp import PourReward, SynthesizePC, SamplePC, reset_object_pose, reset_table_block
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
@@ -126,7 +126,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.contact_obs = ObsTerm(func=pour_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=pour_rew.obs_object_in_tip)
 
-        synth_pc = SynthesizePC(
+        synth_pc = SamplePC( # SynthesizePC(
             asset_name="robot",
             object_name="grasp_object",
             arm_mesh_dir=ARM_MESH_DIR,
