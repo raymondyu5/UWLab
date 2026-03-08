@@ -278,7 +278,6 @@ def capture_viewport_image(env, output_path: str, camera_name: str = "fixed_came
     scene = env.unwrapped.scene
     camera_name = str(camera_name)
     
-    breakpoint()
     try:
         cam = scene[camera_name]
     except KeyError:

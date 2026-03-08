@@ -176,20 +176,6 @@ class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
         return torch.cat([pos, quat, hand_joints], dim=-1)
 
 
-def _apply_run_mode(cfg: FrankaLeapGraspEnvCfg, run_mode: str) -> None:
-    """Apply run_mode to env config. rl_mode disables scene cameras and their reset events."""
-    if run_mode not in RUN_MODES:
-        raise ValueError(f"run_mode must be one of {RUN_MODES}, got {run_mode!r}")
-    if run_mode == RL_MODE:
-        # disable all the cameras for rl_mode
-        cfg.scene.train_camera = None
-        cfg.scene.fixed_camera = None
-        if hasattr(cfg.events, "reset_camera"):
-            cfg.events.reset_camera = None
-        if hasattr(cfg.events, "reset_fixed_camera"):
-            cfg.events.reset_fixed_camera = None
-
-
 def parse_franka_leap_env_cfg(task: str, run_mode: str, **kwargs) -> FrankaLeapGraspEnvCfg:
     """Parse env config for Franka-LEAP grasp tasks. 
     
@@ -201,12 +187,11 @@ def parse_franka_leap_env_cfg(task: str, run_mode: str, **kwargs) -> FrankaLeapG
     Returns:
         The parsed environment configuration.
     run_mode is required (RL_MODE, COLLECT_MODE, EVAL_MODE)."""
-    
+
     assert run_mode in RUN_MODES, f"run_mode must be one of {RUN_MODES}, got {run_mode!r}"
     env_cfg = parse_env_cfg(task, **kwargs)
     env_cfg.run_mode = run_mode
     return env_cfg
-
 
 class FrankaLeapGraspEnv(ManagerBasedRLEnv):
     """Runtime RL environment for Franka-LEAP grasp tasks with built-in warmup on reset.
@@ -223,8 +208,20 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
     def __init__(self, cfg: FrankaLeapGraspEnvCfg, **kwargs):
         # apply runtime variables to the environment given the mode (eval, rl, or collect)
         run_mode = cfg.run_mode
-        _apply_run_mode(cfg, run_mode) 
+        self._apply_run_mode(cfg, run_mode) 
         super().__init__(cfg, **kwargs)
+
+    def _apply_run_mode(self, cfg: FrankaLeapGraspEnvCfg, run_mode: str) -> None:
+        """Apply run_mode to env config. rl_mode disables scene cameras and their reset events."""
+        assert run_mode in RUN_MODES, f"run_mode must be one of {RUN_MODES}, got {run_mode!r}"
+        if run_mode == RL_MODE:
+            # disable all the cameras for rl_mode
+            cfg.scene.train_camera = None
+            cfg.scene.fixed_camera = None
+            if hasattr(cfg.events, "reset_camera"):
+                cfg.events.reset_camera = None
+            if hasattr(cfg.events, "reset_fixed_camera"):
+                cfg.events.reset_fixed_camera = None
 
     def reset(self, *args, **kwargs):
         # Run the standard reset behavior (events, managers, etc.).
