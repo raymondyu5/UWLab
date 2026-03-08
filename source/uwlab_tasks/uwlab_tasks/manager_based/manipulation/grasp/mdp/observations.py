@@ -92,7 +92,7 @@ class SynthesizePC:
         self.mesh_init = False
         self._printed_msg = False
 
-    def synthesize_env(self, env):
+    def get_seg_pc(self, env):
         if not self.mesh_init:
             self.init_mesh(env)
 
@@ -252,7 +252,7 @@ class SamplePC:
         self.mesh_init = False
         self._printed_msg = False
 
-    def synthesize_env(self, env):
+    def get_seg_pc(self, env):
         if not self.mesh_init:
             self.init_mesh(env)
 

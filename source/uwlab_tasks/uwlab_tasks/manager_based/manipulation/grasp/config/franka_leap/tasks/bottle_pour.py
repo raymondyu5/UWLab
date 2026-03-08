@@ -137,7 +137,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             num_object_pcd=512,
             num_downsample_points=2048,
         )
-        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.synthesize_env)
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 
         self.events.reset_table_block = EventTerm(
             func=reset_table_block,
