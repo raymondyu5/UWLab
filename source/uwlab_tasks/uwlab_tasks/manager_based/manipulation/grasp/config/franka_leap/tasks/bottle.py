@@ -124,12 +124,12 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
-        synth_pc = SynthesizePC(
+        synth_pc = SamplePC(
             asset_name="robot",
-            object_name="grasp_object",
+            object_names=["grasp_object"],
             arm_mesh_dir=ARM_MESH_DIR,
             hand_mesh_dir=HAND_MESH_DIR,
-            object_mesh_path=BOTTLE_MESH,
+            object_mesh_paths=[BOTTLE_MESH],
             num_arm_pcd=64,
             num_hand_pcd=64,
             num_object_pcd=512,

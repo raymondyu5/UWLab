@@ -209,8 +209,8 @@ class SynthesizePC:
 
 ##
 # Sampled point cloud observation (Option B: same geometry as sim)
-# Samples arm, hand, and object from USD colliders so all points align with the simulated geometry.
-# Same public API as SynthesizePC (arm_mesh_dir, hand_mesh_dir, object_mesh_path accepted but ignored).
+# Samples arm, hand, and objects from USD colliders so all points align with the simulated geometry.
+# object_names and object_mesh_paths are lists (one entry per object); single-object tasks pass length-1 lists.
 ##
 
 
@@ -219,26 +219,38 @@ class SamplePC:
     def __init__(
         self,
         asset_name: str,
-        object_name: str,
+        object_names: list[str],
         arm_mesh_dir: str,
         hand_mesh_dir: str,
-        object_mesh_path: str,
+        object_mesh_paths: list[str],
         num_arm_pcd: int = 64,
         num_hand_pcd: int = 64,
         num_object_pcd: int = 512,
         num_downsample_points: int = 2048,
-        object_prim_path_pattern: str | None = None,
+        object_prim_path_patterns: list[str] | None = None,
     ):
+        if len(object_names) != len(object_mesh_paths):
+            raise ValueError(
+                f"object_names and object_mesh_paths must have the same length, "
+                f"got {len(object_names)} and {len(object_mesh_paths)}"
+            )
+        if object_prim_path_patterns is not None and len(object_prim_path_patterns) != len(object_names):
+            raise ValueError(
+                f"object_prim_path_patterns must have length {len(object_names)} when provided, "
+                f"got {len(object_prim_path_patterns)}"
+            )
         self.asset_name = asset_name
-        self.object_name = object_name
+        self.object_names = list(object_names)
         self.arm_mesh_dir = arm_mesh_dir
         self.hand_mesh_dir = hand_mesh_dir
-        self.object_mesh_path = object_mesh_path
+        self.object_mesh_paths = list(object_mesh_paths)
         self.num_arm_pcd = num_arm_pcd
         self.num_hand_pcd = num_hand_pcd
         self.num_object_pcd = num_object_pcd
         self.num_downsample_points = num_downsample_points
-        self._object_prim_path_pattern = object_prim_path_pattern
+        self._object_prim_path_patterns = (
+            list(object_prim_path_patterns) if object_prim_path_patterns is not None else [None] * len(object_names)
+        )
         self.mesh_init = False
         self._printed_msg = False
 
@@ -288,29 +300,37 @@ class SamplePC:
         arm_vertices = torch.cat(arm_parts, dim=1)
         hand_vertices = torch.cat(hand_parts, dim=1)
 
-        object_vertices_root = reset_states_utils.sample_object_point_cloud(
-            num_envs=env.num_envs,
-            num_points=self.num_object_pcd,
-            prim_path_pattern=self._object_prim_path_pattern,
-            device=env.device,
-        )
-        object_state = env.scene[self.object_name]._data.root_pose_w.clone()
-        object_state[:, :3] -= env.scene.env_origins
-        if object_vertices_root is None:
-            if not getattr(self, "_object_mesh_fallback_loaded", False):
-                print(
-                    "[SamplePC] No USD colliders for object; using mesh file fallback"
-                    f" (object_mesh_path={self.object_mesh_path!r})"
-                )
-                self._load_object_mesh_fallback(env)
-                self._object_mesh_fallback_loaded = True
-            object_vertices = math_utils.transform_points(
-                self._object_mesh_fallback, object_state[..., :3], object_state[..., 3:7])
-        else:
-            object_vertices = math_utils.transform_points(
-                object_vertices_root, object_state[..., :3], object_state[..., 3:7])
+        object_parts = []
+        for k in range(len(self.object_names)):
+            object_vertices_root = reset_states_utils.sample_object_point_cloud(
+                num_envs=env.num_envs,
+                num_points=self.num_object_pcd,
+                prim_path_pattern=self._object_prim_path_patterns[k],
+                device=env.device,
+            )
+            object_state = env.scene[self.object_names[k]]._data.root_pose_w.clone()
+            object_state[:, :3] -= env.scene.env_origins
+            if object_vertices_root is None:
+                fallback_loaded = getattr(self, "_object_mesh_fallback_loaded", None)
+                if fallback_loaded is None:
+                    self._object_mesh_fallback_loaded = [False] * len(self.object_names)
+                if not self._object_mesh_fallback_loaded[k]:
+                    print(
+                        "[SamplePC] No USD colliders for object"
+                        f" {self.object_names[k]!r}; using mesh file fallback"
+                        f" (object_mesh_path={self.object_mesh_paths[k]!r})"
+                    )
+                    self._load_object_mesh_fallback(env, k)
+                    self._object_mesh_fallback_loaded[k] = True
+                object_vertices = math_utils.transform_points(
+                    self._object_mesh_fallbacks[k], object_state[..., :3], object_state[..., 3:7])
+            else:
+                object_vertices = math_utils.transform_points(
+                    object_vertices_root, object_state[..., :3], object_state[..., 3:7])
+            object_parts.append(object_vertices)
 
-        all_pcd = torch.cat([arm_vertices, hand_vertices, object_vertices], dim=1)
+        object_vertices_all = torch.cat(object_parts, dim=1)
+        all_pcd = torch.cat([arm_vertices, hand_vertices, object_vertices_all], dim=1)
         points_index = torch.randperm(all_pcd.shape[1]).to(env.device)
         sampled_pcd = all_pcd[:, points_index[:self.num_downsample_points]]
 
@@ -353,19 +373,22 @@ class SamplePC:
             else:
                 self._hand_prim_patterns.append(None)
 
-        if self._object_prim_path_pattern is None:
-            self._object_prim_path_pattern = env.scene[self.object_name].cfg.prim_path
+        for k, name in enumerate(self.object_names):
+            if self._object_prim_path_patterns[k] is None:
+                self._object_prim_path_patterns[k] = env.scene[name].cfg.prim_path
         self.mesh_init = True
 
-    def _load_object_mesh_fallback(self, env):
+    def _load_object_mesh_fallback(self, env, object_idx: int):
         """Load object mesh from file when USD has no colliders (same as SynthesizePC)."""
-        mesh_path = self.object_mesh_path
+        if not hasattr(self, "_object_mesh_fallbacks"):
+            self._object_mesh_fallbacks = [None] * len(self.object_names)
+        mesh_path = self.object_mesh_paths[object_idx]
         if not os.path.isabs(mesh_path):
             mesh_path = os.path.abspath(mesh_path)
         obj_mesh = trimesh.load(mesh_path)
         obj_mesh = trimesh.util.concatenate(obj_mesh)
         vertices = torch.tensor(obj_mesh.vertices, dtype=torch.float32).to(env.device)
         downsample = fps_points(vertices.unsqueeze(0), self.num_object_pcd)
-        self._object_mesh_fallback = downsample.expand(
+        self._object_mesh_fallbacks[object_idx] = downsample.expand(
             env.num_envs, self.num_object_pcd, 3
         ).clone()
