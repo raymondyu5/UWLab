@@ -212,8 +212,6 @@ class SynthesizePC:
 # Samples arm, hand, and objects from USD colliders so all points align with the simulated geometry.
 # object_names and object_mesh_paths are lists (one entry per object); single-object tasks pass length-1 lists.
 ##
-
-
 class SamplePC:
 
     def __init__(

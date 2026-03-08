@@ -57,7 +57,7 @@ def walk_usd_tree(stage, prim, indent: int = 0):
 
 
 def main():
-    task = "UW-FrankaLeap-PourBottle-JointAbs-v0"
+    task = "UW-FrankaLeap-GraspBottle-JointAbs-v0"
     env_cfg = parse_franka_leap_env_cfg(
         task,
         EVAL_MODE,
@@ -66,12 +66,10 @@ def main():
         use_fabric=not args.disable_fabric,
     )
     env = gym.make(task, cfg=env_cfg)
-
-    breakpoint()
-    
     obs, _ = env.reset()
 
-    obj_asset = env.scene["grasp_object"]
+    base_env = env.unwrapped
+    obj_asset = base_env.scene["grasp_object"]
     prim_path_pattern = obj_asset.cfg.prim_path
     object_prim_path_env0 = prim_path_pattern.replace(".*", "0", 1)
 
@@ -85,7 +83,7 @@ def main():
         num_envs=1,
         num_points=512,
         prim_path_pattern=prim_path_pattern,
-        device=env.device,
+        device=base_env.device,
     )
     if pc is None:
         print("[A] sample_object_point_cloud: returned None (no colliders found).")

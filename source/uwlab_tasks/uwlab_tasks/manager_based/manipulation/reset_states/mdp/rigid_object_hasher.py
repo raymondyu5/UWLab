@@ -15,6 +15,18 @@ from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 HASH_STORE = {"warp_mesh_store": {}, "__stage_id__": None}
 
+COLLIDER_TYPES = ("Mesh", "Cube", "Sphere", "Cylinder", "Capsule", "Cone")
+
+
+def _prim_or_ancestor_has_collision_api(prim: Usd.Prim) -> bool:
+    """True if this prim or any ancestor has UsdPhysics.CollisionAPI."""
+    p = prim
+    while p:
+        if p.HasAPI(UsdPhysics.CollisionAPI):
+            return True
+        p = p.GetParent()
+    return False
+
 
 class RigidObjectHasher:
     """Compute per-root and per-collider 64-bit hashes of transform+geometry."""
@@ -56,11 +68,11 @@ class RigidObjectHasher:
         root_prim_hashes = []
         root_prim_scales = []
         for i in range(num_roots):
-            # 1: Get all child prims that are colliders, count them, and store their belonging env id
+            # 1: Get all child prims that are colliders (geometry type with CollisionAPI on self or an ancestor)
             coll_prims = get_all_matching_child_prims(
                 prim_paths[i],
-                predicate=lambda p: p.GetTypeName() in ("Mesh", "Cube", "Sphere", "Cylinder", "Capsule", "Cone")
-                and p.HasAPI(UsdPhysics.CollisionAPI),
+                predicate=lambda p: p.GetTypeName() in COLLIDER_TYPES
+                and _prim_or_ancestor_has_collision_api(p),
                 traverse_instance_prims=True,
             )
             if len(coll_prims) == 0:
