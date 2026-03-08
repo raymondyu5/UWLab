@@ -21,7 +21,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import PourReward, SynthesizePC, SamplePC, reset_object_pose, reset_table_block
+from ....mdp import PourReward, SamplePC, reset_object_pose, reset_table_block
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
