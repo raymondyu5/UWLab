@@ -9,6 +9,7 @@
 
 from dataclasses import MISSING
 
+from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 import torch
@@ -25,10 +26,6 @@ from isaaclab.assets import RigidObjectCfg
 import isaaclab.sim as sim_utils
 from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
-
-# Empty env needs a spawned prim at GraspObject (spawn=None would cause "Could not find prim").
-# Use a tiny invisible cuboid so the scene has no visible object
-
 
 ############################################
 ################ task info #################
@@ -57,6 +54,11 @@ class FrankaLeapGraspSceneCfg(grasp_env.GraspSceneCfg):
 class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
+    num_warmup_steps: int = 10
+
+    def warmup_action(self, env) -> torch.Tensor:
+        """Hold at reset joint position — safe no-op for joint absolute control."""
+        raise NotImplementedError("Error: warmup_action must be implemented in the subclass for FrankaLeapGraspEnvCfg")
 
     def __post_init__(self):
         super().__post_init__()
@@ -106,6 +108,10 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
 class FrankaLeapEmptySceneCfg(FrankaLeapGraspSceneCfg):
     # Must spawn a real prim: with spawn=None the asset only wraps existing prims, so the path would not exist.
     # Use a tiny cuboid so the scene has no visible object.
+
+    # Empty env needs a spawned prim at GraspObject (spawn=None would cause "Could not find prim").
+    # Use a tiny invisible cuboid so the scene has no visible object
+
     grasp_object = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/GraspObject",
         init_state=RigidObjectCfg.InitialStateCfg(
@@ -162,3 +168,32 @@ class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
         pos, quat = math_utils.combine_frame_transforms(ee_state[:, :3], ee_state[:, 3:7], offset_pos, offset_rot)
         hand_joints = robot.data.joint_pos[:, len(ARM_RESET):]  # hand joints after arm
         return torch.cat([pos, quat, hand_joints], dim=-1)
+
+
+class FrankaLeapGraspEnv(ManagerBasedRLEnv):
+    """Runtime RL environment for Franka-LEAP grasp tasks with built-in warmup on reset.
+
+    After the standard ManagerBasedRLEnv reset (which runs all reset EventTerms),
+    this env optionally executes `num_warmup_steps` steps using the task's
+    `warmup_action(env)` to allow sim/observations to settle before the first
+    observation is returned to the caller.
+    """
+
+    def reset(self, *args, **kwargs):
+        # Run the standard reset behavior (events, managers, etc.).
+        obs, info = super().reset(*args, **kwargs)
+
+        # If the config doesn't define a warmup_action, just return immediately.
+        cfg = self.cfg
+        warmup_fn = cfg.warmup_action
+        num_warmup = cfg.num_warmup_steps
+
+        # Compute the warmup action once and reuse it for all warmup steps.
+        warmup_action = warmup_fn(self)
+
+        for _ in range(num_warmup):
+            # Use the parent step implementation so that all managers and counters
+            # are updated exactly as in normal interaction.
+            obs, _, terminated, truncated, info = super().step(warmup_action)
+
+        return obs, info

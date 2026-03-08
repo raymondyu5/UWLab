@@ -149,11 +149,11 @@ def _to_Nx3(pc: np.ndarray) -> np.ndarray:
     return pc
 
 
-def _extract_real_joints(first_obs: dict) -> tuple[np.ndarray | None, np.ndarray | None]:
+def _extract_real_joints(first_real_episode_obs: dict) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Extract real arm (7) and hand (16) joint positions from first-frame obs.
     Tries policy joint_pos, flat joint_pos/joint_positions, and joint_positions+gripper_position.
     """
-    if first_obs is None:
+    if first_real_episode_obs is None:
         return None, None
 
     def to_flat(a):
@@ -161,7 +161,7 @@ def _extract_real_joints(first_obs: dict) -> tuple[np.ndarray | None, np.ndarray
         return a if a.size >= 23 else None
 
     # Nested (gym-style): obs["policy"]["joint_pos"] -> (1, 23) or (23,)
-    policy = first_obs.get("policy")
+    policy = first_real_episode_obs.get("policy")
     if isinstance(policy, dict):
         j = policy.get("joint_pos")
         if j is not None:
@@ -170,15 +170,15 @@ def _extract_real_joints(first_obs: dict) -> tuple[np.ndarray | None, np.ndarray
                 return j[:7], j[7:23]
 
     # Flat top-level
-    j = first_obs.get("joint_pos") or first_obs.get("joint_positions")
+    j = first_real_episode_obs.get("joint_pos") or first_real_episode_obs.get("joint_positions")
     if j is not None:
         j = to_flat(j)
         if j is not None:
             return j[:7], j[7:23]
 
     # Dataset format: joint_positions (7) + gripper_position (16)
-    arm = first_obs.get("joint_positions")
-    hand = first_obs.get("gripper_position")
+    arm = first_real_episode_obs.get("joint_positions")
+    hand = first_real_episode_obs.get("gripper_position")
     if arm is not None and hand is not None:
         arm = np.asarray(arm).reshape(-1)
         hand = np.asarray(hand).reshape(-1)
@@ -317,41 +317,37 @@ def downsample_pc(pc: np.ndarray, num_points: int, seed: int = 0) -> np.ndarray:
 
 
 def get_synthetic_seg_pc(
-    env,
-    obs_after_reset,
-    reset_to_first_frame: bool = False,
-    first_obs: dict | None = None,
+    obs,
 ) -> np.ndarray:
-    """Get seg_pc from env. Optionally set robot to first-frame joints and step to refresh obs."""
-    if reset_to_first_frame and first_obs is not None:
+    """Get seg_pc from env"""
+    seg_pc = obs["policy"]["seg_pc"][0]
+    return seg_pc.detach().cpu().numpy()
 
-        num_reset_steps = 10
-        arm_arr, hand_arr = _extract_real_joints(first_obs)
-        if arm_arr is not None and hand_arr is not None:
-            arm = arm_arr
-            hand = hand_arr
-            unwrapped = env.unwrapped
-            env_ids = torch.arange(unwrapped.num_envs, device=unwrapped.device)
-            reset_robot_joints(
-                unwrapped,
-                env_ids,
-                SceneEntityCfg("robot"),
-                arm.tolist(),
-                hand.tolist(),
-                arm_joint_limits=franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
-            )
-            hold = torch.tensor(
-                ARM_RESET + HAND_RESET,
-                device=unwrapped.device,
-                dtype=torch.float32,
-            ).unsqueeze(0).repeat(unwrapped.num_envs, 1)
-            
-            for _ in range(num_reset_steps):
-                obs_after_reset, _, _, _, _ = env.step(hold)
 
-    seg_pc = obs_after_reset["policy"]["seg_pc"][0]
-    return seg_pc.detach().cpu().numpy(), obs_after_reset
+def reset_to_first_frame(env, first_real_episode_obs):
+    num_reset_steps = 10
+    arm, hand = _extract_real_joints(first_real_episode_obs)
+    
+    unwrapped = env.unwrapped
+    env_ids = torch.arange(unwrapped.num_envs, device=unwrapped.device)
+    reset_robot_joints(
+        unwrapped,
+        env_ids,
+        SceneEntityCfg("robot"),
+        arm.tolist(),
+        hand.tolist(),
+        arm_joint_limits=franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
+    )
+    hold = torch.tensor(
+        ARM_RESET + HAND_RESET,
+        device=unwrapped.device,
+        dtype=torch.float32,
+    ).unsqueeze(0).repeat(unwrapped.num_envs, 1)
+    
+    for _ in range(num_reset_steps):
+        obs_after_reset, _, _, _, _ = env.step(hold)
 
+    return obs_after_reset
 
 def main():
     trajectory_path = args_cli.trajectory_path
@@ -361,6 +357,7 @@ def main():
             f"Could not load first point cloud from trajectory path: {trajectory_path}"
         )
 
+    # PourBottle
     task = "UW-FrankaLeap-GraspPinkCup-JointAbs-v0"
     env_cfg = parse_env_cfg(
         task,
@@ -383,15 +380,17 @@ def main():
             ep_file = os.path.join(trajectory_path, f"episode_{episode_id}.npy")
             if os.path.isfile(ep_file):
                 episode_data = np.load(ep_file, allow_pickle=True).item()
-    first_obs = episode_data["obs"][0] if episode_data and episode_data.get("obs") else None
+    first_real_episode_obs = episode_data["obs"][0] if episode_data and episode_data.get("obs") else None
 
-    synthetic_pc, obs_used = get_synthetic_seg_pc(
-        env,
+
+    # if args_cli.reset_to_first_frame:
+    #     obs = reset_to_first_frame(env, first_real_episode_obs)
+
+    synthetic_pc =  get_synthetic_seg_pc(
         obs,
-        reset_to_first_frame=args_cli.reset_to_first_frame,
-        first_obs=first_obs,
     )
-    sim_joint_pos = obs_used["policy"]["joint_pos"][0].detach().cpu().numpy()
+
+    sim_joint_pos = obs["policy"]["joint_pos"][0].detach().cpu().numpy()
 
     # seg_pc from env is (3, N); convert to (N, 3)
     if synthetic_pc.shape[0] == 3:
@@ -459,11 +458,11 @@ def main():
     # Save raw points from each point cloud
     points_npy_path = f"{base_path}_points.npy"
     # Real (trajectory) joint positions for first frame
-    real_arm, real_hand = _extract_real_joints(first_obs)
-    if first_obs is not None and real_arm is None:
-        print(f"[INFO] First-frame obs keys: {list(first_obs.keys())}; could not find joint data.")
-        if isinstance(first_obs.get("policy"), dict):
-            print(f"       policy keys: {list(first_obs['policy'].keys())}")
+    real_arm, real_hand = _extract_real_joints(first_real_episode_obs)
+    if first_real_episode_obs is not None and real_arm is None:
+        print(f"[INFO] First-frame obs keys: {list(first_real_episode_obs.keys())}; could not find joint data.")
+        if isinstance(first_real_episode_obs.get("policy"), dict):
+            print(f"       policy keys: {list(first_real_episode_obs['policy'].keys())}")
 
     points_dict = {
         "trajectory_pc": first_pc,

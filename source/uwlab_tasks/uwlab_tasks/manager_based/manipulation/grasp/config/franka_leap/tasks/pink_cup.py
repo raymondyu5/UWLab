@@ -24,6 +24,7 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import GraspReward, SynthesizePC, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 # Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
