@@ -12,6 +12,7 @@ from dataclasses import MISSING
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 import torch
+import isaaclab.utils.math as math_utils
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
@@ -53,7 +54,7 @@ class FrankaLeapGraspSceneCfg(grasp_env.GraspSceneCfg):
 
 
 @configclass
-class FrankaLeapGraspEnv(grasp_env.GraspEnv):
+class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
 
@@ -122,7 +123,7 @@ class FrankaLeapEmptySceneCfg(FrankaLeapGraspSceneCfg):
     )
 
 @configclass
-class FrankaLeapEmptyGraspEnv(FrankaLeapGraspEnv):
+class FrankaLeapEmptyGraspEnvCfg(FrankaLeapGraspEnvCfg):
     scene: FrankaLeapEmptySceneCfg = FrankaLeapEmptySceneCfg(
         num_envs=1, env_spacing=2.5)
 
@@ -131,7 +132,7 @@ class FrankaLeapEmptyGraspEnv(FrankaLeapGraspEnv):
         self.events.reset_object= None
 
 @configclass
-class GraspFrankaLeapJointAbs(FrankaLeapEmptyGraspEnv):
+class GraspFrankaLeapJointAbsCfg(FrankaLeapEmptyGraspEnvCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:
@@ -140,16 +141,16 @@ class GraspFrankaLeapJointAbs(FrankaLeapEmptyGraspEnv):
         return reset.unsqueeze(0).repeat(env.num_envs, 1)
 
 @configclass
-class GraspFrankaLeapIkRel(FrankaLeapEmptyGraspEnv):
+class GraspFrankaLeapIkRelCfg(FrankaLeapEmptyGraspEnvCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
-    
+
     def warmup_action(self, env) -> torch.Tensor:
         """Zero delta EE + zero hand — safe no-op for IK-relative control."""
         return torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
 
 
 @configclass
-class GraspFrankaLeapIkAbs(FrankaLeapEmptyGraspEnv):
+class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
     def warmup_action(self, env) -> torch.Tensor:
         """Hold current EE pose + current hand joints — safe no-op for IK-absolute control."""
         robot = env.scene["robot"]

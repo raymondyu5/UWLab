@@ -78,7 +78,7 @@ class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 
 
 @configclass
-class GraspBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
+class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     scene: GraspBottleSceneCfg = GraspBottleSceneCfg(num_envs=1, env_spacing=2.5)
     table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
@@ -203,7 +203,7 @@ class GraspBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
 
 
 @configclass
-class GraspBottleFrankaLeapJointAbs(GraspBottleFrankaLeap):
+class GraspBottleFrankaLeapJointAbsCfg(GraspBottleFrankaLeapCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:
@@ -212,7 +212,7 @@ class GraspBottleFrankaLeapJointAbs(GraspBottleFrankaLeap):
 
 
 @configclass
-class GraspBottleFrankaLeapIkRel(GraspBottleFrankaLeap):
+class GraspBottleFrankaLeapIkRelCfg(GraspBottleFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:
@@ -220,7 +220,7 @@ class GraspBottleFrankaLeapIkRel(GraspBottleFrankaLeap):
 
 
 @configclass
-class GraspBottleFrankaLeapIkAbs(GraspBottleFrankaLeap):
+class GraspBottleFrankaLeapIkAbsCfg(GraspBottleFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkAbsArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:

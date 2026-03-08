@@ -10,7 +10,7 @@ gym.register(
     id="UW-FrankaLeap-GraspPinkCup-JointAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapJointAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -20,7 +20,7 @@ gym.register(
     id="UW-FrankaLeap-GraspPinkCup-IkRel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkRel",
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkRelCfg",
     },
     disable_env_checker=True,
 )
@@ -30,7 +30,7 @@ gym.register(
     id="UW-FrankaLeap-GraspPinkCup-IkAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapIkAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -42,7 +42,7 @@ gym.register(
     id="UW-FrankaLeap-GraspBottle-JointAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapJointAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -51,7 +51,7 @@ gym.register(
     id="UW-FrankaLeap-GraspBottle-IkRel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapIkRel",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapIkRelCfg",
     },
     disable_env_checker=True,
 )
@@ -60,7 +60,7 @@ gym.register(
     id="UW-FrankaLeap-GraspBottle-IkAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapIkAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapIkAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -72,7 +72,7 @@ gym.register(
     id="UW-FrankaLeap-PourBottle-JointAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -81,7 +81,7 @@ gym.register(
     id="UW-FrankaLeap-PourBottle-IkRel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapIkRel",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapIkRelCfg",
     },
     disable_env_checker=True,
 )
@@ -90,7 +90,7 @@ gym.register(
     id="UW-FrankaLeap-PourBottle-IkAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapIkAbs",
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapIkAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -102,7 +102,7 @@ gym.register(
     id="UW-FrankaLeap-JointAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapJointAbs",
+        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -111,7 +111,7 @@ gym.register(
     id="UW-FrankaLeap-IkAbs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapIkAbs",
+        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapIkAbsCfg",
     },
     disable_env_checker=True,
 )
@@ -120,7 +120,7 @@ gym.register(
     id="UW-FrankaLeap-IkRel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapIkRel",
+        "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapIkRelCfg",
     },
     disable_env_checker=True,
 )

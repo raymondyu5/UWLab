@@ -171,7 +171,7 @@ class TerminationsCfg:
 
 
 @configclass
-class GraspEnv(ManagerBasedRLEnvCfg):
+class GraspEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: GraspSceneCfg = GraspSceneCfg(num_envs=1, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()

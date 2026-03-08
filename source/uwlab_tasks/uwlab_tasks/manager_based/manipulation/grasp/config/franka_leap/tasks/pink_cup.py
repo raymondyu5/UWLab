@@ -76,7 +76,7 @@ SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
 
 
 @configclass
-class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
+class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
     table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
@@ -199,7 +199,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         )
 
 @configclass
-class GraspPinkCupFrankaLeapJointAbs(GraspPinkCupFrankaLeap):
+class GraspPinkCupFrankaLeapJointAbsCfg(GraspPinkCupFrankaLeapCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:
@@ -209,7 +209,7 @@ class GraspPinkCupFrankaLeapJointAbs(GraspPinkCupFrankaLeap):
 
 
 @configclass
-class GraspPinkCupFrankaLeapIkRel(GraspPinkCupFrankaLeap):
+class GraspPinkCupFrankaLeapIkRelCfg(GraspPinkCupFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:
@@ -218,7 +218,7 @@ class GraspPinkCupFrankaLeapIkRel(GraspPinkCupFrankaLeap):
 
 
 @configclass
-class GraspPinkCupFrankaLeapIkAbs(GraspPinkCupFrankaLeap):
+class GraspPinkCupFrankaLeapIkAbsCfg(GraspPinkCupFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkAbsArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:
