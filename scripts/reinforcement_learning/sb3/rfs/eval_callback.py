@@ -74,6 +74,7 @@ class RFSEvalCallback(BaseCallback):
         # Rolling buffer of episode successes for training-time success rate.
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
         self._success_buffer = collections.deque(maxlen=200)
+        self._last_success = [False] * rfs_env.num_envs
         self._rollout_count = 0
 
     def _on_rollout_end(self) -> None:
@@ -87,14 +88,18 @@ class RFSEvalCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         # Log training success rate on episode completions.
-        # dones[i] is True when env i just finished an episode.
+        # We cache is_success every non-terminal step (scene not yet reset).
+        # When done fires, the scene is already reset, so we use the cached value.
         dones = self.locals.get("dones")
         if dones is not None and wandb.run is not None:
             isaac_env = self.rfs_env.env.unwrapped
             success = isaac_env.cfg.is_success(isaac_env)  # (num_envs,) bool tensor
             for i, done in enumerate(dones):
                 if done:
-                    self._success_buffer.append(float(success[i].item()))
+                    self._success_buffer.append(float(self._last_success[i]))
+                    self._last_success[i] = False
+                else:
+                    self._last_success[i] = float(success[i].item())
             if self._success_buffer:
                 wandb.log(
                     {"train/success_rate": sum(self._success_buffer) / len(self._success_buffer)},
@@ -122,6 +127,7 @@ class RFSEvalCallback(BaseCallback):
                 obs_np = _sb3_process_obs(obs_dict)
                 logger.begin_episode(pose.name, {"x": pose.x, "y": pose.y, "yaw": pose.yaw})
 
+                success = False
                 for _ in range(self.episode_steps):
                     action, _ = self.model.predict(obs_np, deterministic=True)
                     action_t = torch.tensor(action, dtype=torch.float32, device=device)
@@ -139,10 +145,11 @@ class RFSEvalCallback(BaseCallback):
                         frame=frame,
                     )
 
+                    if not (terminated[0] or truncated[0]):
+                        success = bool(isaac_env.cfg.is_success(isaac_env)[0].item())
                     if terminated[0] or truncated[0]:
                         break
 
-                success = bool(isaac_env.cfg.is_success(isaac_env)[0].item())
                 logger.end_episode(success)
                 episode_idx += 1
 

@@ -113,7 +113,7 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         horizon=int(cfg.horizon),
         n_action_steps=int(cfg.n_action_steps) + int(cfg.n_latency_steps),
         n_obs_steps=int(cfg.n_obs_steps),
-        num_inference_steps=5,
+        num_inference_steps=3,
         diffusion_step_embed_dim=256,
         down_dims=tuple(cfg.policy.down_dims),
         kernel_size=5,
