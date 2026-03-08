@@ -3,14 +3,14 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-# Pink cup grasp task for Franka-LEAP.
+# Bottle grasp task for Franka-LEAP.
 # Source values from:
-#   IsaacLab/source/config/task/hand_env/object/recenter_ycb.yaml (pink_cup entry)
-#   IsaacLab/source/config/task/hand_env/leap_franka/grasp/rl_env_ycb_synthetic_pc_custom_init_pink_cup.yaml
+#   IsaacLab/source/config/task/hand_env/leap_franka/grasp/rl_env_bourbon_pour_pink_cup_delta_joint.yaml
+#   (RigidObject section, right_hand_object entry)
 
 import torch
-import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
+import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -24,30 +24,35 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import GraspReward, SynthesizePC, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
-# Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
-# pos: [0.55, 0.0, 0.11], rot: axis=[0], angles=[1.57] -> X-axis 90deg -> quat (0.707, 0.707, 0, 0)
-# scale: [1.0, 1.0, 1.0] — the 0.35 scale in recenter_ycb.yaml is baked into rigid_object.usd already
-# pose_range: x: [-0.05, 0.05], y: [-0.05, 0.05], z: [0,0], roll: [0,0], yaw: [0,0]
+# Bottle spawn values from rl_env_bourbon_pour_pink_cup_delta_joint.yaml (RigidObject, right_hand_object):
+# pos: [0.55, -0.10, 0.11], rot: identity (upright), discrete_yaw: -1.57 (cap faces right toward cup)
+# pose_range: x±10cm, y±10cm
+# target_pos: same as pink cup (0.60, 0.10, 0.40)
 
-PINK_CUP_HORIZON = 200
-PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40) # from yaml
+BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object_com.usd"
+BOTTLE_MESH = "/workspace/uwlab/assets/bourbon/textured_recentered.obj"
 
+BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
+# -90deg around Z = (0.707, 0, 0, -0.707); local -X (cap) maps to world +Y at spawn
+BOTTLE_SPAWN_ROT = (0.707, 0.0, 0.0, -0.707)
+BOTTLE_TARGET_POS = (0.60, 0.10, 0.40)
+BOTTLE_HORIZON = 180
+BOTTLE_SUCCESS_HEIGHT = 0.25
 
-PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
-PINK_CUP_MESH = "/workspace/uwlab/assets/pink_cup/textured_recentered.obj"
 
 @configclass
-class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
+class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
     grasp_object = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/GraspObject",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.55, 0.0, 0.11),
-            rot=(0.707, 0.707, 0.0, 0.0),
+            pos=BOTTLE_SPAWN_POS,
+            rot=BOTTLE_SPAWN_ROT,
         ),
         spawn=sim_utils.UsdFileCfg(
-            usd_path=PINK_CUP_USD,
+            usd_path=BOTTLE_USD,
             scale=(1.0, 1.0, 1.0),
             activate_contact_sensors=False,
             rigid_props=RigidBodyPropertiesCfg(
@@ -60,7 +65,7 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 
     table_block = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TableBlock",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.55, -0.10, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=sim_utils.UsdFileCfg(
             usd_path="/workspace/uwlab/assets/table/table_block.usd",
             scale=(1.2, 1.0, 0.10),
@@ -72,16 +77,12 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
     )
 
 
-SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
-
-
 @configclass
-class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
-    scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
+class GraspBottleFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
+    scene: GraspBottleSceneCfg = GraspBottleSceneCfg(num_envs=1, env_spacing=2.5)
     table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
     def is_success(self, env) -> torch.Tensor:
-        """Returns bool tensor (num_envs,): True if object is lifted above SUCCESS_HEIGHT."""
         obj = env.scene["grasp_object"]
         pos = obj.data.root_pos_w - env.scene.env_origins
         block = env.scene["table_block"]
@@ -90,29 +91,32 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             - env.scene.env_origins[:, 2]
             - block.data.default_root_state[:, 2]
         )
-        return pos[:, 2] >= (SUCCESS_HEIGHT + table_z_offset)
+        return pos[:, 2] >= (BOTTLE_SUCCESS_HEIGHT + table_z_offset)
 
     def __post_init__(self):
         super().__post_init__()
 
-        # Default object spawn pose from scene config (set in __post_init__); used by eval scripts.
-        init = self.scene.grasp_object.init_state
+        self.scene.train_camera = None
+        self.scene.fixed_camera = None
+        self.events.reset_camera = None
+        self.events.reset_fixed_camera = None
+
+        self.observations.policy.hand_joint_pos = None
+
         self.object_spawn_defaults = {
-            "default_pos": tuple(init.pos),
-            "default_rot": tuple(init.rot),
-            "reset_height": float(init.pos[2]),
+            "default_pos": list(BOTTLE_SPAWN_POS),
+            "default_rot": list(BOTTLE_SPAWN_ROT),
         }
 
-        self.horizon = PINK_CUP_HORIZON
+        self.horizon = BOTTLE_HORIZON
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
 
-        # # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
             asset_name="robot",
             object_name="grasp_object",
             fingers_name_list=FINGERS_NAME_LIST,
-            init_height=0.11,
-            target_pos=PINK_CUP_TARGET_POS,
+            init_height=BOTTLE_SPAWN_POS[2],
+            target_pos=BOTTLE_TARGET_POS,
         )
         grasp_rew.setup_additional(self.scene)
         grasp_rew.setup_finger_entities(self.scene)
@@ -124,13 +128,12 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
-        # --- Instantiate SynthesizePC and wire as seg_pc obs term ---
         synth_pc = SynthesizePC(
             asset_name="robot",
             object_name="grasp_object",
             arm_mesh_dir=ARM_MESH_DIR,
             hand_mesh_dir=HAND_MESH_DIR,
-            object_mesh_path=PINK_CUP_MESH,
+            object_mesh_path=BOTTLE_MESH,
             num_arm_pcd=64,
             num_hand_pcd=64,
             num_object_pcd=512,
@@ -152,17 +155,17 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "default_pos": (0.55, 0.0, 0.11),
-                "default_rot_quat": (0.707, 0.707, 0.0, 0.0),
+                "default_pos": BOTTLE_SPAWN_POS,
+                "default_rot_quat": BOTTLE_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.05, 0.05),
-                    "y": (-0.05, 0.05),
+                    "x": (-0.10, 0.10),
+                    "y": (-0.10, 0.10),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
-                "reset_height": 0.11,
+                "reset_height": BOTTLE_SPAWN_POS[2],
                 "table_block_name": "table_block",
             },
         )
@@ -176,7 +179,7 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
         self.events.randomize_object_material = EventTerm(
             func=isaac_mdp.randomize_rigid_body_material,
             mode="reset",
-            min_step_count_between_reset=800, # expensive to run everytie, so just do it every 800 steps
+            min_step_count_between_reset=800,
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
                 "static_friction_range": (0.3, 1.5),
@@ -198,31 +201,29 @@ class GraspPinkCupFrankaLeap(grasp_franka_leap.FrankaLeapGraspEnv):
             },
         )
 
+
 @configclass
-class GraspPinkCupFrankaLeapJointAbs(GraspPinkCupFrankaLeap):
+class GraspBottleFrankaLeapJointAbs(GraspBottleFrankaLeap):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:
-        """Hold at reset joint position — safe no-op for joint absolute control."""
         reset = torch.tensor(ARM_RESET + HAND_RESET, device=env.device, dtype=torch.float32)
         return reset.unsqueeze(0).repeat(env.num_envs, 1)
 
 
 @configclass
-class GraspPinkCupFrankaLeapIkRel(GraspPinkCupFrankaLeap):
+class GraspBottleFrankaLeapIkRel(GraspBottleFrankaLeap):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:
-        """Zero delta EE + zero hand — safe no-op for IK-relative control."""
         return torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
 
 
 @configclass
-class GraspPinkCupFrankaLeapIkAbs(GraspPinkCupFrankaLeap):
+class GraspBottleFrankaLeapIkAbs(GraspBottleFrankaLeap):
     actions = franka_leap.FrankaLeapIkAbsArmHandJointAction()
 
     def warmup_action(self, env) -> torch.Tensor:
-        """Hold current EE pose + current hand joints — safe no-op for IK-absolute control."""
         robot = env.scene["robot"]
         ee_body_idx = robot.body_names.index(franka_leap.FRANKA_LEAP_EE_BODY)
         ee_state = robot._data.body_state_w[:, ee_body_idx, :7].clone()
@@ -230,5 +231,5 @@ class GraspPinkCupFrankaLeapIkAbs(GraspPinkCupFrankaLeap):
         offset_pos = torch.tensor([list(franka_leap.FRANKA_LEAP_EE_OFFSET)], device=env.device).repeat(env.num_envs, 1)
         offset_rot = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(env.num_envs, 1)
         pos, quat = math_utils.combine_frame_transforms(ee_state[:, :3], ee_state[:, 3:7], offset_pos, offset_rot)
-        hand_joints = robot.data.joint_pos[:, len(ARM_RESET):]  # hand joints after arm
+        hand_joints = robot.data.joint_pos[:, len(ARM_RESET):]
         return torch.cat([pos, quat, hand_joints], dim=-1)

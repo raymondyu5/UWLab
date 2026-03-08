@@ -116,6 +116,11 @@ class ObservationsCfg:
             },
         )
 
+        hand_joint_pos = ObsTerm(
+            func=mdp.hand_joint_pos_w,
+            params={"asset_cfg": SceneEntityCfg("robot"), "num_arm_joints": 7},
+        )
+
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False
@@ -144,6 +149,8 @@ class EventCfg:
             "hand_joint_pos": MISSING,
         },
     )
+
+    reset_table_block = None  # Set to EventTerm in tasks that use table height randomization
 
     reset_object = EventTerm(
         func=mdp.reset_object_pose,

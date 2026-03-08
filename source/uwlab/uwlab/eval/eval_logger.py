@@ -65,16 +65,16 @@ class EvalLogger:
     def end_episode(self, success: bool):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
+        if self.record_video:
+            self._write_episode_video(len(self._episodes), self._current)
+            self._current["frames"] = []  # free memory
         self._episodes.append(self._current)
         self._current = None
 
     def finalize(self) -> dict:
         results = self._write_results()
         if self.record_plots:
-            self._write_trajectory_plot()
             self._write_heatmap()
-        if self.record_video:
-            self._write_videos()
         return results
 
     def _write_results(self) -> dict:
@@ -107,20 +107,17 @@ class EvalLogger:
         return summary
 
     def _write_trajectory_plot(self):
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        axis_labels = ["x", "y", "z"]
+        fig, ax = plt.subplots(figsize=(8, 4))
 
         for ep in self._episodes:
-            ee_poses = np.stack(ep["ee_poses"], axis=0)  # (T, 7)
+            obj_poses = np.stack(ep["object_poses"], axis=0)  # (T, 3)
             color = "green" if ep["success"] else "red"
-            alpha = 0.6
-            for dim, ax in enumerate(axes):
-                ax.plot(ee_poses[:, dim], color=color, alpha=alpha, linewidth=0.8)
+            ax.plot(obj_poses[:, 2], color=color, alpha=0.5, linewidth=0.8)
 
-        for dim, ax in enumerate(axes):
-            ax.set_title(f"EE {axis_labels[dim]}")
-            ax.set_xlabel("step")
-            ax.set_ylabel("m")
+        ax.set_title("Object height over episode")
+        ax.set_xlabel("step")
+        ax.set_ylabel("z (m)")
+        ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
         out_path = os.path.join(self.output_dir, "trajectories.png")
@@ -133,7 +130,7 @@ class EvalLogger:
         if not named_episodes:
             return
 
-        # group by spawn name
+        # Group by spawn name, collect unique x/y positions.
         spawn_results: Dict[str, List[bool]] = {}
         spawn_xy: Dict[str, Tuple[float, float]] = {}
         for ep in named_episodes:
@@ -141,41 +138,50 @@ class EvalLogger:
             if name not in spawn_results:
                 spawn_results[name] = []
                 pose = ep["spawn_pose"] or {}
-                spawn_xy[name] = (pose.get("y", 0.0), pose.get("x", 0.0))  # x→row, y→col
+                spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
             spawn_results[name].append(ep["success"])
 
-        fig, ax = plt.subplots(figsize=(7, 6))
+        # Build sorted unique axes so grid is aligned.
+        xs = sorted(set(v[0] for v in spawn_xy.values()))
+        ys = sorted(set(v[1] for v in spawn_xy.values()))
+        grid = np.full((len(xs), len(ys)), np.nan)
+        labels = [["" for _ in ys] for _ in xs]
+
         for name, successes in spawn_results.items():
-            rate = np.mean(successes)
-            xy = spawn_xy[name]
-            color = plt.cm.RdYlGn(rate)
-            ax.scatter(xy[0], xy[1], s=500, color=color, zorder=3)
-            ax.annotate(
-                f"{name}\n{rate:.0%}",
-                xy=xy, ha="center", va="center", fontsize=7, zorder=4,
-            )
+            x, y = spawn_xy[name]
+            r = np.mean(successes)
+            i, j = xs.index(x), ys.index(y)
+            grid[i, j] = r
+            labels[i][j] = f"{r:.0%}\n({sum(successes)}/{len(successes)})"
 
-        ax.set_xlabel("y (m)")
-        ax.set_ylabel("x (m)")
+        fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
+        im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
+
+        for i in range(len(xs)):
+            for j in range(len(ys)):
+                if labels[i][j]:
+                    ax.text(j, i, labels[i][j], ha="center", va="center",
+                            fontsize=10, fontweight="bold")
+
+        ax.set_xticks(range(len(ys)))
+        ax.set_xticklabels([f"y={v:.3f}" for v in ys])
+        ax.set_yticks(range(len(xs)))
+        ax.set_yticklabels([f"x={v:.3f}" for v in xs])
         ax.set_title("Success rate by spawn position")
-        ax.set_aspect("equal")
-        ax.grid(True, alpha=0.3)
+        plt.colorbar(im, ax=ax, label="success rate")
 
-        sm = plt.cm.ScalarMappable(cmap="RdYlGn", norm=plt.Normalize(0, 1))
-        sm.set_array([])
-        plt.colorbar(sm, ax=ax, label="success rate")
-
+        plt.tight_layout()
         out_path = os.path.join(self.output_dir, "heatmap.png")
         plt.savefig(out_path, dpi=100, bbox_inches="tight")
         plt.close()
         print(f"[EvalLogger] heatmap -> {out_path}")
 
-    def _write_videos(self):
+    def _write_episode_video(self, episode_idx: int, ep: dict):
         import imageio
-        for i, ep in enumerate(self._episodes):
-            frames = ep.get("frames", [])
-            if not frames:
-                continue
-            tag = "success" if ep["success"] else "fail"
-            out_path = os.path.join(self.output_dir, "videos", f"episode_{i:03d}_{tag}.mp4")
-            imageio.mimsave(out_path, frames, fps=30)
+        frames = ep.get("frames", [])
+        if not frames:
+            return
+        tag = "success" if ep["success"] else "fail"
+        out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
+        imageio.mimsave(out_path, frames, fps=30)
+        print(f"[EvalLogger] video -> {out_path}")
