@@ -11,6 +11,7 @@ from dataclasses import MISSING
 
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
+import torch
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
@@ -133,10 +134,30 @@ class FrankaLeapEmptyGraspEnv(FrankaLeapGraspEnv):
 class GraspFrankaLeapJointAbs(FrankaLeapEmptyGraspEnv):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
+    def warmup_action(self, env) -> torch.Tensor:
+        """Hold at reset joint position — safe no-op for joint absolute control."""
+        reset = torch.tensor(ARM_RESET + HAND_RESET, device=env.device, dtype=torch.float32)
+        return reset.unsqueeze(0).repeat(env.num_envs, 1)
+
 @configclass
 class GraspFrankaLeapIkRel(FrankaLeapEmptyGraspEnv):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
+    
+    def warmup_action(self, env) -> torch.Tensor:
+        """Zero delta EE + zero hand — safe no-op for IK-relative control."""
+        return torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
+
 
 @configclass
 class GraspFrankaLeapIkAbs(FrankaLeapEmptyGraspEnv):
-    actions = franka_leap.FrankaLeapIkAbsArmHandJointAction()
+    def warmup_action(self, env) -> torch.Tensor:
+        """Hold current EE pose + current hand joints — safe no-op for IK-absolute control."""
+        robot = env.scene["robot"]
+        ee_body_idx = robot.body_names.index(franka_leap.FRANKA_LEAP_EE_BODY)
+        ee_state = robot._data.body_state_w[:, ee_body_idx, :7].clone()
+        ee_state[:, :3] -= env.scene.env_origins
+        offset_pos = torch.tensor([list(franka_leap.FRANKA_LEAP_EE_OFFSET)], device=env.device).repeat(env.num_envs, 1)
+        offset_rot = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.device).repeat(env.num_envs, 1)
+        pos, quat = math_utils.combine_frame_transforms(ee_state[:, :3], ee_state[:, 3:7], offset_pos, offset_rot)
+        hand_joints = robot.data.joint_pos[:, len(ARM_RESET):]  # hand joints after arm
+        return torch.cat([pos, quat, hand_joints], dim=-1)

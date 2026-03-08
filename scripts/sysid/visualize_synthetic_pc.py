@@ -324,6 +324,8 @@ def get_synthetic_seg_pc(
 ) -> np.ndarray:
     """Get seg_pc from env. Optionally set robot to first-frame joints and step to refresh obs."""
     if reset_to_first_frame and first_obs is not None:
+
+        num_reset_steps = 10
         arm_arr, hand_arr = _extract_real_joints(first_obs)
         if arm_arr is not None and hand_arr is not None:
             arm = arm_arr
@@ -343,7 +345,10 @@ def get_synthetic_seg_pc(
                 device=unwrapped.device,
                 dtype=torch.float32,
             ).unsqueeze(0).repeat(unwrapped.num_envs, 1)
-            obs_after_reset, _, _, _, _ = env.step(hold)
+            
+            for _ in range(num_reset_steps):
+                obs_after_reset, _, _, _, _ = env.step(hold)
+
     seg_pc = obs_after_reset["policy"]["seg_pc"][0]
     return seg_pc.detach().cpu().numpy(), obs_after_reset
 
