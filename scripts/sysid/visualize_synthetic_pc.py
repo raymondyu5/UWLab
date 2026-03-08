@@ -82,12 +82,13 @@ import gymnasium as gym
 
 import isaaclab_tasks  # noqa: F401
 import uwlab_tasks  # noqa: F401
-from isaaclab_tasks.utils import parse_env_cfg
 from glob import glob
 
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import (
     ARM_RESET,
     HAND_RESET,
+    EVAL_MODE,
+    parse_franka_leap_env_cfg,
 )
 from uwlab_tasks.manager_based.manipulation.grasp.mdp.events import reset_robot_joints
 from isaaclab.managers import SceneEntityCfg
@@ -276,6 +277,8 @@ def capture_viewport_image(env, output_path: str, camera_name: str = "fixed_came
     """Read the current camera RGB and save to output_path. Caller must step the env first so the camera has fresh data."""
     scene = env.unwrapped.scene
     camera_name = str(camera_name)
+    
+    breakpoint()
     try:
         cam = scene[camera_name]
     except KeyError:
@@ -357,10 +360,10 @@ def main():
             f"Could not load first point cloud from trajectory path: {trajectory_path}"
         )
 
-    # PourBottle
-    task = "UW-FrankaLeap-GraspPinkCup-JointAbs-v0"
-    env_cfg = parse_env_cfg(
+    task = "UW-FrankaLeap-PourBottle-JointAbs-v0"
+    env_cfg = parse_franka_leap_env_cfg(
         task,
+        EVAL_MODE,
         device=args_cli.device,
         num_envs=1,
         use_fabric=not args_cli.disable_fabric,
@@ -383,8 +386,8 @@ def main():
     first_real_episode_obs = episode_data["obs"][0] if episode_data and episode_data.get("obs") else None
 
 
-    # if args_cli.reset_to_first_frame:
-    #     obs = reset_to_first_frame(env, first_real_episode_obs)
+    if args_cli.reset_to_first_frame:
+        obs = reset_to_first_frame(env, first_real_episode_obs)
 
     synthetic_pc =  get_synthetic_seg_pc(
         obs,

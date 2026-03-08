@@ -5,6 +5,14 @@
 
 import gymnasium as gym
 
+from .grasp_franka_leap import (
+    EVAL_MODE,
+    COLLECT_MODE,
+    RL_MODE,
+    RUN_MODES,
+    parse_franka_leap_env_cfg,
+)
+
 ########## Pink Cup #########
 gym.register(
     id="UW-FrankaLeap-GraspPinkCup-JointAbs-v0",

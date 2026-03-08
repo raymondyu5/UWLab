@@ -96,10 +96,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        self.scene.train_camera = None
-        self.scene.fixed_camera = None
-        self.events.reset_camera = None
-        self.events.reset_fixed_camera = None
+
 
         self.object_spawn_defaults = {
             "default_pos": list(BOTTLE_SPAWN_POS),

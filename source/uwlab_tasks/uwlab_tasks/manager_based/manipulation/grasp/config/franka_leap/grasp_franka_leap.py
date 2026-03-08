@@ -21,7 +21,7 @@ from ... import grasp_env
 from ...mdp import ee_pose_w, reset_robot_joints, reset_camera_pose, set_fixed_camera_view
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import EventTermCfg as EventTerm
-
+from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab.assets import RigidObjectCfg
 import isaaclab.sim as sim_utils
 from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
@@ -45,6 +45,12 @@ HAND_RESET = [
     0.03221607208251953, -0.009201288223266602, 0.029148101806640625, 0.0046045780181884766,
 ]
 
+# Valid values for env_cfg.run_mode.
+EVAL_MODE = "eval_mode"
+COLLECT_MODE = "collect_mode"
+RL_MODE = "rl_mode"
+RUN_MODES = (EVAL_MODE, COLLECT_MODE, RL_MODE)
+
 @configclass
 class FrankaLeapGraspSceneCfg(grasp_env.GraspSceneCfg):
     robot = franka_leap.IMPLICIT_FRANKA_LEAP.replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -55,6 +61,8 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
     num_warmup_steps: int = 10
+    # Runtime mode: "rl_mode" | "collect_mode" | "eval_mode". "rl_mode" disables scene cameras and their reset events.
+    run_mode: str = "eval_mode"
 
     def warmup_action(self, env) -> torch.Tensor:
         """Hold at reset joint position — safe no-op for joint absolute control."""
@@ -101,8 +109,6 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
                 "look_at_offset": (0.0, -0.15, 0.0),
             },
         )
-
-
 
 @configclass
 class FrankaLeapEmptySceneCfg(FrankaLeapGraspSceneCfg):
@@ -170,6 +176,38 @@ class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
         return torch.cat([pos, quat, hand_joints], dim=-1)
 
 
+def _apply_run_mode(cfg: FrankaLeapGraspEnvCfg, run_mode: str) -> None:
+    """Apply run_mode to env config. rl_mode disables scene cameras and their reset events."""
+    if run_mode not in RUN_MODES:
+        raise ValueError(f"run_mode must be one of {RUN_MODES}, got {run_mode!r}")
+    if run_mode == RL_MODE:
+        # disable all the cameras for rl_mode
+        cfg.scene.train_camera = None
+        cfg.scene.fixed_camera = None
+        if hasattr(cfg.events, "reset_camera"):
+            cfg.events.reset_camera = None
+        if hasattr(cfg.events, "reset_fixed_camera"):
+            cfg.events.reset_fixed_camera = None
+
+
+def parse_franka_leap_env_cfg(task: str, run_mode: str, **kwargs) -> FrankaLeapGraspEnvCfg:
+    """Parse env config for Franka-LEAP grasp tasks. 
+    
+    Args:
+        task: The name of the environment.
+        run_mode: The runtime mode of the environment (RL_MODE, COLLECT_MODE, EVAL_MODE).
+        **kwargs: Additional arguments to pass to parse_env_cfg.
+
+    Returns:
+        The parsed environment configuration.
+    run_mode is required (RL_MODE, COLLECT_MODE, EVAL_MODE)."""
+    
+    assert run_mode in RUN_MODES, f"run_mode must be one of {RUN_MODES}, got {run_mode!r}"
+    env_cfg = parse_env_cfg(task, **kwargs)
+    env_cfg.run_mode = run_mode
+    return env_cfg
+
+
 class FrankaLeapGraspEnv(ManagerBasedRLEnv):
     """Runtime RL environment for Franka-LEAP grasp tasks with built-in warmup on reset.
 
@@ -177,7 +215,16 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
     this env optionally executes `num_warmup_steps` steps using the task's
     `warmup_action(env)` to allow sim/observations to settle before the first
     observation is returned to the caller.
+
+    Runtime options: set env_cfg.run_mode to EVAL_MODE | COLLECT_MODE | RL_MODE.
+    "rl_mode" disables scene cameras (train_camera, fixed_camera) and their reset events.
     """
+
+    def __init__(self, cfg: FrankaLeapGraspEnvCfg, **kwargs):
+        # apply runtime variables to the environment given the mode (eval, rl, or collect)
+        run_mode = cfg.run_mode
+        _apply_run_mode(cfg, run_mode) 
+        super().__init__(cfg, **kwargs)
 
     def reset(self, *args, **kwargs):
         # Run the standard reset behavior (events, managers, etc.).
@@ -195,5 +242,6 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
             # Use the parent step implementation so that all managers and counters
             # are updated exactly as in normal interaction.
             obs, _, terminated, truncated, info = super().step(warmup_action)
+
 
         return obs, info
