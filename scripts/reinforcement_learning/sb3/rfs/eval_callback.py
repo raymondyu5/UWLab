@@ -176,8 +176,6 @@ class RFSEvalCallback(BaseCallback):
         log_dict = {
             "eval/success_rate": results["success_rate"],
             "eval/n_success": results["n_success"],
-            "eval/n_total": results.get("n_total", results["n_episodes"]),
-            "eval/n_episodes": results["n_episodes"],
         }
 
         heatmap_path = os.path.join(output_dir, "heatmap.png")
