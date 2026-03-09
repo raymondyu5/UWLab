@@ -223,6 +223,7 @@ def main():
         device=args_cli.device if args_cli.device else "cuda:0",
         num_envs=args_cli.num_envs,
     )
+    env_cfg.run_mode = "rl_mode"
     env_cfg.seed = args_cli.seed
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
 
