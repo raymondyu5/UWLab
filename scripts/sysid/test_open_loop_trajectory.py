@@ -72,6 +72,7 @@ def load_episode(episode_file: str, action_type: str):
     episode = load_real_episode(episode_file)
     obs_list = episode["obs"]
     raw_actions = episode["actions"]
+    
 
     num_steps = min(len(obs_list), len(raw_actions))
     if num_steps == 0:
@@ -351,9 +352,7 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
 
     # Ensure the episode horizon in seconds is at least as long as the trajectory.
     # Use the config's decimation and sim.dt, since those live on the cfg, not the env.
-    cfg = env.unwrapped.cfg
-    episode_length_s = len(traj_actions) * cfg.decimation * cfg.sim.dt
-    env.unwrapped.episode_length_s = episode_length_s
+
 
     print("[INFO]: Resetting environment...")
     obs, _ = env.reset()
@@ -416,9 +415,10 @@ def main():
     env_cfg = parse_env_cfg(
         task, device=args_cli.device, num_envs=num_envs, use_fabric=not args_cli.disable_fabric
     )
+    traj_obs, traj_actions = load_episode(args_cli.trajectory_file, args_cli.action_type)
+    env_cfg.episode_length_s = len(traj_actions) * env_cfg.decimation * env_cfg.sim.dt
 
     if args_cli.debug_cameras:
-        env_cfg.episode_length_s = 10.0
         env = gym.make(task, cfg=env_cfg)
         print("[INFO]: Resetting environment for camera debug...")
         env.reset()
@@ -429,8 +429,7 @@ def main():
     if args_cli.trajectory_file is None:
         raise ValueError("--trajectory_file must be provided.")
 
-    traj_obs, traj_actions = load_episode(args_cli.trajectory_file, args_cli.action_type)
-    env_cfg.episode_length_s = len(traj_actions) * env_cfg.decimation * env_cfg.sim.dt
+
     env = gym.make(task, cfg=env_cfg)
 
     print(f"[INFO]: Gym observation space: {env.observation_space}")

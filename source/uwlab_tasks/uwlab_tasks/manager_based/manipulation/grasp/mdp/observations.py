@@ -109,7 +109,7 @@ class CachedSamplePC:
         if not self.mesh_init:
             self.init_mesh(env)
 
-        do_benchmark = True
+        do_benchmark = False
         timings = {}
 
         robot_link_state = env.scene[self.asset_name]._data.body_pose_w.clone()
@@ -311,7 +311,7 @@ class SamplePC:
         if not self.mesh_init:
             self.init_mesh(env)
 
-        do_benchmark = True #not self._printed_msg
+        do_benchmark = False #not self._printed_msg
         timings = {}
 
         robot_link_state = env.scene[self.asset_name]._data.body_pose_w.clone()

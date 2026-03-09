@@ -239,12 +239,11 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
         # If the config doesn't define a warmup_action, just return immediately.
         cfg = self.cfg
         warmup_fn = cfg.warmup_action
-        num_warmup = cfg.num_warmup_steps
 
         # Compute the warmup action once and reuse it for all warmup steps.
         warmup_action = warmup_fn(self)
 
-        for _ in range(num_warmup):
+        for _ in range(cfg.num_warmup_steps):
             # Use the parent step implementation so that all managers and counters
             # are updated exactly as in normal interaction.
             obs, _, terminated, truncated, info = super().step(warmup_action)
