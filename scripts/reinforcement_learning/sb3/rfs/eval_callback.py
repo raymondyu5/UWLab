@@ -77,6 +77,9 @@ class RFSEvalCallback(BaseCallback):
         self._last_success = [False] * rfs_env.num_envs
         self._rollout_count = 0
 
+    def _on_training_start(self) -> None:
+        self._run_eval()
+
     def _on_rollout_end(self) -> None:
         self._rollout_count += 1
         if self._rollout_count % self.eval_interval == 0:
@@ -173,8 +176,6 @@ class RFSEvalCallback(BaseCallback):
         log_dict = {
             "eval/success_rate": results["success_rate"],
             "eval/n_success": results["n_success"],
-            "eval/n_total": results.get("n_total", results["n_episodes"]),
-            "eval/n_episodes": results["n_episodes"],
         }
 
         heatmap_path = os.path.join(output_dir, "heatmap.png")

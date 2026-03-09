@@ -292,8 +292,9 @@ class PourReward:
         # Reward scale per finger: [palm_lower, thumb_fingertip, fingertip, fingertip_2, fingertip_3]
         self.finger_reward_scale = torch.as_tensor([0.5, 1.0, 2, 1.5, 1.0]).to(
             self.device).unsqueeze(0)
-        # Grasp target: 6cm toward body end from center (cap is at -X, body at +X)
-        self.grasp_target_offset = torch.tensor([0.06, 0.0, 0.0], dtype=torch.float32)
+
+        self._component_sums = {}
+        self._component_count = 0
 
         # Reset references — populated by capture_reset_references event, None until first reset
         self.cup_reset_pos_ref = None    # (num_envs, 3)
@@ -412,6 +413,21 @@ class PourReward:
                  - joint_limit_penalty * 6.0e-1
                  - action_rate_penalty * 5e-3)
 
+        components = {
+            "approach": r_approach.mean().item(),
+            "contact": r_contact.mean().item(),
+            "cap": r_cap.mean().item(),
+            "orientation": r_orientation.mean().item(),
+            "link6_penalty": r_link6.mean().item(),
+            "cup_topple_penalty": r_cup_topple.mean().item(),
+            "joint_vel_penalty": joint_vel_penalty.mean().item(),
+            "joint_limit_penalty": joint_limit_penalty.mean().item(),
+            "action_rate_penalty": action_rate_penalty.mean().item(),
+        }
+        for k, v in components.items():
+            self._component_sums[k] = self._component_sums.get(k, 0.0) + v
+        self._component_count += 1
+
         return torch.nan_to_num(final, nan=0.0, posinf=0.0, neginf=0.0)
 
     # ------------------------------------------------------------------
@@ -500,11 +516,7 @@ class PourReward:
             self.finger_pose.append(finger_pose.unsqueeze(1))
         self.finger_pose = torch.cat(self.finger_pose, dim=1)
 
-        # Approach target: bottle body (10cm toward grip end from center)
-        local_offset = self.grasp_target_offset.to(env.device).unsqueeze(0).expand(
-            self.object_pose.shape[0], -1)
-        world_offset = math_utils.quat_apply(self.object_pose[:, 3:7], local_offset)
-        grasp_target_pos = self.object_pose[:, :3] + world_offset
+        grasp_target_pos = self.object_pose[:, :3]
 
         grasp_target_expanded = grasp_target_pos.unsqueeze(1).repeat_interleave(
             len(self.fingers_name_list), dim=1)
