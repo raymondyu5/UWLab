@@ -49,6 +49,10 @@ HAND_RESET = [
 # Because for this camera, the view angle doesn't allow for any points above .67
 PCD_CROP_REGION_CL8384200N1 = [-0.10, -0.50, 0.035, 0.85, 0.50, 0.67]
 
+# Number of points to sample from each mesh component for each part of the scene
+ARM_NUM_POINTS = 256
+HAND_NUM_POINTS = 64
+
 # Valid values for env_cfg.run_mode.
 EVAL_MODE = "eval_mode"
 COLLECT_MODE = "collect_mode"

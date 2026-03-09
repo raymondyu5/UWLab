@@ -83,7 +83,7 @@ class CachedSamplePC:
         pcd_crop_region: list[float, float, float, float, float, float] | None = None,
         num_arm_pcd: int = 64,
         num_hand_pcd: int = 64,
-        num_object_pcd: int = 512,
+        num_object_pcd: list[int] = [512],
         num_downsample_points: int = 2048,
         object_prim_path_patterns: list[str] | None = None,
     ):
@@ -96,7 +96,7 @@ class CachedSamplePC:
         self.object_names = list(object_names)
         self.num_arm_pcd = num_arm_pcd
         self.num_hand_pcd = num_hand_pcd
-        self.num_object_pcd = num_object_pcd
+        self.num_object_pcd = list(num_object_pcd)
         self.num_downsample_points = num_downsample_points
         self._object_prim_path_patterns = (
             list(object_prim_path_patterns) if object_prim_path_patterns is not None else [None] * len(object_names)
@@ -261,15 +261,11 @@ class CachedSamplePC:
         for k in range(len(self.object_names)):
             pc = reset_states_utils.sample_object_point_cloud(
                 num_envs=env.num_envs,
-                num_points=self.num_object_pcd,
+                num_points=self.num_object_pcd[k],
                 prim_path_pattern=self._object_prim_path_patterns[k],
                 device=env.device,
             )
-            if pc is not None:
-                self._object_meshes.append(pc)
-            else:
-                self._object_meshes.append(
-                    torch.zeros(env.num_envs, self.num_object_pcd, 3, device=env.device, dtype=torch.float32))
+            self._object_meshes.append(pc)
 
         self.mesh_init = True
 

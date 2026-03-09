@@ -25,16 +25,17 @@ from ....mdp import PourReward, CachedSamplePC, reset_object_pose, reset_table_b
 from ....mdp.observations import SynthesizePC
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
-from ..grasp_franka_leap import ARM_RESET, HAND_RESET
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 from .bottle import (
     GraspBottleSceneCfg,
     BOTTLE_USD,
     BOTTLE_SPAWN_POS,
     BOTTLE_SPAWN_ROT,
+    BOTTLE_OBJECT_NUM_POINTS,
 )
 from .pink_cup import PINK_CUP_USD
-
+from .pink_cup import PINK_CUP_OBJECT_NUM_POINTS
 # Pink cup pour-task spawn values from rl_env_bourbon_pour_pink_cup_synthetic_pc_force_pert.yaml (pour_config):
 # cup_pos: [0.55, 0.10, 0.07], rot: X-axis 90deg = (0.707, 0.707, 0, 0) (w,x,y,z)
 # cup_pose_range: x±5cm, y [0, +5cm]
@@ -129,9 +130,9 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object", "pink_cup"],
-            num_arm_pcd=128,
-            num_hand_pcd=64,
-            num_object_pcd=128,
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[BOTTLE_OBJECT_NUM_POINTS, PINK_CUP_OBJECT_NUM_POINTS],
             num_downsample_points=2048,
             pcd_crop_region=self.pcd_crop_region,
         )

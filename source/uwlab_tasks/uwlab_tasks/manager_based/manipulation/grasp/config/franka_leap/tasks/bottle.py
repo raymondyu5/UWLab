@@ -25,7 +25,7 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import GraspReward, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
-from ..grasp_franka_leap import ARM_RESET, HAND_RESET
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 # Bottle spawn values from rl_env_bourbon_pour_pink_cup_delta_joint.yaml (RigidObject, right_hand_object):
@@ -34,6 +34,7 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 # target_pos: same as pink cup (0.60, 0.10, 0.40)
 
 BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object_com.usd"
+BOTTLE_OBJECT_NUM_POINTS = 128
 
 BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
 # -90deg around Z = (0.707, 0, 0, -0.707); local -X (cap) maps to world +Y at spawn
@@ -126,9 +127,9 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
-            num_arm_pcd=64,
-            num_hand_pcd=64,
-            num_object_pcd=512,
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[BOTTLE_OBJECT_NUM_POINTS],
             num_downsample_points=2048,
             pcd_crop_region=self.pcd_crop_region,
         )

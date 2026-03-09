@@ -24,7 +24,7 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import GraspReward, CachedSamplePC, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
-from ..grasp_franka_leap import ARM_RESET, HAND_RESET
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 # Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
@@ -34,6 +34,7 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 PINK_CUP_HORIZON = 200
 PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40) # from yaml
+PINK_CUP_OBJECT_NUM_POINTS = 128
 
 PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
 
@@ -127,9 +128,9 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
-            num_arm_pcd=64,
-            num_hand_pcd=64,
-            num_object_pcd=512,
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[PINK_CUP_OBJECT_NUM_POINTS],
             num_downsample_points=2048,
             pcd_crop_region=self.pcd_crop_region,
         )
