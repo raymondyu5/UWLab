@@ -22,7 +22,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import GraspReward, SamplePC, reset_object_pose, reset_table_block
+from ....mdp import GraspReward, CachedSamplePC, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
@@ -124,7 +124,7 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
         # --- Instantiate SynthesizePC and wire as seg_pc obs term ---
-        synth_pc = SamplePC(
+        synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
             num_arm_pcd=64,

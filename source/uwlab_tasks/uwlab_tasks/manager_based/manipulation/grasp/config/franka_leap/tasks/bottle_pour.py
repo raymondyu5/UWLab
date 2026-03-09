@@ -21,7 +21,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import PourReward, SamplePC, reset_object_pose, reset_table_block
+from ....mdp import PourReward, CachedSamplePC, reset_object_pose, reset_table_block
 from ....mdp.observations import SynthesizePC
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
@@ -126,7 +126,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.contact_obs = ObsTerm(func=pour_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=pour_rew.obs_object_in_tip)
 
-        synth_pc = SamplePC(
+        synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object", "pink_cup"],
             num_arm_pcd=128,
@@ -135,16 +135,6 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             num_downsample_points=2048,
             pcd_crop_region=self.pcd_crop_region,
         )
-        # synth_pc = SynthesizePC(
-        #     asset_name="robot",
-        #     object_name="grasp_object",
-        #     arm_mesh_dir="/workspace/uwlab/assets/robot/franka_leap/raw_mesh",
-        #     hand_mesh_dir= "/workspace/uwlab/assets/robot/franka_leap/raw_mesh",
-        #     object_mesh_path="/workspace/uwlab/assets/bourbon/textured_recentered.obj",
-        #     num_arm_pcd=128,
-        #     num_hand_pcd=64,
-        # )
-
 
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 

@@ -8,6 +8,7 @@
 #   IsaacLab/source/config/task/hand_env/leap_franka/grasp/rl_env_bourbon_pour_pink_cup_delta_joint.yaml
 #   (RigidObject section, right_hand_object entry)
 
+from source.uwlab_tasks.uwlab_tasks.manager_based.manipulation.grasp.mdp.observations import CachedSamplePC
 import torch
 import isaaclab.utils.math as math_utils
 import isaaclab.sim as sim_utils
@@ -22,7 +23,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import GraspReward, SamplePC, reset_object_pose, reset_table_block
+from ....mdp import GraspReward, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
@@ -122,7 +123,7 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
-        synth_pc = SamplePC(
+        synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
             num_arm_pcd=64,

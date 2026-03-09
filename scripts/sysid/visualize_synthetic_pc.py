@@ -362,7 +362,7 @@ def main():
             f"Could not load first point cloud from trajectory path: {trajectory_path}"
         )
 
-    task = "UW-FrankaLeap-PourBottle-JointAbs-v0"
+    task = "UW-FrankaLeap-GraspPinkCup-JointAbs-v0"
     env_cfg = parse_franka_leap_env_cfg(
         task,
         EVAL_MODE,
