@@ -45,6 +45,10 @@ HAND_RESET = [
     0.03221607208251953, -0.009201288223266602, 0.029148101806640625, 0.0046045780181884766,
 ]
 
+# PCD crop region from real world. Replaced max z with .67 instead of .7
+# Because for this camera, the view angle doesn't allow for any points above .67
+PCD_CROP_REGION_CL8384200N1 = [-0.10, -0.50, 0.035, 0.85, 0.50, 0.67]
+
 # Valid values for env_cfg.run_mode.
 EVAL_MODE = "eval_mode"
 COLLECT_MODE = "collect_mode"
@@ -63,6 +67,7 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     num_warmup_steps: int = 10
     # Runtime mode: "rl_mode" | "collect_mode" | "eval_mode". "rl_mode" disables scene cameras and their reset events.
     run_mode: str = "eval_mode"
+    pcd_crop_region: list[float] = PCD_CROP_REGION_CL8384200N1
 
     def warmup_action(self, env) -> torch.Tensor:
         """Hold at reset joint position — safe no-op for joint absolute control."""

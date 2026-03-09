@@ -22,6 +22,7 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import PourReward, SamplePC, reset_object_pose, reset_table_block
+from ....mdp.observations import SynthesizePC
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
@@ -29,11 +30,10 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 from .bottle import (
     GraspBottleSceneCfg,
     BOTTLE_USD,
-    BOTTLE_MESH,
     BOTTLE_SPAWN_POS,
     BOTTLE_SPAWN_ROT,
 )
-from .pink_cup import PINK_CUP_MESH, PINK_CUP_USD
+from .pink_cup import PINK_CUP_USD
 
 # Pink cup pour-task spawn values from rl_env_bourbon_pour_pink_cup_synthetic_pc_force_pert.yaml (pour_config):
 # cup_pos: [0.55, 0.10, 0.07], rot: X-axis 90deg = (0.707, 0.707, 0, 0) (w,x,y,z)
@@ -129,14 +129,23 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = SamplePC(
             asset_name="robot",
             object_names=["grasp_object", "pink_cup"],
-            arm_mesh_dir=ARM_MESH_DIR,
-            hand_mesh_dir=HAND_MESH_DIR,
-            object_mesh_paths=[BOTTLE_MESH, PINK_CUP_MESH],
-            num_arm_pcd=64,
+            num_arm_pcd=128,
             num_hand_pcd=64,
-            num_object_pcd=512,
+            num_object_pcd=128,
             num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
         )
+        # synth_pc = SynthesizePC(
+        #     asset_name="robot",
+        #     object_name="grasp_object",
+        #     arm_mesh_dir="/workspace/uwlab/assets/robot/franka_leap/raw_mesh",
+        #     hand_mesh_dir= "/workspace/uwlab/assets/robot/franka_leap/raw_mesh",
+        #     object_mesh_path="/workspace/uwlab/assets/bourbon/textured_recentered.obj",
+        #     num_arm_pcd=128,
+        #     num_hand_pcd=64,
+        # )
+
+
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 
         self.events.reset_table_block = EventTerm(

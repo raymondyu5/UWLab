@@ -11,6 +11,38 @@ import torch.nn.functional
 from torch_geometric.nn import fps
 
 
+def crop_points_to_bounds(
+    points: torch.Tensor,
+    bounds: list[float],
+) -> torch.Tensor:
+    """Crop point cloud to axis-aligned bounding box. Points outside bounds are removed and zero-padded to preserve shape.
+
+    Args:
+        points: (batch, num_points, 3) tensor of xyz coordinates
+        bounds: [xlow, ylow, zlow, xhigh, yhigh, zhigh]
+
+    Returns:
+        Tensor of same shape as input with in-bounds points first, zeros filling remainder.
+    """
+    xlow, ylow, zlow, xhigh, yhigh, zhigh = bounds
+    mask = (
+        (points[..., 0] >= xlow) & (points[..., 0] <= xhigh)
+        & (points[..., 1] >= ylow) & (points[..., 1] <= yhigh)
+        & (points[..., 2] >= zlow) & (points[..., 2] <= zhigh)
+    )
+    batch_size, num_points, _ = points.shape
+    cropped_list = []
+    for i in range(batch_size):
+        pts = points[i][mask[i]]
+        if pts.shape[0] < num_points:
+            pad = torch.zeros(num_points - pts.shape[0], 3, device=points.device, dtype=points.dtype)
+            pts = torch.cat([pts, pad], dim=0)
+        else:
+            pts = pts[:num_points]
+        cropped_list.append(pts)
+    return torch.stack(cropped_list, dim=0)
+
+
 def fps_points(point_clouds: torch.Tensor, downsample_points: int = 1024) -> torch.Tensor:
     B, N, D = point_clouds.shape[-3], point_clouds.shape[-2], point_clouds.shape[-1]
     point_clouds = point_clouds.reshape(-1, N, D)

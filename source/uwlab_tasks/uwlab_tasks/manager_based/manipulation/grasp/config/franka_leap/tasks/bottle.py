@@ -33,7 +33,6 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 # target_pos: same as pink cup (0.60, 0.10, 0.40)
 
 BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object_com.usd"
-BOTTLE_MESH = "/workspace/uwlab/assets/bourbon/textured_recentered.obj"
 
 BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
 # -90deg around Z = (0.707, 0, 0, -0.707); local -X (cap) maps to world +Y at spawn
@@ -41,7 +40,6 @@ BOTTLE_SPAWN_ROT = (0.707, 0.0, 0.0, -0.707)
 BOTTLE_TARGET_POS = (0.60, 0.10, 0.40)
 BOTTLE_HORIZON = 180
 BOTTLE_SUCCESS_HEIGHT = 0.25
-
 
 @configclass
 class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
@@ -127,13 +125,11 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = SamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
-            arm_mesh_dir=ARM_MESH_DIR,
-            hand_mesh_dir=HAND_MESH_DIR,
-            object_mesh_paths=[BOTTLE_MESH],
             num_arm_pcd=64,
             num_hand_pcd=64,
             num_object_pcd=512,
             num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 

@@ -35,9 +35,7 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 PINK_CUP_HORIZON = 200
 PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40) # from yaml
 
-
 PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
-PINK_CUP_MESH = "/workspace/uwlab/assets/pink_cup/textured_recentered.obj"
 
 @configclass
 class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
@@ -129,13 +127,11 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         synth_pc = SamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
-            arm_mesh_dir=ARM_MESH_DIR,
-            hand_mesh_dir=HAND_MESH_DIR,
-            object_mesh_paths=[PINK_CUP_MESH],
             num_arm_pcd=64,
             num_hand_pcd=64,
             num_object_pcd=512,
             num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 

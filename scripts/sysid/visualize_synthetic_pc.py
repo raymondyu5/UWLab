@@ -39,10 +39,12 @@ parser.add_argument(
     default=2048,
     help="Downsample loaded trajectory point cloud to this many points (default 2048, matches seg_pc).",
 )
+
 parser.add_argument(
-    "--reset_to_first_frame",
-    action="store_true",
-    help="Reset robot to first-frame joint positions from trajectory so synthetic PC matches real pose.",
+    "--real_trajectory_timestep",
+    type=int,
+    default=0,
+    help="Timestep of the real trajectory to use for joint reset.",
 )
 parser.add_argument(
     "--disable_fabric",
@@ -90,12 +92,13 @@ from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_frank
     EVAL_MODE,
     parse_franka_leap_env_cfg,
 )
+from uwlab.utils.math import fps_points
 from uwlab_tasks.manager_based.manipulation.grasp.mdp.events import reset_robot_joints
 from isaaclab.managers import SceneEntityCfg
 import uwlab_assets.robots.franka_leap as franka_leap
 
 
-def load_first_point_cloud(trajectory_path: str):
+def load_real_point_cloud(trajectory_path: str, real_trajectory_timestep: int):
     """Load the first point cloud from a trajectory path (directory or .npy file).
 
     Returns:
@@ -109,8 +112,8 @@ def load_first_point_cloud(trajectory_path: str):
             data = np.asarray(data)
         if isinstance(data, dict):
             obs_list = data.get("obs", [])
-            if obs_list and "seg_pc" in obs_list[0]:
-                pc = np.asarray(obs_list[0]["seg_pc"])
+            if obs_list and "seg_pc" in obs_list[real_trajectory_timestep]:
+                pc = np.asarray(obs_list[real_trajectory_timestep]["seg_pc"])
             else:
                 return None
         else:
@@ -326,7 +329,7 @@ def get_synthetic_seg_pc(
     return seg_pc.detach().cpu().numpy()
 
 
-def reset_to_first_frame(env, first_real_episode_obs):
+def reset_to_real_joints(env, first_real_episode_obs):
     num_reset_steps = 10
     arm, hand = _extract_real_joints(first_real_episode_obs)
     
@@ -353,7 +356,7 @@ def reset_to_first_frame(env, first_real_episode_obs):
 
 def main():
     trajectory_path = args_cli.trajectory_path
-    first_pc = load_first_point_cloud(trajectory_path)
+    first_pc = load_real_point_cloud(trajectory_path, args_cli.real_trajectory_timestep)
     if first_pc is None:
         raise SystemExit(
             f"Could not load first point cloud from trajectory path: {trajectory_path}"
@@ -370,7 +373,7 @@ def main():
     env = gym.make(task, cfg=env_cfg)
     obs, _ = env.reset()
 
-    # Load first-frame obs from trajectory (for joint plot and optional reset_to_first_frame)
+    # Load first-frame obs from trajectory (for joint plot and optional reset_to_real_joints)
     episode_data = None
     if trajectory_path.endswith(".npy"):
         data = np.load(trajectory_path, allow_pickle=True).item()
@@ -382,11 +385,11 @@ def main():
             ep_file = os.path.join(trajectory_path, f"episode_{episode_id}.npy")
             if os.path.isfile(ep_file):
                 episode_data = np.load(ep_file, allow_pickle=True).item()
-    first_real_episode_obs = episode_data["obs"][0] if episode_data and episode_data.get("obs") else None
+    
 
+    first_real_episode_obs = episode_data["obs"][args_cli.real_trajectory_timestep]
 
-    if args_cli.reset_to_first_frame:
-        obs = reset_to_first_frame(env, first_real_episode_obs)
+    obs = reset_to_real_joints(env, first_real_episode_obs)
 
     synthetic_pc =  get_synthetic_seg_pc(
         obs,
@@ -401,7 +404,9 @@ def main():
 
     # Downsample trajectory PC to match
     num_downsample = args_cli.trajectory_downsample
-    first_pc = downsample_pc(first_pc, num_downsample)
+    first_pc = downsample_pc(first_pc, num_downsample*10) # first downsample to 5x fps for efficiency
+    first_pc = torch.from_numpy(first_pc).to(env.unwrapped.device)
+    first_pc = fps_points(first_pc[None], num_downsample)[0].cpu().numpy() # then downsample to num_downsample
 
     # Viewport / headless render: draw points (red=trajectory, blue=synthetic) and save camera image
     env_origin = env.unwrapped.scene.env_origins[0].detach().cpu().numpy()
