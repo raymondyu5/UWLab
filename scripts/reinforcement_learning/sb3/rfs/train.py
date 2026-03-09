@@ -142,6 +142,14 @@ class WandbRewardTermCallback(BaseCallback):
                 f"rewards/{name}": val.mean().item()
                 for name, val in mgr.episode_sums.items()
             }
+            for name, term_cfg in mgr._term_cfgs.items():
+                func = getattr(term_cfg, "func", None)
+                obj = getattr(func, "__self__", None)
+                if obj is not None and hasattr(obj, "_component_sums") and obj._component_count > 0:
+                    for comp, total in obj._component_sums.items():
+                        log_dict[f"rewards/{name}/{comp}"] = total / obj._component_count
+                    obj._component_sums.clear()
+                    obj._component_count = 0
             wandb.log(log_dict, step=self.num_timesteps)
         except Exception:
             pass
