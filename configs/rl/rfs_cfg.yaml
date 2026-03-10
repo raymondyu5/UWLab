@@ -34,9 +34,7 @@ rfs:
   # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
   clip_actions: true
 
-  # Finger smoothing (LPFilter). alpha=0.3 matches IsaacLab finger_smoothing config
-  # (rl_env_ycb_synthetic_pc_custom_init.yaml: finger_smoothing: enabled: true, alpha: 0.3).
-  finger_smooth_alpha: 0.3
+  finger_smooth_alpha: 1.0  # 1.0 = disabled
 
   num_warmup_steps: 10
 

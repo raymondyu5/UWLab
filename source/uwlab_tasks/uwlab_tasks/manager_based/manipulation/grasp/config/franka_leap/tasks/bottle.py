@@ -97,8 +97,6 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         super().__post_init__()
 
 
-        self.observations.policy.hand_joint_pos = None
-
         self.object_spawn_defaults = {
             "default_pos": list(BOTTLE_SPAWN_POS),
             "default_rot": list(BOTTLE_SPAWN_ROT),

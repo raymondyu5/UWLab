@@ -91,8 +91,8 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
 
         xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
-        above_cup = tip_pos[:, 2] > (cup_pos[:, 2] + 0.26)
-        return (xy_dist < 0.05) & above_cup
+        z_dist = torch.abs(tip_pos[:, 2] - (cup_pos[:, 2] + 0.26))
+        return (xy_dist < 0.05) & (z_dist < 0.05)
 
     def __post_init__(self):
         super().__post_init__()
