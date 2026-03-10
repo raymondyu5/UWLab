@@ -117,10 +117,25 @@ class RFSEvalCallback(BaseCallback):
 
         isaac_env = self.rfs_env.env.unwrapped
         device = self.rfs_env.device
-
-        poses = self.spawn_cfg.poses if self.spawn_cfg.poses else [SpawnPose()]
         num_envs = self.rfs_env.num_envs
 
+        if not self.spawn_cfg.poses:
+            self._run_random_eval(logger, isaac_env, device, num_envs, output_dir)
+        else:
+            self._run_fixed_pose_eval(logger, isaac_env, device, num_envs)
+
+        results = logger.finalize()
+
+        if self.verbose:
+            n_tot = results.get("n_total", results["n_episodes"])
+            print(f"[RFSEvalCallback] step={self.num_timesteps}: "
+                  f"success={results['n_success']}/{n_tot} "
+                  f"({100*results['success_rate']:.1f}%)")
+
+        self._log_to_wandb(results, output_dir)
+
+    def _run_fixed_pose_eval(self, logger, isaac_env, device, num_envs):
+        poses = self.spawn_cfg.poses
         for pose_idx, pose in enumerate(poses):
             record_this = self.record_video and pose_idx == 0
             obs_dict, _ = self.rfs_env.reset_to_spawn(pose)
@@ -159,15 +174,56 @@ class RFSEvalCallback(BaseCallback):
             n_total = len(episode_successes) if episode_successes else num_envs
             logger.end_episode(n_success / n_total if n_total > 0 else False, n_success=n_success, n_total=n_total)
 
-        results = logger.finalize()
+    def _run_random_eval(self, logger, isaac_env, device, num_envs, output_dir):
+        num_trials = self.spawn_cfg.num_trials if self.spawn_cfg.num_trials > 0 else 1
+        record_first = self.record_video
 
-        if self.verbose:
-            n_tot = results.get("n_total", results["n_episodes"])
-            print(f"[RFSEvalCallback] step={self.num_timesteps}: "
-                  f"success={results['n_success']}/{n_tot} "
-                  f"({100*results['success_rate']:.1f}%)")
+        for trial_idx in range(num_trials):
+            record_this = record_first and trial_idx == 0
+            obs_dict, _ = self.rfs_env.reset()
+            obs_np = _sb3_process_obs(obs_dict)
 
-        self._log_to_wandb(results, output_dir)
+            # Capture per-env initial object positions (local, relative to env origins).
+            init_pos_w = isaac_env.scene["grasp_object"].data.root_pos_w.clone()  # (N, 3)
+            init_pos_local = (init_pos_w - isaac_env.scene.env_origins).cpu().numpy()  # (N, 3)
+
+            logger.begin_episode(f"random_trial_{trial_idx}", None)
+
+            per_env_success = [False] * num_envs
+            recorded = [False] * num_envs
+            for _ in range(self.episode_steps):
+                success_before = isaac_env.cfg.is_success(isaac_env)
+                action, _ = self.model.predict(obs_np, deterministic=True)
+                action_t = torch.tensor(action, dtype=torch.float32, device=device)
+                obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
+                obs_np = _sb3_process_obs(obs_dict)
+
+                for i in range(num_envs):
+                    if (terminated[i] or truncated[i]) and not recorded[i]:
+                        per_env_success[i] = bool(success_before[i].item())
+                        recorded[i] = True
+
+                ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
+                obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
+                frame = self.rfs_env.render() if record_this else None
+
+                logger.record_step(
+                    ee_pose=ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7),
+                    object_pose=obj_pos,
+                    action=action[0],
+                    frame=frame,
+                )
+
+                if all(recorded):
+                    break
+
+            n_success = sum(per_env_success)
+            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs)
+            logger.record_scatter_points(
+                xs=init_pos_local[:, 0],
+                ys=init_pos_local[:, 1],
+                successes=per_env_success,
+            )
 
     def _log_to_wandb(self, results: dict, output_dir: str):
         if wandb.run is None:
@@ -177,6 +233,10 @@ class RFSEvalCallback(BaseCallback):
             "eval/success_rate": results["success_rate"],
             "eval/n_success": results["n_success"],
         }
+
+        scatter_path = os.path.join(output_dir, "scatter.png")
+        if os.path.isfile(scatter_path):
+            log_dict["eval/scatter"] = wandb.Image(scatter_path)
 
         heatmap_path = os.path.join(output_dir, "heatmap.png")
         if os.path.isfile(heatmap_path):
