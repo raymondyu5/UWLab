@@ -140,14 +140,23 @@ def load_episode(episode_file: str, action_type: str):
 
             obs_i = obs_list[i]
             if action_type == "abs_ee":
-                raise ValueError("Absolute EE action type is not yet supported for open loop trajectory.")
-            elif action_type == "joint":
-                if "ik_joint_pos_desired" not in obs_i:
+                if "commanded_ee_position" in obs_i:
+                    arm_cmd = np.asarray(obs_i["commanded_ee_position"], dtype=np.float32).reshape(-1)
+                else:
                     raise KeyError(
-                        "Missing key 'ik_joint_pos_desired' in obs for joint "
+                        "Missing key 'commanded_ee_position' in obs for absolute EE "
                         f"action_type at step {i}"
                     )
-                arm_cmd = np.asarray(obs_i["ik_joint_pos_desired"], dtype=np.float32).reshape(-1)
+            elif action_type == "joint":
+                if "commanded_joint_positions" in obs_i:
+                    arm_cmd = np.asarray(obs_i["commanded_joint_positions"], dtype=np.float32).reshape(-1)
+                elif "ik_joint_pos_desired" in obs_i:
+                    arm_cmd = np.asarray(obs_i["ik_joint_pos_desired"], dtype=np.float32).reshape(-1)
+                else:
+                    raise KeyError(
+                        "Missing key 'ik_joint_pos_desired' or 'commanded_joint_positions' in obs for joint "
+                        f"action_type at step {i}"
+                    )
             else:
                 raise ValueError(f"Unsupported action_type: {action_type}")
 
@@ -290,7 +299,51 @@ def _extract_real_joints(obs: dict) -> tuple[np.ndarray | None, np.ndarray | Non
     return None, None
 
 
-def reset_to_real_joints(env, first_real_obs, num_warmup_steps: int = 10, hold_from_obs: bool = False):
+def get_hold_action(env, obs: dict, action_type: str) -> torch.Tensor:
+    """Build hold action in the format expected by the env for the given action_type."""
+    unwrapped = env.unwrapped
+    dev = unwrapped.device
+    policy = obs.get("policy", {})
+    joint_pos = policy.get("joint_pos")
+    if joint_pos is None:
+        raise KeyError("obs['policy']['joint_pos'] required for hold action")
+
+    joint_pos_0 = joint_pos[0]
+    if action_type == "joint":
+        return joint_pos_0.unsqueeze(0)
+    if action_type == "delta_ee":
+        arm_part = torch.zeros(6, device=dev, dtype=torch.float32)
+        hand_part = joint_pos_0[7:7 + 16]
+        return torch.cat([arm_part, hand_part], dim=-1).unsqueeze(0)
+    if action_type == "abs_ee":
+        return unwrapped.cfg.warmup_action(unwrapped)
+    raise ValueError(f"Unsupported action_type for hold: {action_type}")
+
+
+def _build_hold_from_real_obs(obs: dict, action_type: str, device: torch.device, num_envs: int) -> torch.Tensor:
+    """Build hold action from real (dataset) obs for use when teleporting to that obs."""
+    arm, hand = _extract_real_joints(obs)
+    if arm is None or hand is None:
+        raise ValueError("Cannot extract joints from obs for hold")
+    hand = np.asarray(hand).reshape(-1)[:16]
+
+    if action_type == "joint":
+        arr = np.concatenate([arm, hand], axis=-1)
+    elif action_type == "delta_ee":
+        arr = np.concatenate([np.zeros(6, dtype=np.float32), hand], axis=-1)
+    elif action_type == "abs_ee":
+        ee = obs.get("cartesian_position")
+        if ee is None:
+            raise KeyError("obs needs cartesian_position for abs_ee hold")
+        ee = np.asarray(ee).reshape(-1)[:7]
+        arr = np.concatenate([ee, hand], axis=-1)
+    else:
+        raise ValueError(f"Unsupported action_type: {action_type}")
+
+    return torch.tensor(arr, device=device, dtype=torch.float32).unsqueeze(0).repeat(num_envs, 1)
+
+
+def reset_to_real_joints(env, first_real_obs, num_warmup_steps: int = 10, hold_from_obs: bool = False, action_type: str = "joint"):
     """Reset sim to match first-frame real joint positions."""
     arm, hand = _extract_real_joints(first_real_obs)
     if arm is None or hand is None:
@@ -307,11 +360,7 @@ def reset_to_real_joints(env, first_real_obs, num_warmup_steps: int = 10, hold_f
         arm_joint_limits=franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
     )
     if hold_from_obs:
-        hold = torch.tensor(
-            np.concatenate([arm, hand], axis=-1),
-            device=unwrapped.device,
-            dtype=torch.float32,
-        ).unsqueeze(0).repeat(unwrapped.num_envs, 1)
+        hold = _build_hold_from_real_obs(first_real_obs, action_type, unwrapped.device, unwrapped.num_envs)
     else:
         hold = torch.tensor(
             ARM_RESET + HAND_RESET,
@@ -616,7 +665,7 @@ def main():
         print(f"[DEBUG] num_steps={num_steps}, max_episode_length={max_ep}")
 
     obs, _ = env.reset()
-    obs = reset_to_real_joints(env, traj_obs[0], num_warmup_steps=num_warmup_steps)
+    obs = reset_to_real_joints(env, traj_obs[0], num_warmup_steps=num_warmup_steps, hold_from_obs=True, action_type=args_cli.action_type)
 
     env_origin = env.unwrapped.scene.env_origins[0].detach().cpu().numpy()
     action_space_shape = env.action_space.shape
@@ -629,7 +678,7 @@ def main():
     if sim_obs_0 is not None:
         sim_obs_list.append(sim_obs_0)
     
-    REAL_PCD_LATENCY = 4 # 10 steps for real pcd to be ready
+    REAL_PCD_LATENCY = 4 # 4  # 10 steps for real pcd to be ready
     with torch.inference_mode():
         # Frame 0: sim at real_obs[0] after reset, render against real_pcds[0]
         sim_pc_0 = get_synthetic_seg_pc(obs)
@@ -642,7 +691,7 @@ def main():
                 point_width_m=args_cli.point_width_m,
             )
             # Step once so the viewport renders the overlay (hold keeps robot at real_obs[0])
-            hold_action = obs["policy"]["joint_pos"][0].unsqueeze(0)
+            hold_action = get_hold_action(env, obs, args_cli.action_type)
             obs, _, _, _, _ = env.step(hold_action)
         rgb = env.unwrapped.scene[args_cli.camera].data.output["rgb"][0, ..., :3].cpu().numpy()
         if rgb.dtype != np.uint8:
@@ -655,7 +704,7 @@ def main():
         for i in tqdm(range(num_steps), desc=rollout_desc):
             if mode == "direct_joints":
                 next_obs = traj_obs[i + 1] if i + 1 < len(traj_obs) else traj_obs[i]
-                obs = reset_to_real_joints(env, next_obs, num_warmup_steps=1, hold_from_obs=True)
+                obs = reset_to_real_joints(env, next_obs, num_warmup_steps=1, hold_from_obs=True, action_type=args_cli.action_type)
                 if obs is None:
                     raise ValueError(f"Cannot extract joints from traj_obs[{i+1}] for direct_joints mode")
                 dev = env.unwrapped.device
@@ -707,7 +756,7 @@ def main():
                 )
             
 
-            hold_action = obs["policy"]["joint_pos"][0].unsqueeze(0)
+            hold_action = get_hold_action(env, obs, args_cli.action_type)
             obs, reward, terminated, truncated, info = env.step(hold_action)
             if terminated.any() or truncated.any():
                 print(f"[RESET] Frame {i} (after hold step): terminated={terminated}, truncated={truncated}")
