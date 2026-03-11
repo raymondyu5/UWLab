@@ -8,6 +8,19 @@ Usage:
         dataset.data_path=/path/to/zarr/episodes \
         training.device=cuda:0
 """
+import os
+import sys
+
+# isaac-sim's python.sh resets PYTHONPATH, so third_party packages must be added explicitly.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_UWLAB_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, "../../../"))
+for _p in [os.path.join(_UWLAB_DIR, "third_party", "pip_packages")]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+for _p in [os.path.join(_UWLAB_DIR, "third_party", "diffusion_policy")]:
+    if _p not in sys.path:
+        sys.path.append(_p)
+
 import hydra
 from omegaconf import DictConfig
 from torchcfm.conditional_flow_matching import ConditionalFlowMatcher

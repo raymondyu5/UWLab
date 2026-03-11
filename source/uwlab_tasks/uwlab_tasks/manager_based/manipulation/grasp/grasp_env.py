@@ -107,6 +107,11 @@ class ObservationsCfg:
             params={"asset_cfg": SceneEntityCfg("robot")},
         )
 
+        arm_joint_pos = ObsTerm(
+            func=mdp.arm_joint_pos_w,
+            params={"asset_cfg": SceneEntityCfg("robot"), "num_arm_joints": 7},
+        )
+
         ee_pose = ObsTerm(
             func=mdp.ee_pose_w,
             params={

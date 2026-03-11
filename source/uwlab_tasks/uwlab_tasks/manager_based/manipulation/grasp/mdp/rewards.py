@@ -472,19 +472,19 @@ class PourReward:
         return torch.clip(1 - rotation_magnitude / 0.5, 0.0, 1.0) * 5
 
     def cup_topple_penalty(self, env):
-        """Penalize knocking over the cup relative to its spawn orientation."""
-        if self.cup_reset_quat_ref is None:
-            return torch.zeros(env.num_envs, device=env.device)
-        valid = torch.any(self.cup_reset_quat_ref != 0, dim=1)
-        if not valid.any():
-            return torch.zeros(env.num_envs, device=env.device)
-
+        """Penalize knocking over the cup. Uses fixed spawn quat (matches cup_toppled termination)."""
         current_quat = self.cup_pose[:, 3:7]
-        ref_quat = self.cup_reset_quat_ref
-        rel_euler = math_utils.euler_xyz_from_quat(
-            math_utils.quat_mul(current_quat, math_utils.quat_conjugate(ref_quat)))
-        cup_tilt = torch.abs(rel_euler[0]) + torch.abs(rel_euler[1])
-        return (cup_tilt > 0.3).float() * -10.0
+        spawn_quat = torch.tensor(
+            [[0.707, 0.707, 0.0, 0.0]], device=env.device, dtype=current_quat.dtype
+        ).expand(env.num_envs, -1)
+        dot = (spawn_quat * current_quat).sum(dim=1)
+        current_quat_corrected = torch.where(dot.unsqueeze(1) < 0, -current_quat, current_quat)
+        q_rel = math_utils.quat_mul(math_utils.quat_conjugate(spawn_quat), current_quat_corrected)
+        rotation_angle = 2.0 * torch.atan2(
+            torch.norm(q_rel[:, 1:4], dim=1),
+            torch.abs(q_rel[:, 0]),
+        )
+        return (rotation_angle > 0.524).float() * -1.0
 
     def penalty_contact(self, env):
         """Penalty for wrist (link6) contact with table."""

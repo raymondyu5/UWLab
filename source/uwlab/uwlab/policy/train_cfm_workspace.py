@@ -29,6 +29,7 @@ class TrainCFMWorkspace:
         self.optimizer = torch.optim.AdamW(
             policy.parameters(),
             lr=cfg.training.lr,
+            betas=tuple(cfg.training.get("betas", [0.9, 0.999])),
             weight_decay=cfg.training.weight_decay,
         )
 
@@ -57,6 +58,8 @@ class TrainCFMWorkspace:
         normalizer = self.dataset.get_normalizer()
         self.model.set_normalizer(normalizer)
         self.ema_model.set_normalizer(normalizer)
+        self.model.to(device)
+        self.ema_model.to(device)
 
         train_dataloader = DataLoader(
             self.dataset,
@@ -89,14 +92,15 @@ class TrainCFMWorkspace:
             power=cfg.training.ema_power,
         )
 
+        ckpt_dir = cfg.training.get("checkpoint_dir", "checkpoints")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
         # resume
         if cfg.training.get("resume", False):
-            ckpt_path = "checkpoints/latest.ckpt"
+            ckpt_path = os.path.join(ckpt_dir, "latest.ckpt")
             if os.path.isfile(ckpt_path):
                 print(f"Resuming from {ckpt_path}")
                 self._load_checkpoint(ckpt_path)
-
-        os.makedirs("checkpoints", exist_ok=True)
 
         for _ in range(cfg.training.num_epochs):
             # ---- train ----
@@ -144,12 +148,12 @@ class TrainCFMWorkspace:
 
                 if val_mse < self.best_val_mse:
                     self.best_val_mse = val_mse
-                    self._save_checkpoint("checkpoints/best.ckpt")
+                    self._save_checkpoint(os.path.join(ckpt_dir, "best.ckpt"))
 
             # ---- checkpoint ----
             if self.epoch % cfg.training.checkpoint_every == 0:
-                self._save_checkpoint("checkpoints/latest.ckpt")
-                self._save_checkpoint(f"checkpoints/epoch_{self.epoch:04d}.ckpt")
+                self._save_checkpoint(os.path.join(ckpt_dir, "latest.ckpt"))
+                self._save_checkpoint(os.path.join(ckpt_dir, f"epoch_{self.epoch:04d}.ckpt"))
 
             if self.use_wandb:
                 wandb.log(log, step=self.global_step)

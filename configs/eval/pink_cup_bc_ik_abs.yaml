@@ -1,5 +1,6 @@
 task_id: UW-FrankaLeap-GraspPinkCup-IkAbs-v0
-checkpoint: None # remember to update !! 
+checkpoint: None # remember to update !!
+obs_keys: [ee_pose, hand_joint_pos] 
 device: cuda:0
 num_envs: 1
 action_horizon: 1

@@ -11,12 +11,22 @@ The checkpoint dir must contain:
     .hydra/config.yaml   (saved by Hydra at train time)
     checkpoints/best.ckpt (or latest.ckpt)
 
-obs_keys, image_keys, downsample_points, and policy architecture are all
-loaded from the training config — no need to re-specify.
+obs_keys can be overridden in eval config; if not set, uses the checkpoint's training config.
+image_keys, downsample_points, and policy architecture are loaded from the training config.
 """
 
 import argparse
 import os
+import sys
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_UWLAB_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, "../.."))
+for _p in [os.path.join(_UWLAB_DIR, "third_party", "pip_packages")]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+for _p in [os.path.join(_UWLAB_DIR, "third_party", "diffusion_policy")]:
+    if _p not in sys.path:
+        sys.path.append(_p)
 
 from isaaclab.app import AppLauncher
 
@@ -30,6 +40,21 @@ parser.add_argument("overrides", nargs="*",
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.headless = True
+
+# Enable cameras when record_video is requested (needed for env.render())
+import yaml as _yaml
+_record_video = False
+if args_cli.eval_cfg and os.path.isfile(args_cli.eval_cfg):
+    with open(args_cli.eval_cfg) as _f:
+        _cfg = _yaml.safe_load(_f)
+    _record_video = bool(_cfg.get("record_video", False))
+    for kv in args_cli.overrides:
+        key, _, val = kv.partition("=")
+        if key == "record_video":
+            _record_video = str(val).lower() == "true"
+            break
+if _record_video:
+    args_cli.enable_cameras = True
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -99,7 +124,7 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device) ->
     #
     # For obs dims: we load them from the ckpt's normalizer state_dict keys.
     ckpt_path = _find_checkpoint(checkpoint_dir)
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     # Extract dims from normalizer state dict
     # normalizer["agent_pos"] stores params_dict with 'scale', 'offset' of shape (D,)
@@ -158,12 +183,21 @@ def _find_checkpoint(checkpoint_dir: str) -> str:
     raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}/checkpoints/")
 
 
+def _get_object_asset(env):
+    """Get the manipulated object (grasp_object for grasp tasks, object otherwise)."""
+    scene = env.unwrapped.scene
+    try:
+        return scene["grasp_object"]
+    except KeyError:
+        return scene["object"]
+
+
 def _set_object_pose(env, x_offset: float, y_offset: float, yaw_offset: float,
                      default_pos: tuple, default_rot_quat: tuple, reset_height: float):
     """Directly set object pose after env.reset() to control spawn position."""
     device = env.unwrapped.device
     num_envs = env.unwrapped.num_envs
-    obj = env.unwrapped.scene["object"]
+    obj = _get_object_asset(env)
 
     pos = torch.tensor(
         [[default_pos[0] + x_offset, default_pos[1] + y_offset, reset_height]],
@@ -206,7 +240,7 @@ def main():
     train_cfg = _load_train_cfg(checkpoint_dir)
     policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device)
 
-    obs_keys = list(ds_cfg["obs_keys"])
+    obs_keys = list(eval_cfg.get("obs_keys") or ds_cfg["obs_keys"])
     image_keys = list(ds_cfg["image_keys"])
     downsample_points = int(ds_cfg["downsample_points"])
     formatter = BCObsFormatter(obs_keys, image_keys, downsample_points, device)
@@ -227,9 +261,11 @@ def main():
         n_episodes = int(eval_cfg.get("num_episodes", 10))
         spawn_cfg = SpawnCfg(poses=[], num_trials=n_episodes)
 
-    # Output dir
-    output_dir = os.path.join(checkpoint_dir, "eval",
-                              os.path.splitext(os.path.basename(args_cli.eval_cfg))[0])
+    # Output dir: logs/eval/<eval_config_stem>/<checkpoint_basename>/
+    eval_base = os.path.join(os.path.dirname(checkpoint_dir.rstrip("/")), "eval")
+    eval_config_stem = os.path.splitext(os.path.basename(args_cli.eval_cfg))[0]
+    checkpoint_basename = os.path.basename(checkpoint_dir.rstrip("/"))
+    output_dir = os.path.join(eval_base, eval_config_stem, checkpoint_basename)
     os.makedirs(output_dir, exist_ok=True)
     logger = EvalLogger(output_dir, record_video=record_video, record_plots=record_plots)
 
@@ -296,13 +332,15 @@ def main():
                 # record — use same ee_pose_w call as the env obs, ensures offset is always applied
                 ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
                     isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
-                obj = isaac_env.scene["object"]
+                obj = _get_object_asset(env)
                 obj_pose = obj.data.root_pos_w - isaac_env.scene.env_origins  # (B, 3)
 
+                frame = env.render() if record_video else None
                 logger.record_step(
                     ee_pose.cpu().numpy()[0],
                     obj_pose.cpu().numpy()[0],
                     action_step.cpu().numpy()[0],
+                    frame=frame,
                 )
 
                 success = bool(_check_success(env)[0])

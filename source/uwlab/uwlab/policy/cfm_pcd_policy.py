@@ -110,8 +110,10 @@ class CFMPCDPolicy(BaseImagePolicy):
         B = nactions.shape[0]
         global_cond = self._encode_obs(nobs, B)
 
+        device = nactions.device
         noise = torch.randn_like(nactions)
         t, x_t, ut = self.noise_scheduler.sample_location_and_conditional_flow(noise, nactions)
+        t, x_t, ut = t.to(device), x_t.to(device), ut.to(device)
 
         pred = self.model(x_t, t.reshape(-1), local_cond=None, global_cond=global_cond)
         return F.mse_loss(pred, ut)

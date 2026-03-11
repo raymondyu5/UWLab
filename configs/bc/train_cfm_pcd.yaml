@@ -1,12 +1,12 @@
 horizon: 4
 n_obs_steps: 1
-n_action_steps: 4
+n_action_steps: 8
 
 dataset:
   data_path: ???        # required: path to directory containing episode_*.zarr
   load_list: [all]
   num_demo: 150
-  obs_keys: [arm_joint_pos, hand_joint_pos, ee_pose]
+  obs_keys: [ee_pose, hand_joint_pos]
   action_key: actions
   image_keys: [seg_pc]
   pad_before: 0
@@ -43,6 +43,7 @@ training:
   device: cuda:0
   seed: 42
   lr: 1.0e-4
+  betas: [0.95, 0.999]
   weight_decay: 1.0e-6
   lr_scheduler: cosine
   lr_warmup_steps: 500
