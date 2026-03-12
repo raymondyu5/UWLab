@@ -124,7 +124,6 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
 
-        # --- Instantiate SynthesizePC and wire as seg_pc obs term ---
         synth_pc = CachedSamplePC(
             asset_name="robot",
             object_names=["grasp_object"],
