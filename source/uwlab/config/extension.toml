@@ -22,6 +22,7 @@ keywords = ["kit", "robotics", "learning", "ai"]
 [python.pipapi]
 requirements = [
     "numpy",
+    "zarr",
     "prettytable==3.3.0",
     "toml",
     "hidapi",

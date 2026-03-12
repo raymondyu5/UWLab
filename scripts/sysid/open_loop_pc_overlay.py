@@ -668,6 +668,21 @@ def main():
     if hasattr(env_cfg.terminations, "cup_toppled"):
         env_cfg.terminations.cup_toppled = None
 
+    if hasattr(env_cfg, "table_z_range"):
+        env_cfg.table_z_range = (-0.02, -0.02)
+    if hasattr(env_cfg.events, "reset_table_block") and env_cfg.events.reset_table_block is not None:
+        env_cfg.events.reset_table_block.params["z_range"] = (-0.02, -0.02)
+
+    if hasattr(env_cfg.events, "reset_object") and env_cfg.events.reset_object is not None:
+        env_cfg.events.reset_object.params["pose_range"] = {
+            "x": (0.0, 0.0),
+            "y": (0.0, 0.0),
+            "z": (0.0, 0.0),
+            "roll": (0.0, 0.0),
+            "pitch": (0.0, 0.0),
+            "yaw": (0.0, 0.0),
+        }
+
     env = gym.make(task, cfg=env_cfg)
     if args_cli.debug:
         max_ep = int(env.unwrapped.max_episode_length)

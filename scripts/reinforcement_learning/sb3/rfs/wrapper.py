@@ -23,6 +23,9 @@ Usage:
 import copy
 import os
 import sys
+from types import SimpleNamespace
+
+import yaml
 
 # Ensure third_party packages (dill, diffusion_policy) are importable.
 # isaac-sim's python.sh resets PYTHONPATH so we inject the paths here.
@@ -82,20 +85,59 @@ _OBS_KEY_MAP = {
 def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
     ckpt_path = os.path.join(diffusion_path, "checkpoints", "latest.ckpt")
     if not os.path.isfile(ckpt_path):
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        ckpt_path = os.path.join(diffusion_path, "latest.ckpt")
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(
+            f"Checkpoint not found. Looked for {diffusion_path}/checkpoints/latest.ckpt and {diffusion_path}/latest.ckpt"
+        )
 
     print(f"[RFSWrapper] Loading CFM checkpoint from {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False, pickle_module=dill)
-    state_dict = ckpt["state_dicts"]["ema_model"]
-    cfg = ckpt["cfg"]
 
-    shape_meta = {
-        "action": {"shape": list(cfg.shape_meta.action.shape)},
-        "obs": {
-            "agent_pos": {"shape": list(cfg.shape_meta.obs.agent_pos.shape), "type": "low_dim"},
-            "seg_pc": {"shape": list(cfg.shape_meta.obs.seg_pc.shape), "type": "pcd"},
-        },
-    }
+    if "state_dicts" in ckpt and "ema_model" in ckpt["state_dicts"]:
+        state_dict = ckpt["state_dicts"]["ema_model"]
+        cfg = ckpt["cfg"]
+        shape_meta = {
+            "action": {"shape": list(cfg.shape_meta.action.shape)},
+            "obs": {
+                "agent_pos": {"shape": list(cfg.shape_meta.obs.agent_pos.shape), "type": "low_dim"},
+                "seg_pc": {"shape": list(cfg.shape_meta.obs.seg_pc.shape), "type": "pcd"},
+            },
+        }
+        sigma = float(cfg.policy.noise_scheduler.sigma)
+        horizon = int(cfg.horizon)
+        n_action_steps = int(cfg.n_action_steps) + int(getattr(cfg, "n_latency_steps", 0))
+        n_obs_steps = int(cfg.n_obs_steps)
+        down_dims = tuple(cfg.policy.down_dims)
+    else:
+        state_dict = ckpt["ema_model"]
+        config_path = os.path.join(diffusion_path, "config.yaml")
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(
+                f"BC checkpoint format detected but config.yaml not found at {config_path}"
+            )
+        with open(config_path) as f:
+            train_cfg = yaml.safe_load(f)
+        agent_pos_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
+        action_dim = int(state_dict["normalizer.params_dict.action.scale"].shape[0])
+        downsample_points = int(train_cfg["dataset"]["downsample_points"])
+        shape_meta = {
+            "action": {"shape": [action_dim]},
+            "obs": {
+                "agent_pos": {"shape": [agent_pos_dim], "type": "low_dim"},
+                "seg_pc": {"shape": [3, downsample_points], "type": "pcd"},
+            },
+        }
+        pol = train_cfg["policy"]
+        ds = train_cfg["dataset"]
+        sigma = float(pol.get("sigma", 0.0))
+        horizon = int(train_cfg.get("horizon", 4))
+        n_action_steps = int(train_cfg.get("n_action_steps", 8))
+        n_obs_steps = int(train_cfg.get("n_obs_steps", 1))
+        down_dims = tuple(pol["down_dims"])
+        cfg = SimpleNamespace(
+            dataset=SimpleNamespace(obs_keys=ds["obs_keys"]),
+        )
 
     pcd_model = PointNet(
         in_channels=3,
@@ -104,18 +146,18 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         use_bn=False,
     )
     obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
-    noise_scheduler = ConditionalFlowMatcher(sigma=float(cfg.policy.noise_scheduler.sigma))
+    noise_scheduler = ConditionalFlowMatcher(sigma=sigma)
 
     policy = CFMPCDPolicy(
         shape_meta=shape_meta,
         obs_encoder=obs_encoder,
         noise_scheduler=noise_scheduler,
-        horizon=int(cfg.horizon),
-        n_action_steps=int(cfg.n_action_steps) + int(cfg.n_latency_steps),
-        n_obs_steps=int(cfg.n_obs_steps),
+        horizon=horizon,
+        n_action_steps=n_action_steps,
+        n_obs_steps=n_obs_steps,
         num_inference_steps=5,
         diffusion_step_embed_dim=256,
-        down_dims=tuple(cfg.policy.down_dims),
+        down_dims=down_dims,
         kernel_size=5,
         n_groups=8,
         cond_predict_scale=True,

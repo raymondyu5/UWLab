@@ -1,5 +1,6 @@
 task_id: UW-FrankaLeap-GraspPinkCup-JointAbs-v0
-checkpoint: # remember to update !!  
+checkpoint: # remember to update !!
+obs_keys: [ee_pose, hand_joint_pos]  
 device: cuda:0
 num_envs: 1
 action_horizon: 1   # steps to execute before re-querying policy

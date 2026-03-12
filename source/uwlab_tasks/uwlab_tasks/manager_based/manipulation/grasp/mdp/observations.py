@@ -62,6 +62,11 @@ def joint_pos_w(env, asset_cfg: SceneEntityCfg):
     return robot.data.joint_pos
 
 
+def arm_joint_pos_w(env, asset_cfg: SceneEntityCfg, num_arm_joints: int = 7):
+    robot = env.scene[asset_cfg.name]
+    return robot.data.joint_pos[:, :num_arm_joints]
+
+
 def hand_joint_pos_w(env, asset_cfg: SceneEntityCfg, num_arm_joints: int = 7):
     robot = env.scene[asset_cfg.name]
     return robot.data.joint_pos[:, num_arm_joints:]

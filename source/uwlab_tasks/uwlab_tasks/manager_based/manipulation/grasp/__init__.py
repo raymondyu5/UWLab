@@ -3,4 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-from .config import franka_leap  # noqa: F401
+try:
+    from .config import franka_leap  # noqa: F401
+except (ModuleNotFoundError, ImportError):
+    pass

@@ -31,12 +31,11 @@ def bottle_too_far(env, pour_rew) -> torch.Tensor:
 
 
 def cup_toppled(env, pour_rew) -> torch.Tensor:
-    """Terminate if cup rotates more than 30 degrees from its upright spawn orientation."""
+    """Terminate if cup rotates more than 30 degrees from spawn. Uses fixed PINK_CUP_POUR_ROT."""
     from isaaclab.utils.math import quat_conjugate, quat_mul
-    cup_state = env.scene[pour_rew.cup_name]._data.root_state_w[:, :7].clone()
-    current_quat = cup_state[:, 3:7]
 
-    # Fixed upright orientation: PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
+    cup = env.scene[pour_rew.cup_name]
+    current_quat = cup.data.root_quat_w  # (num_envs, 4) wxyz
     spawn_quat = torch.tensor([[0.707, 0.707, 0.0, 0.0]], device=env.device).expand(env.num_envs, -1)
 
     dot = (spawn_quat * current_quat).sum(dim=1)

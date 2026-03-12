@@ -1,0 +1,10 @@
+task_id: UW-FrankaLeap-PourBottle-IkRel-v0
+checkpoint: logs/bc_cfm_pcd
+obs_keys: [ee_pose, hand_joint_pos]
+device: cuda:0
+num_envs: 1
+action_horizon: 1
+num_warmup_steps: 5
+spawn: bottle_pour_narrow
+record_video: false
+record_plots: true

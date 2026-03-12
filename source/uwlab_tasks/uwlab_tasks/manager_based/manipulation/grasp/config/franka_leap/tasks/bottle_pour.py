@@ -21,6 +21,8 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
+from isaaclab.envs.mdp import randomize_rigid_body_scale
+
 from ....mdp import PourReward, CachedSamplePC, reset_object_pose, reset_table_block
 from ....mdp.observations import SynthesizePC
 from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
@@ -44,6 +46,10 @@ PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
 # Bottle cap offset in local -X frame: 13.22cm (cap is at X=-0.132 in mesh frame)
 BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
+
+# Success: cap tip XY within 5cm of cup center, z at or above target, within POUR_Z_TOLERANCE above
+# Target z = cup_pos[2] + 0.26 (cup base + 26cm). Tip must be in [target_z, target_z + POUR_Z_TOLERANCE]
+POUR_Z_TOLERANCE = 0.15
 
 POUR_HORIZON = 180
 
@@ -75,8 +81,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
     def is_success(self, env) -> torch.Tensor:
-        # Cap tip XY within 5cm of cup center and above cup_z + 0.07
-        # (matches IsaacLab eval_bc_policy.py pour success criterion)
+        # Cap tip XY within 5cm of cup center, z within POUR_Z_TOLERANCE of target
         bottle = env.scene["grasp_object"]
         cup = env.scene["pink_cup"]
         bottle_pos = bottle.data.root_pos_w - env.scene.env_origins       # (N, 3)
@@ -90,9 +95,11 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
         tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
 
+        target_z = cup_pos[:, 2] + 0.26
         xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
-        z_dist = torch.abs(tip_pos[:, 2] - (cup_pos[:, 2] + 0.26))
-        return (xy_dist < 0.05) & (z_dist < 0.05)
+        tip_z = tip_pos[:, 2]
+        z_ok = (tip_z >= target_z) & (tip_z <= target_z + POUR_Z_TOLERANCE)
+        return (xy_dist < 0.05) & z_ok
 
     def __post_init__(self):
         super().__post_init__()
@@ -102,6 +109,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.object_spawn_defaults = {
             "default_pos": list(BOTTLE_SPAWN_POS),
             "default_rot": list(BOTTLE_SPAWN_ROT),
+            "reset_height": BOTTLE_SPAWN_POS[2],
         }
 
         self.horizon = POUR_HORIZON
@@ -138,6 +146,15 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         )
 
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+
+        self.events.randomize_cup_scale = EventTerm(
+            func=randomize_rigid_body_scale,
+            mode="usd",
+            params={
+                "asset_cfg": SceneEntityCfg("pink_cup"),
+                "scale_range": (0.9, 1.2),
+            },
+        )
 
         self.events.reset_table_block = EventTerm(
             func=reset_table_block,

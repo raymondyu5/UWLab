@@ -36,6 +36,7 @@ class EvalLogger:
 
         self._episodes: List[dict] = []
         self._current: Optional[dict] = None
+        self._scatter_points: List[dict] = []  # [{x, y, success}]
 
     def begin_episode(self, spawn_name: Optional[str] = None, spawn_pose: Optional[dict] = None):
         self._current = {
@@ -73,10 +74,18 @@ class EvalLogger:
         self._episodes.append(self._current)
         self._current = None
 
+    def record_scatter_points(self, xs, ys, successes):
+        """Record per-env (x, y, success) results for scatter plot visualization."""
+        for x, y, s in zip(xs, ys, successes):
+            self._scatter_points.append({"x": float(x), "y": float(y), "success": bool(s)})
+
     def finalize(self) -> dict:
         results = self._write_results()
         if self.record_plots:
-            self._write_heatmap()
+            if self._scatter_points:
+                self._write_scatter_plot()
+            else:
+                self._write_heatmap()
         return results
 
     def _write_results(self) -> dict:
@@ -199,6 +208,36 @@ class EvalLogger:
         plt.savefig(out_path, dpi=100, bbox_inches="tight")
         plt.close()
         print(f"[EvalLogger] heatmap -> {out_path}")
+
+    def _write_scatter_plot(self):
+        points = self._scatter_points
+        xs = np.array([p["x"] for p in points])
+        ys = np.array([p["y"] for p in points])
+        successes = np.array([p["success"] for p in points])
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        for mask, color, label in [
+            (~successes, "red",   "fail"),
+            ( successes, "green", "success"),
+        ]:
+            if mask.any():
+                ax.scatter(xs[mask], ys[mask], c=color, marker="x", s=40,
+                           linewidths=1.2, label=label, alpha=0.7)
+
+        n_succ = int(successes.sum())
+        n_tot = len(successes)
+        ax.set_title(f"Spawn outcomes  {n_succ}/{n_tot} success ({100*n_succ/n_tot:.1f}%)")
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+        ax.set_aspect("equal")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        out_path = os.path.join(self.output_dir, "scatter.png")
+        plt.savefig(out_path, dpi=100, bbox_inches="tight")
+        plt.close()
+        print(f"[EvalLogger] scatter plot -> {out_path}")
 
     def _write_episode_video(self, episode_idx: int, ep: dict):
         import imageio

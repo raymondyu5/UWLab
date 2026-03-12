@@ -100,6 +100,7 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.object_spawn_defaults = {
             "default_pos": list(BOTTLE_SPAWN_POS),
             "default_rot": list(BOTTLE_SPAWN_ROT),
+            "reset_height": BOTTLE_SPAWN_POS[2],
         }
 
         self.horizon = BOTTLE_HORIZON

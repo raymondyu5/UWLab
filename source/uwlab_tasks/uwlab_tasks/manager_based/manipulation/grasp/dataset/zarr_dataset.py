@@ -170,22 +170,33 @@ class ZarrDataset(Dataset):
         else:
             entries = sorted(load_list)
 
-        zarr_episodes = [
-            e for e in entries
+        # Flat format: data_path/episode_0.zarr, episode_2.zarr, ...
+        zarr_paths = [
+            os.path.join(data_path, e) for e in entries
             if e.endswith('.zarr') and os.path.isdir(os.path.join(data_path, e))
-        ][:num_demo]
+        ]
 
-        if len(zarr_episodes) == 0:
+        # Nested format: data_path/episode_0/episode_0.zarr, episode_2/episode_2.zarr, ...
+        if len(zarr_paths) == 0:
+            for e in entries:
+                subdir = os.path.join(data_path, e)
+                nested = os.path.join(subdir, f"{e}.zarr")
+                if os.path.isdir(subdir) and os.path.isdir(nested):
+                    zarr_paths.append(nested)
+            zarr_paths = sorted(zarr_paths)
+
+        zarr_paths = zarr_paths[:num_demo]
+
+        if len(zarr_paths) == 0:
             raise ValueError(f"No .zarr episodes found in {data_path}")
 
         # --- load into RAM ---
         replay_buffer = _ReplayBuffer()
-        for ep_name in zarr_episodes:
-            ep_path = os.path.join(data_path, ep_name)
+        for ep_path in zarr_paths:
             try:
                 store = _open_zarr(ep_path)
             except Exception as e:
-                print(f"Warning: skipping {ep_name}: {e}")
+                print(f"Warning: skipping {ep_path}: {e}")
                 continue
 
             try:
@@ -204,7 +215,7 @@ class ZarrDataset(Dataset):
 
                 replay_buffer.add_episode(episode)
             except Exception as e:
-                print(f"Warning: skipping {ep_name}: {e}")
+                print(f"Warning: skipping {ep_path}: {e}")
                 continue
 
         self.replay_buffer = replay_buffer
