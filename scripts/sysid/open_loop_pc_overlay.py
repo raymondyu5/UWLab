@@ -45,6 +45,13 @@ parser.add_argument(
     default=2048,
     help="Downsample real point cloud to this many points.",
 )
+
+parser.add_argument(
+    "--real_pcd_latency",
+    type=int,
+    default=0, # 4
+    help="Downsample real point cloud to this many points.",
+)
 parser.add_argument(
     "--point_width_m",
     type=float,
@@ -639,6 +646,8 @@ def main():
     traj_obs, traj_actions, pointclouds = load_episode(args_cli.trajectory_file, args_cli.action_type)
     num_steps = len(traj_actions)
 
+    real_pcd_latency = args_cli.real_pcd_latency # 4  # 10 steps for real pcd to be ready
+
     env_cfg = parse_franka_leap_env_cfg(
         task,
         EVAL_MODE,
@@ -678,12 +687,12 @@ def main():
     if sim_obs_0 is not None:
         sim_obs_list.append(sim_obs_0)
     
-    REAL_PCD_LATENCY = 4 # 4  # 10 steps for real pcd to be ready
+    
     with torch.inference_mode():
         # Frame 0: sim at real_obs[0] after reset, render against real_pcds[0]
         sim_pc_0 = get_synthetic_seg_pc(obs)
         real_pc_0 = get_real_pc_for_frame(
-            traj_obs, pointclouds, REAL_PCD_LATENCY, env.unwrapped.device, num_downsample
+            traj_obs, pointclouds, real_pcd_latency, env.unwrapped.device, num_downsample
         )
         if real_pc_0 is not None and real_pc_0.shape[0] > 0:
             draw_pointclouds_usd_points(
@@ -746,7 +755,7 @@ def main():
 
             
             real_pc = get_real_pc_for_frame(
-                traj_obs, pointclouds, i + 1 + REAL_PCD_LATENCY, env.unwrapped.device, num_downsample
+                traj_obs, pointclouds, i + 1 + real_pcd_latency, env.unwrapped.device, num_downsample
             )
 
             if real_pc is not None and real_pc.shape[0] > 0:
