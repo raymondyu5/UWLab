@@ -433,6 +433,23 @@ def draw_pointclouds_usd_points(
     return True
 
 
+def remove_pointcloud_prims(prim_path_prefix: str = "/World/PointCloudViz") -> bool:
+    """Remove overlay point cloud prims to avoid feedback into depth-based seg_pc (distill mode)."""
+    try:
+        import omni.usd
+    except Exception:
+        return False
+
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return False
+
+    prim = stage.GetPrimAtPath(prim_path_prefix)
+    if prim.IsValid():
+        stage.RemovePrim(prim_path_prefix)
+    return True
+
+
 def draw_pointclouds_debug_draw(
     real_pc: np.ndarray,
     sim_pc: np.ndarray,
@@ -470,18 +487,26 @@ def draw_pointclouds_debug_draw(
     return True
 
 
-def capture_viewport_image(env, output_path: str, camera_name: str = "fixed_camera") -> bool:
-    """Read the current camera RGB and save to output_path."""
+def _get_camera_rgb(env, camera_name: str = "fixed_camera") -> np.ndarray | None:
+    """Get current camera RGB as numpy array (H, W, 3) uint8."""
     scene = env.unwrapped.scene
     try:
         cam = scene[camera_name]
     except KeyError:
-        return False
+        return None
     if "rgb" not in cam.data.output:
-        return False
+        return None
     rgb = cam.data.output["rgb"][0, ..., :3].cpu().numpy()
     if rgb.dtype != np.uint8:
         rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+    return rgb
+
+
+def capture_viewport_image(env, output_path: str, camera_name: str = "fixed_camera") -> bool:
+    """Read the current camera RGB and save to output_path."""
+    rgb = _get_camera_rgb(env, camera_name)
+    if rgb is None:
+        return False
     imageio.imwrite(output_path, rgb)
     return True
 
@@ -719,17 +744,31 @@ def main():
         real_pc_0 = get_real_pc_for_frame(
             traj_obs, pointclouds, real_pcd_latency, env.unwrapped.device, num_downsample
         )
+        hold_action = get_hold_action(env, obs, args_cli.action_type)
+        rgb = None
         if real_pc_0 is not None and real_pc_0.shape[0] > 0:
             draw_pointclouds_usd_points(
                 real_pc_0, sim_pc_0, env_origin,
                 point_width_m=args_cli.point_width_m,
             )
-            # Step once so the viewport renders the overlay (hold keeps robot at real_obs[0])
-            hold_action = get_hold_action(env, obs, args_cli.action_type)
+            if args_cli.sim_type == "distill":
+                env.unwrapped.sim.render()
+                env.unwrapped.scene[args_cli.camera]._update_poses(
+                    torch.arange(env.unwrapped.num_envs, device=env.unwrapped.device)
+                )
+                rgb = _get_camera_rgb(env, args_cli.camera)
+                remove_pointcloud_prims()
+            else:
+                obs, _, _, _, _ = env.step(hold_action)
+                rgb = _get_camera_rgb(env, args_cli.camera)
+        need_step = (
+            (args_cli.sim_type == "distill" and real_pc_0 is not None and real_pc_0.shape[0] > 0)
+            or rgb is None
+        )
+        if need_step:
             obs, _, _, _, _ = env.step(hold_action)
-        rgb = env.unwrapped.scene[args_cli.camera].data.output["rgb"][0, ..., :3].cpu().numpy()
-        if rgb.dtype != np.uint8:
-            rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+            if rgb is None:
+                rgb = _get_camera_rgb(env, args_cli.camera)
         frames.append(rgb)
         imageio.imwrite(os.path.join(frames_dir, "frame_00000.png"), rgb)
 
@@ -783,15 +822,31 @@ def main():
                 traj_obs, pointclouds, i + 1 + real_pcd_latency, env.unwrapped.device, num_downsample
             )
 
+            hold_action = get_hold_action(env, obs, args_cli.action_type)
+            rgb = None
             if real_pc is not None and real_pc.shape[0] > 0:
                 draw_pointclouds_usd_points(
                     real_pc, sim_pc, env_origin,
                     point_width_m=args_cli.point_width_m,
                 )
-            
-
-            hold_action = get_hold_action(env, obs, args_cli.action_type)
-            obs, reward, terminated, truncated, info = env.step(hold_action)
+                if args_cli.sim_type == "distill":
+                    env.unwrapped.sim.render()
+                    env.unwrapped.scene[args_cli.camera]._update_poses(
+                        torch.arange(env.unwrapped.num_envs, device=env.unwrapped.device)
+                    )
+                    rgb = _get_camera_rgb(env, args_cli.camera)
+                    remove_pointcloud_prims()
+                else:
+                    obs, reward, terminated, truncated, info = env.step(hold_action)
+                    rgb = _get_camera_rgb(env, args_cli.camera)
+            need_step = (
+                (args_cli.sim_type == "distill" and real_pc is not None and real_pc.shape[0] > 0)
+                or rgb is None
+            )
+            if need_step:
+                obs, reward, terminated, truncated, info = env.step(hold_action)
+                if rgb is None:
+                    rgb = _get_camera_rgb(env, args_cli.camera)
             if terminated.any() or truncated.any():
                 print(f"[RESET] Frame {i} (after hold step): terminated={terminated}, truncated={truncated}")
                 if args_cli.debug:
@@ -800,9 +855,6 @@ def main():
                     max_ep = int(unw.max_episode_length)
                     print(f"  episode_length_buf={ep_buf}, max_episode_length={max_ep}")
 
-            rgb = env.unwrapped.scene[args_cli.camera].data.output["rgb"][0, ..., :3].cpu().numpy()
-            if rgb.dtype != np.uint8:
-                rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
             frames.append(rgb)
 
             frame_path = os.path.join(frames_dir, f"frame_{i+1:05d}.png")

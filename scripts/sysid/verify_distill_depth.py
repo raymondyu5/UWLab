@@ -28,7 +28,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--task",
     type=str,
-    default="UW-FrankaLeap-GraspPinkCup-JointAbs-v0",
+    default="UW-FrankaLeap-PourBottle-JointAbs-v0",
     help="Task ID (must have seg_pc, e.g. GraspPinkCup, GraspBottle).",
 )
 parser.add_argument(

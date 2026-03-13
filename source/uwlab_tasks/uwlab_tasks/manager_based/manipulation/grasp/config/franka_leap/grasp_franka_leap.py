@@ -85,6 +85,9 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     # When set in distill_mode, use this exact camera for RenderedSegPC (e.g. "fixed_camera").
     # Overrides distill_use_fixed_camera. Use the same camera as capture for overlay scripts.
     distill_camera_name: str | None = None
+    # Scene entity names to include in instance-filtered seg_pc (robot + task objects, excludes table/ground).
+    # Override in task config for multi-object tasks (e.g. bottle pour: add "pink_cup").
+    distill_include_entity_names: tuple[str, ...] = ("robot", "grasp_object")
 
     def warmup_action(self, env) -> torch.Tensor:
         """Hold at reset joint position — safe no-op for joint absolute control."""
@@ -226,7 +229,7 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
         num_downsample_points=2048,
         focal_length=focal_length,
         horizontal_aperture=horizontal_aperture,
-        include_entity_names=("robot", "grasp_object"),
+        include_entity_names=cfg.distill_include_entity_names,
     )
     if not hasattr(cfg.observations.policy, "seg_pc") or cfg.observations.policy.seg_pc is None:
         raise ValueError(

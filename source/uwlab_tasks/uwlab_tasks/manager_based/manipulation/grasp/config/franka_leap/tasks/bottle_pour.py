@@ -77,6 +77,7 @@ class PourBottleSceneCfg(GraspBottleSceneCfg):
 class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     scene: PourBottleSceneCfg = PourBottleSceneCfg(num_envs=1, env_spacing=2.5)
     table_z_range: tuple = (0.0, 0.0)  # set to (0.0, 0.05) to enable table height randomization
+    distill_include_entity_names: tuple[str, ...] = ("robot", "grasp_object", "pink_cup")
 
     def is_success(self, env) -> torch.Tensor:
         # Cap tip XY within 5cm of cup center, z within POUR_Z_TOLERANCE of target

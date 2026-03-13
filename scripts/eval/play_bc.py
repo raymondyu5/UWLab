@@ -31,6 +31,8 @@ parser.add_argument("--eval_cfg", type=str, required=True,
                     help="Path to eval config YAML (configs/eval/*.yaml)")
 parser.add_argument("--num_envs", type=int, default=None,
                     help="Override num_envs from eval config")
+parser.add_argument("--sim_type", type=str, choices=["eval", "distill"], default="eval",
+                    help="eval: use eval mode. distill: use distill mode.")
 parser.add_argument("overrides", nargs="*",
                     help="Key=value overrides for eval config (e.g. checkpoint=/path record_video=true)")
 AppLauncher.add_app_launcher_args(parser)
@@ -72,6 +74,11 @@ from uwlab.eval.bc_obs_formatter import BCObsFormatter
 from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
 
+from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import (
+    EVAL_MODE,
+    DISTILL_MODE,
+    parse_franka_leap_env_cfg,
+)
 import uwlab_tasks  # noqa: F401  registers gym envs
 
 
@@ -255,7 +262,13 @@ def main():
     # Create env
     task_id = eval_cfg["task_id"]
     from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
-    env_cfg = parse_env_cfg(task_id, device=str(device), num_envs=num_envs)
+    #env_cfg = parse_env_cfg(task_id, device=str(device), num_envs=num_envs)
+    env_cfg = parse_franka_leap_env_cfg(
+        task_id,
+        run_mode = EVAL_MODE if args_cli.sim_type == "eval" else DISTILL_MODE,
+        device=str(device),
+        num_envs=num_envs,
+    )
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
     # Load spawn config
