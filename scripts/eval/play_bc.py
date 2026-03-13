@@ -33,6 +33,9 @@ parser.add_argument("--num_envs", type=int, default=None,
                     help="Override num_envs from eval config")
 parser.add_argument("--sim_type", type=str, choices=["eval", "distill"], default="eval",
                     help="eval: use eval mode. distill: use distill mode.")
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--output_dir", type=str, default=None,
+                    help="Override output directory for results")
 parser.add_argument("overrides", nargs="*",
                     help="Key=value overrides for eval config (e.g. checkpoint=/path record_video=true)")
 AppLauncher.add_app_launcher_args(parser)
@@ -266,14 +269,13 @@ def main():
 
     # Create env
     task_id = eval_cfg["task_id"]
-    from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
-    #env_cfg = parse_env_cfg(task_id, device=str(device), num_envs=num_envs)
     env_cfg = parse_franka_leap_env_cfg(
         task_id,
-        run_mode = EVAL_MODE if args_cli.sim_type == "eval" else DISTILL_MODE,
+        run_mode=EVAL_MODE if args_cli.sim_type == "eval" else DISTILL_MODE,
         device=str(device),
         num_envs=num_envs,
     )
+    env_cfg.seed = args_cli.seed
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
     # Load spawn config
@@ -287,10 +289,13 @@ def main():
         spawn_cfg = SpawnCfg(poses=[], num_trials=n_episodes)
 
     # Output dir: logs/eval/<eval_config_stem>/<checkpoint_basename>/
-    eval_base = os.path.join(os.path.dirname(checkpoint_dir.rstrip("/")), "eval")
-    eval_config_stem = os.path.splitext(os.path.basename(args_cli.eval_cfg))[0]
-    checkpoint_basename = os.path.basename(checkpoint_dir.rstrip("/"))
-    output_dir = os.path.join(eval_base, eval_config_stem, checkpoint_basename)
+    if args_cli.output_dir:
+        output_dir = args_cli.output_dir
+    else:
+        eval_base = os.path.join(os.path.dirname(checkpoint_dir.rstrip("/")), "eval")
+        eval_config_stem = os.path.splitext(os.path.basename(args_cli.eval_cfg))[0]
+        checkpoint_basename = os.path.basename(checkpoint_dir.rstrip("/"))
+        output_dir = os.path.join(eval_base, eval_config_stem, checkpoint_basename)
     os.makedirs(output_dir, exist_ok=True)
     logger = EvalLogger(output_dir, record_video=record_video, record_plots=record_plots)
 
@@ -299,19 +304,16 @@ def main():
     default_rot = tuple(eval_cfg.get("object_default_rot", _spawn_defaults["default_rot"]))
     reset_height = float(eval_cfg.get("object_reset_height", _spawn_defaults["reset_height"]))
 
-    # Build episode list: (spawn_name, spawn_pose) tuples
+    # Build episode list: 1 trial per pose (num_envs runs in parallel per pose)
     if spawn_cfg.poses:
-        episodes = []
-        for pose in spawn_cfg.poses:
-            for _ in range(spawn_cfg.num_trials):
-                episodes.append((pose.name, pose))
+        episodes = [(pose.name, pose) for pose in spawn_cfg.poses]
     else:
-        # Random spawn — just use num_trials
         episodes = [(None, None)] * spawn_cfg.num_trials
 
     isaac_env = env.unwrapped
-    episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length))
+    internal_warmup = int(getattr(isaac_env.cfg, "num_warmup_steps", 0))
     num_warmup_steps = int(eval_cfg.get("num_warmup_steps", 5))
+    episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length)) - internal_warmup - num_warmup_steps
 
     with torch.inference_mode():
         for ep_idx, (spawn_name_ep, spawn_pose) in enumerate(episodes):
@@ -339,7 +341,8 @@ def main():
             logger.begin_episode(spawn_name_ep, spawn_pose_dict)
 
             action_seq = None
-            success = False
+            per_env_done = [False] * num_envs
+            per_env_success = [False] * num_envs
 
             for step in range(episode_steps):
                 if step % action_horizon == 0:
@@ -352,11 +355,21 @@ def main():
                     action_idx = action_seq.shape[1] - 1
                 action_step = action_seq[:, action_idx]  # (B, A)
 
+                # Check success on current state BEFORE stepping to avoid
+                # reading the auto-reset state when the episode truncates.
+                pre_step_success = _check_success(env)
+                for i in range(num_envs):
+                    if pre_step_success[i] and not per_env_done[i]:
+                        per_env_success[i] = True
+
                 obs_raw, reward, terminated, truncated, info = env.step(action_step)
                 policy_obs = obs_raw["policy"]
                 formatter.update_action(action_step)
 
-                # record — use same ee_pose_w call as the env obs, ensures offset is always applied
+                for i in range(num_envs):
+                    if (terminated[i] or truncated[i]) and not per_env_done[i]:
+                        per_env_done[i] = True
+
                 ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
                     isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
                 obj = _get_object_asset(env)
@@ -370,12 +383,17 @@ def main():
                     frame=frame,
                 )
 
-                success = bool(_check_success(env)[0])
-                partial_success = bool(_check_partial_success(env)[0])
+                if all(per_env_done):
+                    break
 
-            logger.end_episode(success, partial_success=partial_success)
-            status = "SUCCESS" if success else ("partial" if partial_success else "fail")
-            print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status}"
+            n_success = sum(per_env_success)
+            partial_success = _check_partial_success(env)
+            n_partial = int(partial_success.sum())
+            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
+                               partial_success=bool(n_partial > 0))
+            status = "SUCCESS" if n_success > 0 else ("partial" if n_partial > 0 else "fail")
+            print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status} "
+                  f"({n_success}/{num_envs})"
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
     results = logger.finalize()

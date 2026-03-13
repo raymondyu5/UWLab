@@ -83,12 +83,14 @@ _OBS_KEY_MAP = {
 
 
 def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
-    ckpt_path = os.path.join(diffusion_path, "checkpoints", "latest.ckpt")
+    ckpt_path = os.path.join(diffusion_path, "checkpoints", "best.ckpt")
+    if not os.path.isfile(ckpt_path):
+        ckpt_path = os.path.join(diffusion_path, "checkpoints", "latest.ckpt")
     if not os.path.isfile(ckpt_path):
         ckpt_path = os.path.join(diffusion_path, "latest.ckpt")
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"Checkpoint not found. Looked for {diffusion_path}/checkpoints/latest.ckpt and {diffusion_path}/latest.ckpt"
+            f"Checkpoint not found. Looked for best.ckpt, checkpoints/latest.ckpt, latest.ckpt in {diffusion_path}"
         )
 
     print(f"[RFSWrapper] Loading CFM checkpoint from {ckpt_path}")
@@ -233,6 +235,11 @@ class RFSWrapper:
         # Episode reward tracking for SB3 ep_rew_mean logging.
         self._ep_rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
+        # Last composite action (base + residual) sent to env. Set in step().
+        self.last_action: torch.Tensor | None = None
+        self.last_noise_flat: torch.Tensor | None = None
+        self.last_residual: torch.Tensor | None = None
+
         self.policy, self.policy_cfg = _load_cfm_checkpoint(diffusion_path, self.device)
         self.horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
@@ -302,6 +309,9 @@ class RFSWrapper:
         residual = ppo_out[:, :self.n_residual]
         noise_flat = ppo_out[:, self.n_residual:]
 
+        self.last_noise_flat = noise_flat.detach()
+        self.last_residual = residual.detach() if self.n_residual > 0 else None
+
         noise = torch.zeros(self.num_envs, self.horizon, self.cfm_action_dim, device=self.device)
         if self.noise_slice is not None and self.n_noise > 0:
             noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.horizon, self.n_noise)
@@ -325,6 +335,7 @@ class RFSWrapper:
             if self.finger_filter is not None:
                 action[:, 6:] = self.finger_filter(action[:, 6:])
 
+            self.last_action = action.detach()
             obs, step_rewards, terminated, truncated, info = self.env.step(action)
             rewards += step_rewards
             self.last_obs = obs

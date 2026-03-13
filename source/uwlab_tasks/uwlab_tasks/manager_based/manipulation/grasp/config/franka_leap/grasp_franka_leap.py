@@ -202,8 +202,16 @@ class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
 
 
 def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
-    """Configure env for distill_mode: camera with depth, seg_pc from RenderedSegPC.
-    Uses fixed_camera when distill_use_fixed_camera=True or distill_camera_name is set (e.g. overlay scripts)."""
+    """Configure env for distill_mode: adds two seg_pc observations.
+
+    - seg_pc  (camera-rendered, instance-segmented): replaces the default mesh-based seg_pc.
+              Used for distillation data storage and BC student policy evaluation.
+    - mesh_pc (mesh-based, same as RL/eval mode): preserved as a second obs key.
+              Used by collect_distill_trajectories.py to feed the RFS base policy,
+              which was trained on mesh PCD and should not receive camera PCD at inference.
+
+    Uses fixed_camera when distill_use_fixed_camera=True or distill_camera_name is set (e.g. overlay scripts).
+    """
     camera_name = getattr(cfg, "distill_camera_name", None)
     if camera_name is not None:
         if not hasattr(cfg.scene, camera_name) or getattr(cfg.scene, camera_name) is None:
@@ -220,6 +228,16 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
             raise ValueError("distill_mode requires train_camera; scene.train_camera is None")
         camera_name = "train_camera"
 
+    if not hasattr(cfg.observations.policy, "seg_pc") or cfg.observations.policy.seg_pc is None:
+        raise ValueError(
+            "distill_mode requires a task that defines seg_pc (e.g. GraspPinkCup, PourBottle)"
+        )
+
+    # Save the mesh-based seg_pc term before replacing it, then expose it as mesh_pc.
+    # collect_distill_trajectories.py reads mesh_pc to feed the RFS policy (trained on mesh),
+    # while seg_pc (camera-rendered below) is stored as distillation training data.
+    cfg.observations.policy.mesh_pc = cfg.observations.policy.seg_pc
+
     focal_length = cam_cfg.spawn.focal_length
     horizontal_aperture = cam_cfg.spawn.horizontal_aperture
     rendered_pc = RenderedSegPC(
@@ -231,10 +249,7 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
         horizontal_aperture=horizontal_aperture,
         include_entity_names=cfg.distill_include_entity_names,
     )
-    if not hasattr(cfg.observations.policy, "seg_pc") or cfg.observations.policy.seg_pc is None:
-        raise ValueError(
-            "distill_mode requires a task that defines seg_pc (e.g. GraspPinkCup, PourBottle)"
-        )
+    # Replace seg_pc with camera-rendered version.
     cfg.observations.policy.seg_pc = ObsTerm(func=rendered_pc.get_seg_pc)
 
 

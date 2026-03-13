@@ -131,7 +131,10 @@ def _format_diffusion_obs(policy_obs: dict, downsample_points: int, device: torc
     hand_joints = policy_obs["joint_pos"][:, 7:].float()
     agent_pos = torch.cat([ee_pose, hand_joints], dim=-1).unsqueeze(1)
 
-    pcd = policy_obs["seg_pc"].float()
+    # Use mesh_pc (not seg_pc) for the RFS base policy. In distill_mode, seg_pc is camera-rendered
+    # while mesh_pc is the original mesh-based point cloud. The base policy was trained on mesh PCD
+    # so it must receive mesh PCD here for correct inference.
+    pcd = policy_obs["mesh_pc"].float()
     N = pcd.shape[-1]
     if N > downsample_points:
         perm = torch.randperm(N, device=device)[:downsample_points]
@@ -261,6 +264,8 @@ def main():
                 hand_joint_pos_list.append(policy_obs["joint_pos"][0, 7:23].cpu().numpy())
                 ee_pose_list.append(policy_obs["ee_pose"][0].cpu().numpy())
                 actions_list.append(env_action[0].cpu().numpy())
+                # seg_pc is camera-rendered in distill_mode (RenderedSegPC); this is what we store
+                # so the downstream BC student learns from camera-domain observations.
                 seg_pc_list.append(policy_obs["seg_pc"][0].T.cpu().numpy())
                 ee_pose_cmd_list.append(policy_obs["ee_pose"][0].cpu().numpy())
 

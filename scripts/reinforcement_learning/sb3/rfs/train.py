@@ -104,7 +104,7 @@ import wandb
 import yaml
 from stable_baselines3 import PPO
 
-from stable_baselines3.common.logger import KVWriter, configure as sb3_configure
+from stable_baselines3.common.logger import configure as sb3_configure
 
 from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper
@@ -114,67 +114,11 @@ import uwlab_tasks  # noqa: F401
 
 from wrapper import RFSWrapper
 from eval_callback import RFSEvalCallback
+from callbacks import WandbNoisePredCallback, WandbRewardTermCallback, WandbOutputFormat
 from uwlab.eval.spawn import load_spawn_cfg
 
 
 _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
-
-
-from stable_baselines3.common.callbacks import BaseCallback
-
-
-class WandbRewardTermCallback(BaseCallback):
-    """Logs individual Isaac reward terms to wandb at the end of each rollout."""
-
-    def __init__(self, isaac_env, verbose=0):
-        super().__init__(verbose)
-        self._isaac_env = isaac_env
-
-    def _on_step(self) -> bool:
-        return True
-
-    def _on_rollout_end(self) -> None:
-        if wandb.run is None:
-            return
-        mgr = self._isaac_env.unwrapped.reward_manager
-        log_dict = {
-            f"rewards/{name}": val.mean().item()
-            for name, val in mgr._episode_sums.items()
-        }
-        for name, term_cfg in zip(mgr._term_names, mgr._term_cfgs):
-            func = getattr(term_cfg, "func", None)
-            obj = getattr(func, "__self__", None)
-            if obj is not None and hasattr(obj, "_component_sums") and obj._component_count > 0:
-                for comp, total in obj._component_sums.items():
-                    log_dict[f"rewards/{name}/{comp}"] = total / obj._component_count
-                obj._component_sums.clear()
-                obj._component_count = 0
-        wandb.log(log_dict, step=self.num_timesteps)
-
-
-class WandbOutputFormat(KVWriter):
-    """Forwards SB3 logger flushes directly to wandb.
-
-    SB3 calls write() via _dump_logs() after both collect_rollouts() and train(),
-    so ep_rew_mean, value_loss, etc. are all present at flush time.
-    """
-
-    def write(self, key_values, key_excluded, step=0):
-        if wandb.run is None:
-            return
-        log_dict = {}
-        for (key, value), (_, excluded) in zip(
-            sorted(key_values.items()), sorted(key_excluded.items())
-        ):
-            if excluded is not None and "wandb" in excluded:
-                continue
-            if isinstance(value, (int, float, np.floating, np.integer)):
-                log_dict[key] = float(value)
-        if log_dict:
-            wandb.log(log_dict, step=step)
-
-    def close(self):
-        pass
 
 
 def _parse_dims(s: str):
@@ -230,6 +174,8 @@ def main():
     )
     env_cfg.run_mode = "rl_mode"
     env_cfg.seed = args_cli.seed
+    if hasattr(env_cfg, "table_z_range"):
+        env_cfg.table_z_range = (0.0, 0.0)
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
 
     need_render = args_cli.video or (eval_cfg["record_video"] and not args_cli.no_eval_video)
@@ -310,11 +256,12 @@ def main():
         verbose=1,
     )
     reward_term_cb = WandbRewardTermCallback(env)
+    noise_pred_cb = WandbNoisePredCallback(rfs_env)
 
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
             total_timesteps=200_000_000,
-            callback=[eval_cb, reward_term_cb],
+            callback=[eval_cb, reward_term_cb, noise_pred_cb],
             progress_bar=True,
             log_interval=1,
         )

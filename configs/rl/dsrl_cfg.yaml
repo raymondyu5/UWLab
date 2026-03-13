@@ -1,0 +1,42 @@
+# DSRL (Diffusion Steering RL) training config.
+# Noise-space RL only — no residual on top of the base diffusion action.
+# Identical to rfs_cfg.yaml except residual_dims is disabled.
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  learning_rate: 0.0003
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu   # elu | tanh | relu
+
+rfs:
+  # Slices of the CFM action dim (22D for IkRel) that receive noise / residual.
+  # Format: "start:end". Leave empty string for no noise or no residual.
+  noise_dims: "0:22"       # full action gets PPO noise
+  residual_dims: ""        # DSRL: no residual
+
+  residual_step: 1         # env substeps per PPO step; rewards accumulate
+
+  residual_scale: 0.1      # unused when residual_dims is empty
+
+  # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
+  # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
+  clip_actions: true
+
+  finger_smooth_alpha: 1.0  # 1.0 = disabled
+
+eval:
+  interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)
+  spawn: "random"          # spawn config name in configs/eval/spawns/
+  record_video: true
+  record_plots: true
