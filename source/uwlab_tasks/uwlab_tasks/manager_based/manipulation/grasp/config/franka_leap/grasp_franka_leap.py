@@ -217,7 +217,6 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
             raise ValueError("distill_mode requires train_camera; scene.train_camera is None")
         camera_name = "train_camera"
 
-
     focal_length = cam_cfg.spawn.focal_length
     horizontal_aperture = cam_cfg.spawn.horizontal_aperture
     rendered_pc = RenderedSegPC(
@@ -227,6 +226,7 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
         num_downsample_points=2048,
         focal_length=focal_length,
         horizontal_aperture=horizontal_aperture,
+        include_entity_names=("robot", "grasp_object"),
     )
     if not hasattr(cfg.observations.policy, "seg_pc") or cfg.observations.policy.seg_pc is None:
         raise ValueError(

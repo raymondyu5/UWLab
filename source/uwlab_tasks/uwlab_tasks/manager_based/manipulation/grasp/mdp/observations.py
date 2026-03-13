@@ -18,6 +18,7 @@ from uwlab.utils.math import crop_points_to_bounds, fps_points
 # For SamplePC: sample from USD (same geometry as sim)
 from isaaclab.sim.utils import get_first_matching_child_prim
 from pxr import UsdPhysics
+from isaaclab.sensors.camera.utils import create_pointcloud_from_depth
 
 from ...reset_states.mdp import utils as reset_states_utils
 
@@ -275,61 +276,29 @@ class CachedSamplePC:
         self.mesh_init = True
 
 
-def _unproject_depth_to_pointcloud(
-    depth: torch.Tensor,
-    camera_pos_w: torch.Tensor,
-    camera_quat_w: torch.Tensor,
-    env_origins: torch.Tensor,
-    width: int,
-    height: int,
-    focal_length: float,
-    horizontal_aperture: float,
-    device: torch.device,
-) -> torch.Tensor:
-    """Unproject depth image to 3D points in env-local frame.
+MIN_POINTS_FOR_DOWNSAMPLE = 10
 
-    Args:
-        depth: (B, H, W, 1) depth (z along camera axis)
-        camera_pos_w: (B, 3) camera position in world
-        camera_quat_w: (B, 4) camera quaternion (w,x,y,z) in world
-        env_origins: (B, 3) env origins
-        width, height: image dimensions
-        focal_length, horizontal_aperture: pinhole params (mm)
 
-    Returns:
-        (B, N, 3) points in env-local frame, valid points first (zeros for padding)
-    """
-    import isaaclab.utils.math as math_utils
+def _resolve_prim_path_for_env(prim_path_pattern: str, env_index: int) -> str:
+    """Resolve {ENV_REGEX_NS} in prim_path to actual path for env_index."""
+    suffix = prim_path_pattern.split("{ENV_REGEX_NS}", 1)[-1].strip("/")
+    return f"/World/envs/env_{env_index}/{suffix}"
 
-    B, H, W = depth.shape[0], depth.shape[1], depth.shape[2]
-    fx = width * focal_length / horizontal_aperture
-    fy = fx
-    cx = (width - 1) / 2.0
-    cy = (height - 1) / 2.0
 
-    u = torch.arange(W, device=device, dtype=torch.float32)
-    v = torch.arange(H, device=device, dtype=torch.float32)
-    uu, vv = torch.meshgrid(u, v, indexing="xy")
-    uu = uu.reshape(-1)
-    vv = vv.reshape(-1)
-
-    depth_flat = depth.reshape(B, -1, 1)
-    valid = (depth_flat > 0.01) & (depth_flat < 1e4) & torch.isfinite(depth_flat)
-    valid = valid.squeeze(-1)
-
-    z_cam = depth_flat.squeeze(-1)
-    x_cam = (uu.unsqueeze(0) - cx) * z_cam / fx
-    y_cam = (vv.unsqueeze(0) - cy) * z_cam / fy
-
-    p_cam = torch.stack([x_cam, y_cam, z_cam], dim=-1)
-    p_world = math_utils.transform_points(p_cam, camera_pos_w, camera_quat_w)
-    p_local = p_world - env_origins.unsqueeze(1)
-
-    all_points = []
-    for i in range(B):
-        pts = p_local[i][valid[i]]
-        all_points.append(pts)
-    return all_points
+def _get_instance_id_to_labels(camera) -> dict:
+    """Extract idToLabels from camera instance segmentation info."""
+    info = camera.data.info
+    if info is None:
+        return {}
+    if isinstance(info, dict):
+        seg = info.get("instance_id_segmentation_fast", {})
+    else:
+        seg = {}
+        for d in info:
+            if isinstance(d, dict) and "instance_id_segmentation_fast" in d:
+                seg = d["instance_id_segmentation_fast"]
+                break
+    return seg.get("idToLabels", {}) if isinstance(seg, dict) else {}
 
 
 class RenderedSegPC:
@@ -337,6 +306,10 @@ class RenderedSegPC:
 
     Renders the scene from the train_camera (with depth) and unprojects to 3D points.
     Output format matches CachedSamplePC: (B, 3, num_downsample_points).
+
+    When include_entity_names is set, depth is masked by instance segmentation so only
+    pixels belonging to those scene entities (e.g. robot, grasp_object) are unprojected.
+    This excludes ground plane, table, and other background geometry.
     """
 
     def __init__(
@@ -347,6 +320,7 @@ class RenderedSegPC:
         num_downsample_points: int,
         focal_length: float,
         horizontal_aperture: float,
+        include_entity_names: tuple[str, ...] | None = None,
     ):
         self.camera_name = camera_name
         self.depth_key = depth_key
@@ -354,76 +328,99 @@ class RenderedSegPC:
         self.num_downsample_points = num_downsample_points
         self.focal_length = focal_length
         self.horizontal_aperture = horizontal_aperture
+        self.include_entity_names = include_entity_names or ()
         self._printed_msg = False
 
     def get_seg_pc(self, env):
         camera = env.scene[self.camera_name]
-        # Force render and sensor update so depth buffer is populated (headless depth can be stale)
+        device = env.device
+        B = env.num_envs
+
         if hasattr(env, "sim") and hasattr(env.sim, "render"):
             env.sim.render()
         if hasattr(camera, "_update_poses"):
-            camera._update_poses(torch.arange(env.num_envs, device=env.device))
-        depth = camera.data.output[self.depth_key]
-        if depth.dim() == 3:
-            depth = depth.unsqueeze(0)
-        if depth.shape[-1] == 1:
-            pass
-        else:
-            depth = depth.unsqueeze(-1)
+            camera._update_poses(torch.arange(B, device=device))
 
-        B, H, W = depth.shape[0], depth.shape[1], depth.shape[2]
-        camera_pos = getattr(camera.data, "pos_w", getattr(camera.data, "position_w", None))
-        camera_quat = getattr(camera.data, "quat_w", getattr(camera.data, "quat_w_world", None))
-        if camera_pos is None or camera_quat is None:
+        depth = camera.data.output[self.depth_key].clone()
+        depth = depth.unsqueeze(0) if depth.dim() == 3 else depth
+        depth = depth.unsqueeze(-1) if depth.shape[-1] != 1 else depth
+
+        if self.include_entity_names:
+            self._mask_depth_by_instance(env, camera, depth, B, device)
+
+        cam_data = camera.data
+        pos_w = getattr(cam_data, "pos_w", getattr(cam_data, "position_w", None))
+        if pos_w is None:
             raise AttributeError(
-                f"Camera {self.camera_name} must have pos_w/position_w and quat_w/quat_w_world in data"
+                f"Camera {self.camera_name} must have pos_w/position_w in data"
             )
-        if camera_pos.dim() == 1:
-            camera_pos = camera_pos.unsqueeze(0)
-            camera_quat = camera_quat.unsqueeze(0)
+        pos_w = pos_w.unsqueeze(0) if pos_w.dim() == 1 else pos_w
+        intrinsic_matrices = cam_data.intrinsic_matrices
+        quat_w_ros = cam_data.quat_w_ros
 
-        point_lists = _unproject_depth_to_pointcloud(
-            depth,
-            camera_pos,
-            camera_quat,
-            env.scene.env_origins,
-            W,
-            H,
-            self.focal_length,
-            self.horizontal_aperture,
-            env.device,
-        )
+        point_lists = []
+        for i in range(B):
+            pc_world = create_pointcloud_from_depth(
+                intrinsic_matrix=intrinsic_matrices[i],
+                depth=depth[i].squeeze(),
+                position=pos_w[i],
+                orientation=quat_w_ros[i],
+                device=device,
+            )
+            pc_local = pc_world - env.scene.env_origins[i]
+            valid = (pc_local.abs().sum(dim=1) > 1e-6) & torch.isfinite(pc_local).all(dim=1)
+            point_lists.append(pc_local[valid])
 
         batch_pcd = []
-        for i, pts in enumerate(point_lists):
-            if pts.shape[0] < 10:
-                pad = torch.zeros(
-                    self.num_downsample_points, 3, device=env.device, dtype=torch.float32
-                )
-                batch_pcd.append(pad.unsqueeze(0))
-                continue
+        pad_template = torch.zeros(
+            self.num_downsample_points, 3, device=device, dtype=torch.float32
+        )
+        for pts in point_lists:
             if self.pcd_crop_region is not None:
-                pts_batch = pts.unsqueeze(0)
-                cropped = crop_points_to_bounds(pts_batch, self.pcd_crop_region)
-                pts = cropped[0]
-                pts = pts[pts.abs().sum(dim=1) > 1e-6]
-            if pts.shape[0] < 10:
-                pad = torch.zeros(
-                    self.num_downsample_points, 3, device=env.device, dtype=torch.float32
-                )
-                batch_pcd.append(pad.unsqueeze(0))
-                continue
-            sampled = fps_points(pts.unsqueeze(0), self.num_downsample_points)
-            batch_pcd.append(sampled)
+                cropped = crop_points_to_bounds(pts.unsqueeze(0), self.pcd_crop_region)[0]
+                pts = cropped[cropped.abs().sum(dim=1) > 1e-6]
+            if pts.shape[0] < MIN_POINTS_FOR_DOWNSAMPLE:
+                batch_pcd.append(pad_template.clone().unsqueeze(0))
+            else:
+                batch_pcd.append(fps_points(pts.unsqueeze(0), self.num_downsample_points))
 
-        if len(batch_pcd) == 0:
-            out = torch.zeros(1, 3, self.num_downsample_points, device=env.device, dtype=torch.float32)
-        else:
+        if batch_pcd:
             out = torch.cat(batch_pcd, dim=0).permute(0, 2, 1)
+        else:
+            out = torch.zeros(1, 3, self.num_downsample_points, device=device, dtype=torch.float32)
 
         if not self._printed_msg:
-            print(f"[INFO] Using rendered point cloud from {self.camera_name} (distill_mode)")
+            filt = f", instance-filtered to {list(self.include_entity_names)}" if self.include_entity_names else ""
+            print(f"[INFO] Rendered point cloud from {self.camera_name} (distill_mode){filt}")
             self._printed_msg = True
 
         return out
+
+    def _mask_depth_by_instance(self, env, camera, depth, B, device):
+        """Mask depth to inf for pixels not belonging to include_entity_names."""
+        inst = camera.data.output["instance_id_segmentation_fast"]
+        inst = inst.unsqueeze(0) if inst.dim() == 3 else inst
+        inst = inst[..., :1] if inst.shape[-1] != 1 else inst
+        id_to_labels = _get_instance_id_to_labels(camera)
+
+        for i in range(B):
+            prefixes = []
+            for name in self.include_entity_names:
+                if isinstance(name, str):
+                    try:
+                        prefixes.append(_resolve_prim_path_for_env(env.scene[name].cfg.prim_path, i))
+                    except KeyError:
+                        pass
+            if not prefixes or not id_to_labels:
+                continue
+            allowed_ids = {
+                int(k) for k, path in id_to_labels.items()
+                if any(str(path).startswith(p) for p in prefixes)
+            }
+            if not allowed_ids:
+                continue
+            inst_i = inst[i].squeeze().to(torch.int64)
+            allowed_t = torch.tensor(list(allowed_ids), device=device, dtype=torch.int64)
+            mask = (inst_i.unsqueeze(-1) == allowed_t).any(dim=-1)
+            depth[i].squeeze(-1)[~mask] = float("inf")
 
