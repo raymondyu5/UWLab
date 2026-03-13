@@ -187,11 +187,9 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
 
 
 def _find_checkpoint(checkpoint_dir: str) -> str:
-    for name in ("best.ckpt", "latest.ckpt"):
-        path = os.path.join(checkpoint_dir, "checkpoints", name)
-        if os.path.isfile(path):
-            return path
-    raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}/checkpoints/")
+    path = os.path.join(checkpoint_dir, "checkpoints", "best.ckpt")
+    if os.path.isfile(path):
+        return path
 
 
 def _get_object_asset(env):
@@ -231,6 +229,13 @@ def _set_object_pose(env, x_offset: float, y_offset: float, yaw_offset: float,
 
 def _check_success(env) -> np.ndarray:
     return env.unwrapped.cfg.is_success(env.unwrapped).cpu().numpy()
+
+
+def _check_partial_success(env) -> np.ndarray:
+    if hasattr(env.unwrapped.cfg, "is_partial_success"):
+        return env.unwrapped.cfg.is_partial_success(env.unwrapped).cpu().numpy()
+    num_envs = env.unwrapped.num_envs
+    return np.zeros(num_envs, dtype=bool)
 
 
 def main():
@@ -366,13 +371,17 @@ def main():
                 )
 
                 success = bool(_check_success(env)[0])
+                partial_success = bool(_check_partial_success(env)[0])
 
-            logger.end_episode(success)
-            print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {'SUCCESS' if success else 'fail'}"
+            logger.end_episode(success, partial_success=partial_success)
+            status = "SUCCESS" if success else ("partial" if partial_success else "fail")
+            print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status}"
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
     results = logger.finalize()
     print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_episodes']})")
+    if results.get("n_partial_success", 0) > 0:
+        print(f"[play_bc] Partial success: {results['partial_success_rate']:.1%} ({results['n_partial_success']}/{results['n_episodes']})")
     print(f"[play_bc] Results saved to: {output_dir}")
 
     env.close()

@@ -100,6 +100,14 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         z_ok = (tip_z >= target_z - 0.05) & (tip_z <= target_z + POUR_Z_TOLERANCE)
         return (xy_dist < 0.08) & z_ok
 
+    def is_partial_success(self, env) -> torch.Tensor:
+        # Bottle lifted above 5cm
+        bottle = env.scene["grasp_object"]
+        
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins       # (N, 3)
+        lifted = bottle_pos[:, 2] > 0.05
+        return lifted
+
     def __post_init__(self):
         super().__post_init__()
 

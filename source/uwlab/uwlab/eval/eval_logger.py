@@ -63,11 +63,13 @@ class EvalLogger:
         if frame is not None and self.record_video:
             self._current["frames"].append(frame)
 
-    def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None):
+    def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
+                    partial_success: bool | None = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
         self._current["n_success"] = n_success
         self._current["n_total"] = n_total
+        self._current["partial_success"] = partial_success
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
@@ -86,6 +88,8 @@ class EvalLogger:
                 self._write_scatter_plot()
             else:
                 self._write_heatmap()
+            if any(e.get("partial_success") is not None for e in self._episodes):
+                self._write_partial_success_heatmap()
         return results
 
     def _write_results(self) -> dict:
@@ -111,6 +115,8 @@ class EvalLogger:
             if ep.get("n_success") is not None and ep.get("n_total") is not None:
                 rec["n_success"] = ep["n_success"]
                 rec["n_total"] = ep["n_total"]
+            if ep.get("partial_success") is not None:
+                rec["partial_success"] = ep["partial_success"]
             records.append(rec)
 
         summary = {
@@ -125,7 +131,10 @@ class EvalLogger:
         with open(out_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        print(f"[EvalLogger] {n_success}/{n_total} success ({100*success_rate:.1f}%) -> {out_path}")
+        msg = f"[EvalLogger] {n_success}/{n_total} success ({100*success_rate:.1f}%)"
+        if n_partial > 0:
+            msg += f", {n_partial} partial success ({100*partial_rate:.1f}%)"
+        print(f"{msg} -> {out_path}")
         return summary
 
     def _write_trajectory_plot(self):
@@ -208,6 +217,61 @@ class EvalLogger:
         plt.savefig(out_path, dpi=100, bbox_inches="tight")
         plt.close()
         print(f"[EvalLogger] heatmap -> {out_path}")
+
+    def _write_partial_success_heatmap(self):
+        """Grid plot of partial success rate by spawn position."""
+        named_episodes = [
+            e for e in self._episodes
+            if e["spawn_name"] is not None and e.get("partial_success") is not None
+        ]
+        if not named_episodes:
+            return
+
+        spawn_results: Dict[str, List[bool]] = {}
+        spawn_xy: Dict[str, Tuple[float, float]] = {}
+        for ep in named_episodes:
+            name = ep["spawn_name"]
+            if name not in spawn_results:
+                spawn_results[name] = []
+                pose = ep["spawn_pose"] or {}
+                spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
+            spawn_results[name].append(ep["partial_success"])
+
+        xs = sorted(set(v[0] for v in spawn_xy.values()))
+        ys = sorted(set(v[1] for v in spawn_xy.values()))
+        grid = np.full((len(xs), len(ys)), np.nan)
+        labels = [["" for _ in ys] for _ in xs]
+
+        for name, results in spawn_results.items():
+            x, y = spawn_xy[name]
+            i, j = xs.index(x), ys.index(y)
+            n_partial = sum(results)
+            n_tot = len(results)
+            r = n_partial / n_tot if n_tot > 0 else 0.0
+            labels[i][j] = f"{r:.0%}\n({n_partial}/{n_tot})"
+            grid[i, j] = r
+
+        fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
+        im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
+
+        for i in range(len(xs)):
+            for j in range(len(ys)):
+                if labels[i][j]:
+                    ax.text(j, i, labels[i][j], ha="center", va="center",
+                            fontsize=10, fontweight="bold")
+
+        ax.set_xticks(range(len(ys)))
+        ax.set_xticklabels([f"y={v:.3f}" for v in ys])
+        ax.set_yticks(range(len(xs)))
+        ax.set_yticklabels([f"x={v:.3f}" for v in xs])
+        ax.set_title("Partial success rate by spawn position")
+        plt.colorbar(im, ax=ax, label="partial success rate")
+
+        plt.tight_layout()
+        out_path = os.path.join(self.output_dir, "heatmap_partial_success.png")
+        plt.savefig(out_path, dpi=100, bbox_inches="tight")
+        plt.close()
+        print(f"[EvalLogger] partial success heatmap -> {out_path}")
 
     def _write_scatter_plot(self):
         points = self._scatter_points
