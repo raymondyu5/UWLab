@@ -88,6 +88,14 @@ parser.add_argument(
     action="store_true",
     help="Print debug info when reset occurs (episode_length_buf, max_episode_length, etc.).",
 )
+parser.add_argument(
+    "--sim_type",
+    type=str,
+    choices=["eval", "distill"],
+    default="eval",
+    help="eval: use eval mode. distill: use distill mode.",
+)
+
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -113,6 +121,7 @@ from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_frank
     ARM_RESET,
     HAND_RESET,
     EVAL_MODE,
+    DISTILL_MODE,
     parse_franka_leap_env_cfg,
 )
 from uwlab_tasks.manager_based.manipulation.grasp.mdp.events import reset_robot_joints
@@ -380,15 +389,13 @@ def reset_to_real_joints(env, first_real_obs, num_warmup_steps: int = 10, hold_f
         obs_after_reset, _, _, _, _ = env.step(hold)
     return obs_after_reset
 
-
-def get_synthetic_seg_pc(obs) -> np.ndarray:
+def get_seg_pc_from_obs(obs) -> np.ndarray:
     """Get seg_pc from env observation."""
     seg_pc = obs["policy"]["seg_pc"][0]
     pc = seg_pc.detach().cpu().numpy()
     if pc.shape[0] == 3:
         pc = pc.T
     return np.asarray(pc, dtype=np.float64)
-
 
 def draw_pointclouds_usd_points(
     real_pc: np.ndarray,
@@ -648,13 +655,16 @@ def main():
 
     real_pcd_latency = args_cli.real_pcd_latency # 4  # 10 steps for real pcd to be ready
 
+   
     env_cfg = parse_franka_leap_env_cfg(
         task,
-        EVAL_MODE,
+        run_mode = EVAL_MODE if args_cli.sim_type == "eval" else DISTILL_MODE,
         device=args_cli.device,
         num_envs=1,
         use_fabric=not args_cli.disable_fabric,
     )
+    if args_cli.sim_type == "distill":
+        env_cfg.distill_camera_name = args_cli.camera
     # Account for: (1) warmup in env.reset(), (2) warmup in reset_to_real_joints,
     # (3) 1 hold step for frame 0 overlay render, (4) num_steps trajectory steps.
     num_warmup_steps = getattr(env_cfg, "num_warmup_steps", 10)
@@ -705,7 +715,7 @@ def main():
     
     with torch.inference_mode():
         # Frame 0: sim at real_obs[0] after reset, render against real_pcds[0]
-        sim_pc_0 = get_synthetic_seg_pc(obs)
+        sim_pc_0 = get_seg_pc_from_obs(obs)
         real_pc_0 = get_real_pc_for_frame(
             traj_obs, pointclouds, real_pcd_latency, env.unwrapped.device, num_downsample
         )
@@ -766,7 +776,7 @@ def main():
                                 if term is not None and hasattr(term, "data"):
                                     val = term.data[0].item() if term.data.numel() > 0 else None
                                     print(f"  term[{name}]={val}")
-            sim_pc = get_synthetic_seg_pc(obs)
+            sim_pc = get_seg_pc_from_obs(obs)
 
             
             real_pc = get_real_pc_for_frame(

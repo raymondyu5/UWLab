@@ -274,3 +274,156 @@ class CachedSamplePC:
 
         self.mesh_init = True
 
+
+def _unproject_depth_to_pointcloud(
+    depth: torch.Tensor,
+    camera_pos_w: torch.Tensor,
+    camera_quat_w: torch.Tensor,
+    env_origins: torch.Tensor,
+    width: int,
+    height: int,
+    focal_length: float,
+    horizontal_aperture: float,
+    device: torch.device,
+) -> torch.Tensor:
+    """Unproject depth image to 3D points in env-local frame.
+
+    Args:
+        depth: (B, H, W, 1) depth (z along camera axis)
+        camera_pos_w: (B, 3) camera position in world
+        camera_quat_w: (B, 4) camera quaternion (w,x,y,z) in world
+        env_origins: (B, 3) env origins
+        width, height: image dimensions
+        focal_length, horizontal_aperture: pinhole params (mm)
+
+    Returns:
+        (B, N, 3) points in env-local frame, valid points first (zeros for padding)
+    """
+    import isaaclab.utils.math as math_utils
+
+    B, H, W = depth.shape[0], depth.shape[1], depth.shape[2]
+    fx = width * focal_length / horizontal_aperture
+    fy = fx
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
+
+    u = torch.arange(W, device=device, dtype=torch.float32)
+    v = torch.arange(H, device=device, dtype=torch.float32)
+    uu, vv = torch.meshgrid(u, v, indexing="xy")
+    uu = uu.reshape(-1)
+    vv = vv.reshape(-1)
+
+    depth_flat = depth.reshape(B, -1, 1)
+    valid = (depth_flat > 0.01) & (depth_flat < 1e4) & torch.isfinite(depth_flat)
+    valid = valid.squeeze(-1)
+
+    z_cam = depth_flat.squeeze(-1)
+    x_cam = (uu.unsqueeze(0) - cx) * z_cam / fx
+    y_cam = (vv.unsqueeze(0) - cy) * z_cam / fy
+
+    p_cam = torch.stack([x_cam, y_cam, z_cam], dim=-1)
+    p_world = math_utils.transform_points(p_cam, camera_pos_w, camera_quat_w)
+    p_local = p_world - env_origins.unsqueeze(1)
+
+    all_points = []
+    for i in range(B):
+        pts = p_local[i][valid[i]]
+        all_points.append(pts)
+    return all_points
+
+
+class RenderedSegPC:
+    """Point cloud from depth camera unprojection. Used in distill_mode for policy distillation.
+
+    Renders the scene from the train_camera (with depth) and unprojects to 3D points.
+    Output format matches CachedSamplePC: (B, 3, num_downsample_points).
+    """
+
+    def __init__(
+        self,
+        camera_name: str,
+        depth_key: str,
+        pcd_crop_region: list[float] | None,
+        num_downsample_points: int,
+        focal_length: float,
+        horizontal_aperture: float,
+    ):
+        self.camera_name = camera_name
+        self.depth_key = depth_key
+        self.pcd_crop_region = pcd_crop_region
+        self.num_downsample_points = num_downsample_points
+        self.focal_length = focal_length
+        self.horizontal_aperture = horizontal_aperture
+        self._printed_msg = False
+
+    def get_seg_pc(self, env):
+        camera = env.scene[self.camera_name]
+        # Force render and sensor update so depth buffer is populated (headless depth can be stale)
+        if hasattr(env, "sim") and hasattr(env.sim, "render"):
+            env.sim.render()
+        if hasattr(camera, "_update_poses"):
+            camera._update_poses(torch.arange(env.num_envs, device=env.device))
+        depth = camera.data.output[self.depth_key]
+        if depth.dim() == 3:
+            depth = depth.unsqueeze(0)
+        if depth.shape[-1] == 1:
+            pass
+        else:
+            depth = depth.unsqueeze(-1)
+
+        B, H, W = depth.shape[0], depth.shape[1], depth.shape[2]
+        camera_pos = getattr(camera.data, "pos_w", getattr(camera.data, "position_w", None))
+        camera_quat = getattr(camera.data, "quat_w", getattr(camera.data, "quat_w_world", None))
+        if camera_pos is None or camera_quat is None:
+            raise AttributeError(
+                f"Camera {self.camera_name} must have pos_w/position_w and quat_w/quat_w_world in data"
+            )
+        if camera_pos.dim() == 1:
+            camera_pos = camera_pos.unsqueeze(0)
+            camera_quat = camera_quat.unsqueeze(0)
+
+        point_lists = _unproject_depth_to_pointcloud(
+            depth,
+            camera_pos,
+            camera_quat,
+            env.scene.env_origins,
+            W,
+            H,
+            self.focal_length,
+            self.horizontal_aperture,
+            env.device,
+        )
+
+        batch_pcd = []
+        for i, pts in enumerate(point_lists):
+            if pts.shape[0] < 10:
+                pad = torch.zeros(
+                    self.num_downsample_points, 3, device=env.device, dtype=torch.float32
+                )
+                batch_pcd.append(pad.unsqueeze(0))
+                continue
+            if self.pcd_crop_region is not None:
+                pts_batch = pts.unsqueeze(0)
+                cropped = crop_points_to_bounds(pts_batch, self.pcd_crop_region)
+                pts = cropped[0]
+                pts = pts[pts.abs().sum(dim=1) > 1e-6]
+            if pts.shape[0] < 10:
+                pad = torch.zeros(
+                    self.num_downsample_points, 3, device=env.device, dtype=torch.float32
+                )
+                batch_pcd.append(pad.unsqueeze(0))
+                continue
+            sampled = fps_points(pts.unsqueeze(0), self.num_downsample_points)
+            batch_pcd.append(sampled)
+
+        if len(batch_pcd) == 0:
+            out = torch.zeros(1, 3, self.num_downsample_points, device=env.device, dtype=torch.float32)
+        else:
+            out = torch.cat(batch_pcd, dim=0).permute(0, 2, 1)
+
+        if not self._printed_msg:
+            print(f"[INFO] Using rendered point cloud from {self.camera_name} (distill_mode)")
+            self._printed_msg = True
+
+        return out
+

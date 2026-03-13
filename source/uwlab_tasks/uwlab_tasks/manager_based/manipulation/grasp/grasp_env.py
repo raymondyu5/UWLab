@@ -58,7 +58,7 @@ class GraspSceneCfg(InteractiveSceneCfg):
         update_period=0.03,
         height=480,
         width=480,
-        data_types=["rgb"],
+        data_types=["rgb", "depth"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0,
             focus_distance=400.0,
@@ -81,7 +81,7 @@ class GraspSceneCfg(InteractiveSceneCfg):
         update_period=0.03,
         height=480,
         width=480,
-        data_types=["rgb"],
+        data_types=["rgb", "depth"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0,
             focus_distance=400.0,

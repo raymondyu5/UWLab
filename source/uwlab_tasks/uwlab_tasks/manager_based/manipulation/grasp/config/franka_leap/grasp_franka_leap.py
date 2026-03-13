@@ -18,7 +18,14 @@ import isaaclab.utils.math as math_utils
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from ... import grasp_env
-from ...mdp import ee_pose_w, reset_robot_joints, reset_camera_pose, set_fixed_camera_view
+from ...mdp import (
+    ee_pose_w,
+    reset_robot_joints,
+    reset_camera_pose,
+    set_fixed_camera_view,
+    RenderedSegPC,
+)
+from isaaclab.sensors import CameraCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab_tasks.utils import parse_env_cfg
@@ -55,9 +62,9 @@ HAND_NUM_POINTS = 64
 
 # Valid values for env_cfg.run_mode.
 EVAL_MODE = "eval_mode"
-COLLECT_MODE = "collect_mode"
+DISTILL_MODE = "distill_mode"
 RL_MODE = "rl_mode"
-RUN_MODES = (EVAL_MODE, COLLECT_MODE, RL_MODE)
+RUN_MODES = (EVAL_MODE, DISTILL_MODE, RL_MODE)
 
 @configclass
 class FrankaLeapGraspSceneCfg(grasp_env.GraspSceneCfg):
@@ -69,9 +76,15 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
     num_warmup_steps: int = 10
-    # Runtime mode: "rl_mode" | "collect_mode" | "eval_mode". "rl_mode" disables scene cameras and their reset events.
+    # Runtime mode: "rl_mode" | "distill_mode" | "eval_mode". "rl_mode" disables scene cameras and their reset events.
     run_mode: str = "eval_mode"
     pcd_crop_region: list[float] = PCD_CROP_REGION_CL8384200N1
+    # When True in distill_mode, use fixed_camera for RenderedSegPC instead of train_camera.
+    # Useful for overlay scripts where train_camera depth may fail (e.g. headless).
+    distill_use_fixed_camera: bool = False
+    # When set in distill_mode, use this exact camera for RenderedSegPC (e.g. "fixed_camera").
+    # Overrides distill_use_fixed_camera. Use the same camera as capture for overlay scripts.
+    distill_camera_name: str | None = None
 
     def warmup_action(self, env) -> torch.Tensor:
         """Hold at reset joint position — safe no-op for joint absolute control."""
@@ -185,17 +198,64 @@ class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):
         return torch.cat([pos, quat, hand_joints], dim=-1)
 
 
+def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
+    """Configure env for distill_mode: camera with depth, seg_pc from RenderedSegPC.
+    Uses fixed_camera when distill_use_fixed_camera=True or distill_camera_name is set (e.g. overlay scripts)."""
+    camera_name = getattr(cfg, "distill_camera_name", None)
+    if camera_name is not None:
+        if not hasattr(cfg.scene, camera_name) or getattr(cfg.scene, camera_name) is None:
+            raise ValueError(f"distill_camera_name={camera_name!r} but scene has no such camera")
+        cam_cfg = getattr(cfg.scene, camera_name)
+    elif getattr(cfg, "distill_use_fixed_camera", False):
+        cam_cfg = cfg.scene.fixed_camera
+        if cam_cfg is None:
+            raise ValueError("distill_use_fixed_camera requires fixed_camera; scene.fixed_camera is None")
+        camera_name = "fixed_camera"
+    else:
+        cam_cfg = cfg.scene.train_camera
+        if cam_cfg is None:
+            raise ValueError("distill_mode requires train_camera; scene.train_camera is None")
+        camera_name = "train_camera"
+
+
+    focal_length = cam_cfg.spawn.focal_length
+    horizontal_aperture = cam_cfg.spawn.horizontal_aperture
+    rendered_pc = RenderedSegPC(
+        camera_name=camera_name,
+        depth_key="depth",
+        pcd_crop_region=cfg.pcd_crop_region,
+        num_downsample_points=2048,
+        focal_length=focal_length,
+        horizontal_aperture=horizontal_aperture,
+    )
+    if not hasattr(cfg.observations.policy, "seg_pc") or cfg.observations.policy.seg_pc is None:
+        raise ValueError(
+            "distill_mode requires a task that defines seg_pc (e.g. GraspPinkCup, PourBottle)"
+        )
+    cfg.observations.policy.seg_pc = ObsTerm(func=rendered_pc.get_seg_pc)
+
+
+def _apply_rl_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
+    """Configure env for rl_mode: disable scene cameras and their reset events."""
+    cfg.scene.train_camera = None
+    cfg.scene.fixed_camera = None
+    if hasattr(cfg.events, "reset_camera"):
+        cfg.events.reset_camera = None
+    if hasattr(cfg.events, "reset_fixed_camera"):
+        cfg.events.reset_fixed_camera = None
+
+
 def parse_franka_leap_env_cfg(task: str, run_mode: str, **kwargs) -> FrankaLeapGraspEnvCfg:
     """Parse env config for Franka-LEAP grasp tasks. 
     
     Args:
         task: The name of the environment.
-        run_mode: The runtime mode of the environment (RL_MODE, COLLECT_MODE, EVAL_MODE).
+        run_mode: The runtime mode of the environment (RL_MODE, DISTILL_MODE, EVAL_MODE).
         **kwargs: Additional arguments to pass to parse_env_cfg.
 
     Returns:
         The parsed environment configuration.
-    run_mode is required (RL_MODE, COLLECT_MODE, EVAL_MODE)."""
+    run_mode is required (RL_MODE, DISTILL_MODE, EVAL_MODE)."""
 
     assert run_mode in RUN_MODES, f"run_mode must be one of {RUN_MODES}, got {run_mode!r}"
     env_cfg = parse_env_cfg(task, **kwargs)
@@ -210,27 +270,23 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
     `warmup_action(env)` to allow sim/observations to settle before the first
     observation is returned to the caller.
 
-    Runtime options: set env_cfg.run_mode to EVAL_MODE | COLLECT_MODE | RL_MODE.
+    Runtime options: set env_cfg.run_mode to EVAL_MODE | DISTILL_MODE | RL_MODE.
     "rl_mode" disables scene cameras (train_camera, fixed_camera) and their reset events.
     """
 
     def __init__(self, cfg: FrankaLeapGraspEnvCfg, **kwargs):
-        # apply runtime variables to the environment given the mode (eval, rl, or collect)
+        # apply runtime variables to the environment given the mode (eval, rl, or distill)
         run_mode = cfg.run_mode
         self._apply_run_mode(cfg, run_mode) 
         super().__init__(cfg, **kwargs)
 
     def _apply_run_mode(self, cfg: FrankaLeapGraspEnvCfg, run_mode: str) -> None:
-        """Apply run_mode to env config. rl_mode disables scene cameras and their reset events."""
+        """Apply run_mode to env config. rl_mode disables scene cameras. distill_mode uses depth-rendered seg_pc."""
         assert run_mode in RUN_MODES, f"run_mode must be one of {RUN_MODES}, got {run_mode!r}"
         if run_mode == RL_MODE:
-            # disable all the cameras for rl_mode
-            cfg.scene.train_camera = None
-            cfg.scene.fixed_camera = None
-            if hasattr(cfg.events, "reset_camera"):
-                cfg.events.reset_camera = None
-            if hasattr(cfg.events, "reset_fixed_camera"):
-                cfg.events.reset_fixed_camera = None
+            _apply_rl_mode(cfg)
+        elif run_mode == DISTILL_MODE:
+            _apply_distill_mode(cfg)
 
     def reset(self, *args, **kwargs):
         # Run the standard reset behavior (events, managers, etc.).

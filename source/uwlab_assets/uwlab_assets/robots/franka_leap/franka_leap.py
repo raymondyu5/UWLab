@@ -105,8 +105,8 @@ FRANKA_LEAP_HAND_ACTUATOR_CFG = {
         damping=1.0,
         armature=0.001,
         friction=0.2,
-        velocity_limit=8.48,
-        effort_limit=0.95,
+        velocity_limit_sim=8.48,
+        effort_limit_sim=0.95,
     ),
 }
 

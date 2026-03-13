@@ -7,6 +7,8 @@ Usage (inside container):
         checkpoint=/path/to/outputs/2026-03-04/12-00-00 \\
         record_video=true
 
+./uwlab.sh -p scripts/eval/play_bc.py --eval_cfg configs/eval/bottle_pour_bc.yaml --enable_cameras --record_video --checkpoint logs/bc_cfm_pcd_bourbon_0312 --headless
+
 The checkpoint dir must contain:
     .hydra/config.yaml   (saved by Hydra at train time)
     checkpoints/best.ckpt (or latest.ckpt)
