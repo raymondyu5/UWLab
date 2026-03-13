@@ -50,6 +50,18 @@ class MultiPCDObsEncoder(ModuleAttrMixin):
         self.key_shape_map = key_shape_map
         self.shape_meta = shape_meta
 
+    def encode_pcd_only(self, obs_dict: dict) -> torch.Tensor:
+        """Encode only pcd keys. Input: {key: (B, 3, N)}. Returns (B, pcd_feat_dim)."""
+        device = next(self.parameters()).device
+        features = []
+        for key in self.pcd_keys:
+            pcd = obs_dict[key][:, :3].to(device, non_blocking=True)
+            features.append(self.key_model_map[key](pcd))
+        if not features:
+            batch = next(iter(obs_dict.values()))
+            return torch.zeros(batch.shape[0], 0, device=device)
+        return torch.cat(features, dim=-1)
+
     def forward(self, obs_dict: dict) -> torch.Tensor:
         device = next(self.parameters()).device
         features = []

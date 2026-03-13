@@ -1,60 +1,101 @@
 # Eval Scripts
 
+## Which script to use?
+
+| Checkpoint format | Script |
+|---|---|
+| New (Hydra-trained, has `.hydra/config.yaml` next to `checkpoints/`) | `play_bc.py` |
+| Legacy (IsaacLab-trained, has `ckpt["state_dicts"]["ema_model"]`) | `play_bc_legacy.py` |
+
+New checkpoints come from `scripts/imitation_learning/cfm_pcd/train_cfm_pcd.py`.
+Legacy checkpoints came from the old IsaacLab training pipeline.
+
+---
+
+## play_bc.py
+
+Evaluates a new-format checkpoint using a YAML eval config.
+
+### Usage
+
+Via SLURM (recommended):
+```bash
+sbatch commands/uwlab/eval/<eval_script>.sh
+```
+
+Inside the container, basic run:
+```bash
+./uwlab.sh -p scripts/eval/play_bc.py \
+    --eval_cfg configs/eval/bottle_grasp_bc.yaml \
+    --headless
+```
+
+With checkpoint override, video recording, and multiple envs:
+```bash
+./uwlab.sh -p scripts/eval/play_bc.py \
+    --eval_cfg configs/eval/bottle_grasp_bc.yaml \
+    checkpoint=logs/bc_cfm_pcd_bourbon_0312_random_resets \
+    record_video=true \
+    num_envs=4 \
+    --enable_cameras \
+    --headless
+```
+
+Key=value overrides (e.g. `checkpoint=...`, `record_video=true`, `num_envs=4`) are applied
+on top of the eval config yaml. `--enable_cameras` and `--headless` are Isaac Sim launcher
+args and must use the `--flag` form.
+
+### Eval config
+
+Eval configs live in `configs/eval/*.yaml`. Key fields:
+
+```yaml
+task_id: UW-FrankaLeap-GraspBottle-IkRel-v0
+checkpoint: logs/bc_cfm_pcd_grasp   # path to hydra run dir
+obs_keys: [ee_pose, hand_joint_pos] # override training obs_keys if needed
+num_envs: 1
+action_horizon: 1
+num_warmup_steps: 5
+spawn: cardinal_3x3                 # spawn config from configs/eval/spawns/
+record_video: true
+```
+
+`obs_keys`, `image_keys`, `downsample_points`, and all policy arch params are loaded
+automatically from the checkpoint's `.hydra/config.yaml`. Only override `obs_keys` if
+you need to evaluate with a different observation set than training.
+
+### Output
+
+Saved to `<checkpoint_dir>/../eval/<eval_config_stem>/<checkpoint_basename>/`:
+- `results.json` — success rate, per-episode outcomes
+- `trajectories.png` — EE xyz trajectories colored by success
+- `videos/episode_NNN_{success,fail}.mp4` — if `record_video: true`
+
+---
+
 ## play_bc_legacy.py
 
-Deploys an IsaacLab-format BC checkpoint (CFMPCDPolicy) inside a UWLab environment.
+Deploys a legacy IsaacLab-format checkpoint. All args are passed on the CLI
+(no eval config yaml). Architecture params are fixed to the standard arch
+used for those checkpoints and are not read from the checkpoint cfg.
 
 ### Checkpoint format
 
-IsaacLab checkpoints differ from UWLab's flat format:
 - `ckpt["state_dicts"]["ema_model"]` — model weights
-- `ckpt["cfg"]` — OmegaConf DictConfig embedded at save time (contains `shape_meta`, `horizon`, `n_obs_steps`, etc.)
+- `ckpt["cfg"]` — OmegaConf DictConfig embedded at save time
 
-### Dependencies inside the container
+### Usage
 
-The Isaac Sim container does not include `dill`, `imageio`, or `diffusion_policy`. Install them once on the host:
-
+Via SLURM (recommended):
 ```bash
-pip install -r third_party/requirements.txt --target third_party/pip_packages
+sbatch commands/uwlab/eval/eval_bottle_grasp_mini18.sh
 ```
 
-`third_party/pip_packages/` is gitignored. The script adds it to `sys.path` automatically.
-`diffusion_policy` lives at `third_party/diffusion_policy/` (tracked in git).
-
-### Running inside the container
-
-**Step 1**: Enter the Apptainer container (run from the host, outside the container):
-```bash
-export UWLAB_BASE=/gscratch/weirdlab/raymond/uwlab_docker
-apptainer exec --nv \
-  --bind /gscratch/weirdlab/raymond/UWLab/source:/workspace/uwlab/source \
-  --bind /gscratch/weirdlab/raymond/UWLab/scripts:/workspace/uwlab/scripts \
-  --bind /gscratch/weirdlab/raymond/UWLab/assets:/workspace/uwlab/assets \
-  --bind /gscratch/weirdlab/raymond/UWLab/third_party:/workspace/uwlab/third_party \
-  --bind /gscratch/weirdlab/raymond/UWLab/logs:/workspace/uwlab/logs \
-  --bind $UWLAB_BASE/isaac-cache-kit:/isaac-sim/kit/cache \
-  --bind $UWLAB_BASE/isaac-sim-data:/isaac-sim/kit/data \
-  --bind $UWLAB_BASE/isaac-cache-ov:/root/.cache/ov \
-  --bind $UWLAB_BASE/isaac-cache-pip:/root/.cache/pip \
-  --bind $UWLAB_BASE/isaac-cache-gl:/root/.cache/nvidia/GLCache \
-  --bind $UWLAB_BASE/isaac-cache-compute:/root/.nv/ComputeCache \
-  --bind $UWLAB_BASE/outputs:/workspace/uwlab/outputs \
-  --bind $UWLAB_BASE/data_storage:/workspace/uwlab/data_storage \
-  --pwd /workspace/uwlab \
-  $UWLAB_BASE/uw-lab_latest.sif bash
-```
-
-**Step 2**: Inside the container, unset conda env vars so `uwlab.sh` uses Isaac Sim python:
-```bash
-unset CONDA_PREFIX
-unset CONDA_DEFAULT_ENV
-```
-
-**Step 3**: Run the eval script:
+Or inside the container:
 ```bash
 ./uwlab.sh -p scripts/eval/play_bc_legacy.py \
-    --checkpoint /workspace/uwlab/logs/cup_pick_h4 \
-    --task UW-FrankaLeap-GraspPinkCup-IkRel-v0 \
+    --checkpoint logs/real/mini_18/cfm/pcd_cfm/horizon_4_nobs_1 \
+    --task UW-FrankaLeap-GraspBottle-IkRel-v0 \
     --obs_keys joint_pos \
     --num_envs 1 \
     --num_episodes 10 \
@@ -62,22 +103,27 @@ unset CONDA_DEFAULT_ENV
     --headless
 ```
 
-Add `--record_video --enable_cameras` to save per-episode MP4s from `fixed_camera`.
-
-### Why `IkRel` and not `JointAbs`?
-
-The `cup_pick` policy was trained with IK-delta actions:
-- 6D EE delta (arm) + 16D hand joint absolute = 22D total
-- Use `UW-FrankaLeap-GraspPinkCup-IkRel-v0`, NOT `JointAbs`
+Add `--record_video --enable_cameras` to save per-episode MP4s.
 
 ### Obs key mapping
 
-The old IsaacLab policy used `joint_positions(7) + gripper_position(16) = 23D agent_pos`.
-In UWLab the env returns this as a single `joint_pos` key (23D). Pass `--obs_keys joint_pos`.
+Legacy policies used `joint_positions(7) + gripper_position(16) = 23D agent_pos`,
+exposed as a single `joint_pos` key in UWLab. Pass `--obs_keys joint_pos`.
+
+Newer legacy policies (pour) used `ee_pose(7) + hand_joint_pos(16)`:
+pass `--obs_keys ee_pose hand_joint_pos`.
 
 ### Output
 
-Results are saved to `<checkpoint>/eval_legacy/` (override with `--output_dir`):
+Saved to `<checkpoint>/eval_legacy/` (override with `--output_dir`):
 - `results.json` — success rate, per-episode outcomes
 - `trajectories.png` — EE xyz trajectories colored by success
-- `videos/episode_NNN_{success,fail}.mp4` — written per-episode as they complete (if `--record_video`)
+- `videos/episode_NNN_{success,fail}.mp4` — written per-episode as they complete
+
+---
+
+## Running inside the container manually
+
+All SLURM scripts use `commands/uwlab/run_in_container.sh` which handles all bind
+mounts and env setup. To run interactively, see the canonical apptainer command in
+`~/.claude/projects/.../memory/MEMORY.md` or any of the SLURM scripts.

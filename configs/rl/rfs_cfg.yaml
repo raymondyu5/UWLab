@@ -36,8 +36,6 @@ rfs:
 
   finger_smooth_alpha: 1.0  # 1.0 = disabled
 
-  num_warmup_steps: 10
-
 eval:
   interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)
   spawn: "cardinal_3x3"    # spawn config name in configs/eval/spawns/

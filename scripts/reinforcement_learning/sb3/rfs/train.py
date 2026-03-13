@@ -136,23 +136,20 @@ class WandbRewardTermCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         if wandb.run is None:
             return
-        try:
-            mgr = self._isaac_env.unwrapped.reward_manager
-            log_dict = {
-                f"rewards/{name}": val.mean().item()
-                for name, val in mgr.episode_sums.items()
-            }
-            for name, term_cfg in mgr._term_cfgs.items():
-                func = getattr(term_cfg, "func", None)
-                obj = getattr(func, "__self__", None)
-                if obj is not None and hasattr(obj, "_component_sums") and obj._component_count > 0:
-                    for comp, total in obj._component_sums.items():
-                        log_dict[f"rewards/{name}/{comp}"] = total / obj._component_count
-                    obj._component_sums.clear()
-                    obj._component_count = 0
-            wandb.log(log_dict, step=self.num_timesteps)
-        except Exception:
-            pass
+        mgr = self._isaac_env.unwrapped.reward_manager
+        log_dict = {
+            f"rewards/{name}": val.mean().item()
+            for name, val in mgr._episode_sums.items()
+        }
+        for name, term_cfg in zip(mgr._term_names, mgr._term_cfgs):
+            func = getattr(term_cfg, "func", None)
+            obj = getattr(func, "__self__", None)
+            if obj is not None and hasattr(obj, "_component_sums") and obj._component_count > 0:
+                for comp, total in obj._component_sums.items():
+                    log_dict[f"rewards/{name}/{comp}"] = total / obj._component_count
+                obj._component_sums.clear()
+                obj._component_count = 0
+        wandb.log(log_dict, step=self.num_timesteps)
 
 
 class WandbOutputFormat(KVWriter):
@@ -255,7 +252,6 @@ def main():
         residual_scale=rfs_cfg["residual_scale"],
         clip_actions=rfs_cfg["clip_actions"],
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        num_warmup_steps=rfs_cfg["num_warmup_steps"],
     )
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)

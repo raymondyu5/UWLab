@@ -214,7 +214,6 @@ class RFSWrapper:
         residual_scale: float = 0.1,
         clip_actions: bool = True,
         finger_smooth_alpha: float = 0.3,
-        num_warmup_steps: int = 10,
     ):
         self.env = env
         self.unwrapped = env.unwrapped
@@ -222,7 +221,6 @@ class RFSWrapper:
         self.num_envs = env.unwrapped.num_envs
         self.residual_step = residual_step
         self.clip_actions = clip_actions
-        self.num_warmup_steps = num_warmup_steps
         self.residual_scale = residual_scale
 
         self.noise_dims = noise_dims
@@ -350,11 +348,6 @@ class RFSWrapper:
         obs, info = self.env.reset(**kwargs)
         self.last_obs = obs
         self._ep_rewards.zero_()
-
-        warmup_act = self.env.unwrapped.cfg.warmup_action(self.env.unwrapped)
-        for _ in range(self.num_warmup_steps):
-            obs, _, _, _, _ = self.env.step(warmup_act)
-        self.last_obs = obs
 
         if self.finger_filter is not None:
             self.finger_filter.reset()

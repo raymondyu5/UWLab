@@ -53,7 +53,7 @@ class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
         ),
         spawn=sim_utils.UsdFileCfg(
             usd_path=BOTTLE_USD,
-            scale=(1.0, 1.0, 1.0),
+            scale=(1.1, 1.1, 1.1),
             activate_contact_sensors=False,
             rigid_props=RigidBodyPropertiesCfg(
                 kinematic_enabled=False,

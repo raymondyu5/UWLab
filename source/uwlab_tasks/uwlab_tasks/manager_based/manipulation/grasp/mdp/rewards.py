@@ -394,6 +394,7 @@ class PourReward:
 
         r_approach = self.finger2object_rewards(env)
         r_contact = self.object2fingercontact_rewards(env)
+        r_lift = self.lift_to_intermediate_rewards(env)
         r_cap = self.cap_to_target_rewards(env)
         r_orientation = self.pour_orientation_rewards(env)
         r_link6 = self.penalty_contact(env)
@@ -405,6 +406,7 @@ class PourReward:
 
         final = (r_approach * 0.30
                  + r_contact * 0.3
+                 + r_lift * 0.3
                  + r_cap * 1.0
                  + r_orientation * 0.5
                  + r_link6
@@ -416,6 +418,7 @@ class PourReward:
         components = {
             "approach": r_approach.mean().item(),
             "contact": r_contact.mean().item(),
+            "lift": r_lift.mean().item(),
             "cap": r_cap.mean().item(),
             "orientation": r_orientation.mean().item(),
             "link6_penalty": r_link6.mean().item(),
@@ -447,16 +450,35 @@ class PourReward:
         finger_rewards_scale = (torch.sum(self.contact_or_not, dim=1) >= 2).int()
         return torch.sum(self.contact_or_not.to(torch.float32), dim=1) + finger_rewards_scale * 1.0
 
+    def lift_to_intermediate_rewards(self, env):
+        """Reward lifting cap toward intermediate height (5cm above cup rim), gated by >=3 finger contacts."""
+        gate = (torch.sum(self.contact_or_not, dim=1) >= 3).float()
+        self._compute_tip_pos()
+        target_z = self.cup_top_z + 0.05
+        dist_z = torch.abs(self.tip_pos[:, 2] - target_z)
+        reward = torch.clip(1 - dist_z / 0.5, 0.0, 1.0) * 10
+        return reward * gate
+
     def cap_to_target_rewards(self, env):
-        """Reward moving bottle cap to 11cm above cup center. Ungated."""
+        """Reward cap tip in XY circle (8cm) and Z band [target-5cm, target+20cm]. Matches is_success."""
         self._compute_tip_pos()
 
-        target = torch.zeros_like(self.tip_pos)
-        target[:, :2] = self.cup_center_xy
-        target[:, 2] = self.cup_top_z + 0.11
-        dist_3d = torch.linalg.norm(self.tip_pos - target, dim=1)
-        dist_3d = torch.nan_to_num(dist_3d, nan=10.0, posinf=10.0, neginf=10.0)
-        return torch.clip(1 - dist_3d / 0.5, 0.0, 1.0) * 20
+        target_z = self.cup_top_z + 0.11
+        z_band_low = target_z - 0.05
+        z_band_high = target_z + 0.20
+
+        xy_dist = torch.linalg.norm(self.tip_pos[:, :2] - self.cup_center_xy, dim=1)
+        xy_dist = torch.nan_to_num(xy_dist, nan=10.0, posinf=10.0, neginf=10.0)
+        xy_reward = torch.clip(1.0 - xy_dist / 0.08, 0.0, 1.0)
+
+        tip_z = self.tip_pos[:, 2]
+        z_below = tip_z < z_band_low
+        z_above = tip_z > z_band_high
+        z_reward = torch.ones(env.num_envs, device=env.device, dtype=torch.float32)
+        z_reward[z_below] = torch.clip(1.0 - (z_band_low[z_below] - tip_z[z_below]) / 0.1, 0.0, 1.0)
+        z_reward[z_above] = torch.clip(1.0 - (tip_z[z_above] - z_band_high[z_above]) / 0.1, 0.0, 1.0)
+
+        return (xy_reward * z_reward) * 20
 
     def pour_orientation_rewards(self, env):
         """Reward keeping bottle at spawn orientation. Gated by 5cm lift."""

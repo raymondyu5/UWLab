@@ -9,14 +9,23 @@ dataset:
   obs_keys: [ee_pose, hand_joint_pos]
   action_key: actions
   image_keys: [seg_pc]
-  pad_before: 0
-  pad_after: 3
+  # pad_before is derived automatically as n_obs_steps-1 inside ZarrDataset
+  pad_after: 3          # = horizon - 1; allows last episode steps to be starting points
   val_ratio: 0.05
   downsample_points: 2048
   pcd_noise: 0.02
   noise_extrinsic: true
   noise_extrinsic_parameter: [0.05, 0.2]
-  obs_noise: {}
+  obs_noise:
+    ee_pose: 0.05
+    hand_joint_pos: 0.05
+
+ema:
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
 
 pointnet:
   in_channels: 3
@@ -48,9 +57,9 @@ training:
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 1000
-  ema_power: 0.75
   val_every: 10
   checkpoint_every: 100
+  checkpoint_dir: ${hydra:run.dir}/checkpoints
   resume: false
   use_wandb: false
   wandb_project: uwlab_bc

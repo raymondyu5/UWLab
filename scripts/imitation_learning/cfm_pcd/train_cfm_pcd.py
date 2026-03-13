@@ -11,15 +11,8 @@ Usage:
 import os
 import sys
 
-# isaac-sim's python.sh resets PYTHONPATH, so third_party packages must be added explicitly.
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_UWLAB_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, "../../../"))
-for _p in [os.path.join(_UWLAB_DIR, "third_party", "pip_packages")]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-for _p in [os.path.join(_UWLAB_DIR, "third_party", "diffusion_policy")]:
-    if _p not in sys.path:
-        sys.path.append(_p)
+from uwlab.utils.paths import setup_third_party_paths
+setup_third_party_paths()
 
 import hydra
 from omegaconf import DictConfig
@@ -43,7 +36,7 @@ def main(cfg: DictConfig):
         action_key=cfg.dataset.action_key,
         image_keys=list(cfg.dataset.image_keys),
         horizon=cfg.horizon,
-        pad_before=cfg.dataset.pad_before,
+        n_obs_steps=cfg.n_obs_steps,
         pad_after=cfg.dataset.pad_after,
         val_ratio=cfg.dataset.val_ratio,
         seed=cfg.training.seed,

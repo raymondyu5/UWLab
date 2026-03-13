@@ -58,6 +58,7 @@ class CFMPCDPolicy(BaseImagePolicy):
         kernel_size: int = 5,
         n_groups: int = 8,
         cond_predict_scale: bool = True,
+        use_action_history: bool = True,
     ):
         super().__init__()
 
@@ -71,10 +72,20 @@ class CFMPCDPolicy(BaseImagePolicy):
 
         obs_feature_dim = obs_encoder.output_shape()[0]
 
+        # Low-dim and pcd features are encoded with different history depths:
+        #   pcd  -> 1 frame (current only)
+        #   low_dim -> n_obs_steps frames concatenated flat
+        low_dim_dim = sum(
+            obs_encoder.key_shape_map[k][-1] for k in obs_encoder.low_dim_keys
+        )
+        pcd_feat_dim = obs_feature_dim - low_dim_dim
+        n_past_actions = (n_obs_steps - 1) if use_action_history else 0
+        global_cond_dim = pcd_feat_dim + n_obs_steps * low_dim_dim + n_past_actions * action_dim
+
         self.model = ConditionalUnet1D(
             input_dim=action_dim,
             local_cond_dim=None,
-            global_cond_dim=obs_feature_dim * n_obs_steps,
+            global_cond_dim=global_cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
             down_dims=down_dims,
             kernel_size=kernel_size,
@@ -92,13 +103,27 @@ class CFMPCDPolicy(BaseImagePolicy):
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.num_inference_steps = num_inference_steps
+        self.use_action_history = use_action_history
 
     def _encode_obs(self, nobs: dict, batch_size: int) -> torch.Tensor:
-        # nobs values are (B, To, ...) — flatten B*To, encode, reshape to (B, To*feat)
-        To = self.n_obs_steps
-        this_nobs = {k: v[:, :To].reshape(-1, *v.shape[2:]) for k, v in nobs.items()}
-        features = self.obs_encoder(this_nobs)       # (B*To, feat)
-        return features.reshape(batch_size, -1)       # (B, To*feat)
+        # PCD: encode current frame only. nobs[pcd_key] is (B, 1, 3, N); index 0 = current.
+        pcd_obs = {k: nobs[k][:, 0] for k in self.obs_encoder.pcd_keys}
+        pcd_feat = self.obs_encoder.encode_pcd_only(pcd_obs)   # (B, pcd_feat_dim)
+
+        # Low-dim: flatten all n_obs_steps frames into one vector (oldest first).
+        # nobs[low_dim_key] is (B, n_obs_steps, D); reshape -> (B, n_obs_steps*D).
+        low_dim_parts = [
+            nobs[k].reshape(batch_size, -1)
+            for k in self.obs_encoder.low_dim_keys
+        ]
+        low_dim_flat = torch.cat(low_dim_parts, dim=-1) if low_dim_parts else pcd_feat.new_zeros(batch_size, 0)
+
+        # Past actions: (B, n_obs_steps-1, A) -> (B, (n_obs_steps-1)*A). Only present when n_obs_steps > 1.
+        if "past_actions" in nobs:
+            past_act_flat = nobs["past_actions"].reshape(batch_size, -1)
+            return torch.cat([pcd_feat, low_dim_flat, past_act_flat], dim=-1)
+
+        return torch.cat([pcd_feat, low_dim_flat], dim=-1)
 
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())

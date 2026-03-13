@@ -134,7 +134,7 @@ class ZarrDataset(Dataset):
         action_key: str = "actions",
         image_keys: List[str] = None,
         horizon: int = 4,
-        pad_before: int = 0,
+        n_obs_steps: int = 1,
         pad_after: int = 0,
         val_ratio: float = 0.05,
         seed: int = 42,
@@ -159,10 +159,15 @@ class ZarrDataset(Dataset):
         self.action_key = action_key
         self.image_keys = image_keys
         self.horizon = horizon
-        self.pad_before = pad_before
+        self.n_obs_steps = n_obs_steps
+        # pad_before must be exactly n_obs_steps-1: each window starts n_obs_steps-1
+        # steps before the action sequence, so early-episode samples get zero-padded history.
+        self.pad_before = n_obs_steps - 1
         self.pad_after = pad_after
         self.pcd_noise = pcd_noise
         self.obs_noise = obs_noise
+        # total window = history frames + action frames
+        self._window_size = n_obs_steps - 1 + horizon
 
         # --- resolve episode list ---
         if "all" in load_list:
@@ -241,8 +246,8 @@ class ZarrDataset(Dataset):
             replay_buffer=replay_buffer,
             image_keys=image_keys,
             downsample_points=downsample_points,
-            sequence_length=horizon,
-            pad_before=pad_before,
+            sequence_length=self._window_size,
+            pad_before=self.pad_before,
             pad_after=pad_after,
             episode_mask=train_mask,
             noise_extrinsic=noise_extrinsic,
@@ -255,7 +260,7 @@ class ZarrDataset(Dataset):
             replay_buffer=self.replay_buffer,
             image_keys=self.image_keys,
             downsample_points=self.sampler.downsample_points,
-            sequence_length=self.horizon,
+            sequence_length=self._window_size,
             pad_before=self.pad_before,
             pad_after=self.pad_after,
             episode_mask=~self.train_mask,
@@ -273,6 +278,8 @@ class ZarrDataset(Dataset):
         data = {
             "action": self.replay_buffer["action"],
             "agent_pos": agent_pos,
+            # past_actions shares the same distribution as action
+            "past_actions": self.replay_buffer["action"],
         }
         normalizer = LinearNormalizer()
         normalizer.fit(data=data, last_n_dims=1, mode=mode)
@@ -296,19 +303,26 @@ class ZarrDataset(Dataset):
                 arr = arr + np.random.randn(*arr.shape).astype(np.float32) * self.obs_noise[key]
             obs_list.append(arr)
 
-        agent_pos = np.concatenate(obs_list, axis=-1) if obs_list else np.zeros((self.horizon, 1), dtype=np.float32)
+        agent_pos = np.concatenate(obs_list, axis=-1) if obs_list else np.zeros((self._window_size, 1), dtype=np.float32)
 
         # add Gaussian noise to pcd xyz
         image_obs = {}
         for key in self.image_keys:
-            pcd = sample[key].astype(np.float32)  # (T, 3, N)
+            pcd = sample[key].astype(np.float32)  # (window_size, 3, N)
             noise = (np.random.rand(*pcd.shape) * 2 - 1) * self.pcd_noise
             pcd[:, :3, :] += noise[:, :3, :]
-            image_obs[key] = pcd[0:1]  # take first timestep: (1, 3, N)
+            # pcd: current frame only (last obs step in the window = index n_obs_steps-1)
+            image_obs[key] = pcd[self.n_obs_steps - 1 : self.n_obs_steps]  # (1, 3, N)
 
+        # obs: first n_obs_steps frames [t-n_obs_steps+1 .. t]
+        # past_actions: actions at [t-n_obs_steps+1 .. t-1] (n_obs_steps-1 frames, empty when n_obs_steps=1)
+        # action: frames [n_obs_steps-1 .. n_obs_steps-1+horizon] = actions at [t .. t+horizon-1]
+        obs_dict = {"agent_pos": agent_pos[0:self.n_obs_steps]} | image_obs
+        if self.n_obs_steps > 1:
+            obs_dict["past_actions"] = sample["action"][0:self.n_obs_steps - 1].astype(np.float32)
         data = {
-            "obs": {"agent_pos": agent_pos[0:1]} | image_obs,  # agent_pos: (1, D)
-            "action": sample["action"].astype(np.float32),      # (H, A)
+            "obs": obs_dict,
+            "action": sample["action"][self.n_obs_steps - 1:].astype(np.float32),  # (horizon, A)
         }
 
         return {

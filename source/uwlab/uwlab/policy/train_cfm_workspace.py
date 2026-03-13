@@ -6,8 +6,8 @@ import torch
 import tqdm
 import wandb
 from torch.utils.data import DataLoader
-from diffusers.training_utils import EMAModel
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
+from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
@@ -87,12 +87,17 @@ class TrainCFMWorkspace:
             last_epoch=self.global_step - 1,
         )
 
+        ema_cfg = cfg.get("ema", {})
         ema: EMAModel = EMAModel(
-            parameters=self.ema_model.parameters(),
-            power=cfg.training.ema_power,
+            model=self.ema_model,
+            update_after_step=ema_cfg.get("update_after_step", 0),
+            inv_gamma=ema_cfg.get("inv_gamma", 1.0),
+            power=ema_cfg.get("power", 0.75),
+            min_value=ema_cfg.get("min_value", 0.0),
+            max_value=ema_cfg.get("max_value", 0.9999),
         )
 
-        ckpt_dir = cfg.training.get("checkpoint_dir", "checkpoints")
+        ckpt_dir = cfg.training.checkpoint_dir
         os.makedirs(ckpt_dir, exist_ok=True)
 
         # resume
@@ -114,7 +119,7 @@ class TrainCFMWorkspace:
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     lr_scheduler.step()
-                    ema.step(self.model.parameters())
+                    ema.step(self.model)
 
                     loss_val = loss.item()
                     train_losses.append(loss_val)
@@ -126,7 +131,6 @@ class TrainCFMWorkspace:
 
             # ---- val ----
             if self.epoch % cfg.training.val_every == 0:
-                ema.copy_to(self.ema_model.parameters())
                 self.ema_model.eval()
                 val_losses, val_mses = [], []
                 with torch.no_grad():

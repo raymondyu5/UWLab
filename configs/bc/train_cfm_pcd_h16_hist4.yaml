@@ -1,0 +1,9 @@
+defaults:
+  - train_cfm_pcd
+  - _self_
+
+horizon: 16
+n_obs_steps: 4
+# pad_after = horizon - 1; pad_before is derived as n_obs_steps-1 (=3) in ZarrDataset
+dataset:
+  pad_after: 15

@@ -1,0 +1,6 @@
+defaults:
+  - train_cfm_pcd
+  - _self_
+
+n_obs_steps: 5
+# pad_before is derived as n_obs_steps-1 (=4) in ZarrDataset

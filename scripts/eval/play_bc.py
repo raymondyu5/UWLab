@@ -19,14 +19,8 @@ import argparse
 import os
 import sys
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_UWLAB_DIR = os.path.abspath(os.path.join(_SCRIPT_DIR, "../.."))
-for _p in [os.path.join(_UWLAB_DIR, "third_party", "pip_packages")]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-for _p in [os.path.join(_UWLAB_DIR, "third_party", "diffusion_policy")]:
-    if _p not in sys.path:
-        sys.path.append(_p)
+from uwlab.utils.paths import setup_third_party_paths
+setup_third_party_paths()
 
 from isaaclab.app import AppLauncher
 
@@ -109,9 +103,12 @@ def _load_train_cfg(checkpoint_dir: str) -> dict:
     )
 
 
-def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device) -> CFMPCDPolicy:
+def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
+                 eval_overrides: dict | None = None) -> CFMPCDPolicy:
     ds_cfg = train_cfg["dataset"]
-    pol_cfg = train_cfg["policy"]
+    pol_cfg = dict(train_cfg["policy"])
+    if eval_overrides and "num_inference_steps" in eval_overrides:
+        pol_cfg["num_inference_steps"] = int(eval_overrides["num_inference_steps"])
 
     obs_keys = list(ds_cfg["obs_keys"])
     image_keys = list(ds_cfg["image_keys"])
@@ -152,6 +149,10 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device) ->
     )
     obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
 
+    # Detect whether this checkpoint was trained with action history.
+    # Checkpoints trained without it won't have past_actions in the normalizer.
+    use_action_history = "normalizer.params_dict.past_actions.scale" in normalizer_state
+
     noise_scheduler = ConditionalFlowMatcher(sigma=float(pol_cfg["sigma"]))
     policy = CFMPCDPolicy(
         shape_meta=shape_meta,
@@ -166,6 +167,7 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device) ->
         kernel_size=int(pol_cfg["kernel_size"]),
         n_groups=int(pol_cfg["n_groups"]),
         cond_predict_scale=bool(pol_cfg["cond_predict_scale"]),
+        use_action_history=use_action_history,
     )
 
     # Load EMA weights and normalizer
@@ -238,12 +240,15 @@ def main():
 
     # Load training config and build policy
     train_cfg = _load_train_cfg(checkpoint_dir)
-    policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device)
+    policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device, eval_overrides=eval_cfg)
 
     obs_keys = list(eval_cfg.get("obs_keys") or ds_cfg["obs_keys"])
     image_keys = list(ds_cfg["image_keys"])
     downsample_points = int(ds_cfg["downsample_points"])
-    formatter = BCObsFormatter(obs_keys, image_keys, downsample_points, device)
+    n_obs_steps = int(train_cfg["n_obs_steps"])
+    formatter = BCObsFormatter(obs_keys, image_keys, downsample_points, device,
+                               n_obs_steps=n_obs_steps,
+                               action_dim=policy.action_dim if policy.use_action_history else 0)
 
     # Create env
     task_id = eval_cfg["task_id"]
@@ -292,6 +297,7 @@ def main():
         for ep_idx, (spawn_name_ep, spawn_pose) in enumerate(episodes):
             obs_raw, _ = env.reset()
             policy_obs = obs_raw["policy"]
+            formatter.reset()  # clear obs history at episode boundary
 
             # Override object pose if spawn pose specified
             if spawn_pose is not None:
@@ -328,6 +334,7 @@ def main():
 
                 obs_raw, reward, terminated, truncated, info = env.step(action_step)
                 policy_obs = obs_raw["policy"]
+                formatter.update_action(action_step)
 
                 # record — use same ee_pose_w call as the env obs, ensures offset is always applied
                 ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(

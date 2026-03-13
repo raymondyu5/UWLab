@@ -22,15 +22,8 @@ import argparse
 import os
 import sys
 
-# Ensure third-party packages are importable regardless of whether isaac-sim's
-# python.sh resets PYTHONPATH. These paths are bind-mounted inside the container. TODO: kinda a hack for now 
-_EXTRA_PATHS = [
-    "/workspace/uwlab/third_party/diffusion_policy",
-    "/workspace/uwlab/third_party/pip_packages",
-]
-for _p in _EXTRA_PATHS:
-    if _p not in sys.path and os.path.isdir(_p):
-        sys.path.insert(0, _p)
+from uwlab.utils.paths import setup_third_party_paths
+setup_third_party_paths()
 
 from isaaclab.app import AppLauncher
 
@@ -189,9 +182,6 @@ def main():
             obj.write_root_state_to_sim(root_state)
             isaac_env.sim.step()
             obs_raw = {"policy": isaac_env.observation_manager.compute()["policy"]}
-        warmup_act = isaac_env.cfg.warmup_action(isaac_env)
-        for _ in range(args_cli.num_warmup_steps):
-            obs_raw, _, _, _, _ = env.step(warmup_act)
         return obs_raw
 
     with torch.inference_mode():
