@@ -146,7 +146,7 @@ class RFSEvalCallback(BaseCallback):
             recorded = [False] * num_envs
             for _ in range(self.episode_steps):
                 success_before = isaac_env.cfg.is_success(isaac_env)
-                action, _ = self.model.predict(obs_np, deterministic=True)
+                action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
                 obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
                 obs_np = _sb3_process_obs(obs_dict)
@@ -193,7 +193,7 @@ class RFSEvalCallback(BaseCallback):
             recorded = [False] * num_envs
             for _ in range(self.episode_steps):
                 success_before = isaac_env.cfg.is_success(isaac_env)
-                action, _ = self.model.predict(obs_np, deterministic=True)
+                action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
                 obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
                 obs_np = _sb3_process_obs(obs_dict)

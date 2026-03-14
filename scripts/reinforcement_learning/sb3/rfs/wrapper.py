@@ -82,6 +82,26 @@ _OBS_KEY_MAP = {
 }
 
 
+def _resolve_hydra_refs(cfg: dict) -> dict:
+    """Resolve simple ${key} Hydra references using top-level scalar values."""
+    import re
+    lookup = {k: v for k, v in cfg.items() if isinstance(v, (int, float, str, bool))}
+
+    def resolve(val):
+        if isinstance(val, str):
+            def replacer(m):
+                key = m.group(1)
+                return str(lookup.get(key, m.group(0)))
+            return re.sub(r'\$\{(\w+)\}', replacer, val)
+        elif isinstance(val, dict):
+            return {k: resolve(v) for k, v in val.items()}
+        elif isinstance(val, list):
+            return [resolve(v) for v in val]
+        return val
+
+    return resolve(cfg)
+
+
 def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
     ckpt_path = os.path.join(diffusion_path, "checkpoints", "best.ckpt")
     if not os.path.isfile(ckpt_path):
@@ -119,7 +139,7 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
                 f"BC checkpoint format detected but config.yaml not found at {config_path}"
             )
         with open(config_path) as f:
-            train_cfg = yaml.safe_load(f)
+            train_cfg = _resolve_hydra_refs(yaml.safe_load(f))
         agent_pos_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
         action_dim = int(state_dict["normalizer.params_dict.action.scale"].shape[0])
         downsample_points = int(train_cfg["dataset"]["downsample_points"])
@@ -137,8 +157,9 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         n_action_steps = int(train_cfg.get("n_action_steps", 8))
         n_obs_steps = int(train_cfg.get("n_obs_steps", 1))
         down_dims = tuple(pol["down_dims"])
+        obs_keys = ds.get("obs_keys", ds.get("obs_key", []))
         cfg = SimpleNamespace(
-            dataset=SimpleNamespace(obs_keys=ds["obs_keys"]),
+            dataset=SimpleNamespace(obs_keys=obs_keys),
         )
 
     pcd_model = PointNet(
@@ -216,6 +237,7 @@ class RFSWrapper:
         residual_scale: float = 0.1,
         clip_actions: bool = True,
         finger_smooth_alpha: float = 0.3,
+        num_warmup_steps: int = 0,
     ):
         self.env = env
         self.unwrapped = env.unwrapped
@@ -281,6 +303,7 @@ class RFSWrapper:
         else:
             self.finger_filter = None
 
+        self.num_warmup_steps = num_warmup_steps
         self.last_obs = None
 
     _SKIP_PPO_KEYS = {"seg_pc", "rgb"}
@@ -355,6 +378,14 @@ class RFSWrapper:
 
         return self._strip_ppo_obs(self.last_obs), rewards, terminated, truncated, info
 
+    def _do_warmup(self):
+        if self.num_warmup_steps <= 0:
+            return
+        warmup_act = self.env.unwrapped.cfg.warmup_action(self.env.unwrapped)
+        for _ in range(self.num_warmup_steps):
+            obs, _, _, _, _ = self.env.step(warmup_act)
+            self.last_obs = obs
+
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.last_obs = obs
@@ -365,10 +396,11 @@ class RFSWrapper:
             current_finger = self.env.unwrapped.scene["robot"].data.joint_pos[:, 7:]
             self.finger_filter(current_finger)
 
+        self._do_warmup()
         return self._strip_ppo_obs(self.last_obs), info
 
     def reset_to_spawn(self, spawn_pose, info=None):
-        obs, info = self.reset()
+        obs, info = self.reset()  # includes _do_warmup()
 
         isaac_env = self.env.unwrapped
         obj = isaac_env.scene["grasp_object"]

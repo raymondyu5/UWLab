@@ -408,7 +408,7 @@ class PourReward:
                  + r_contact * 0.3
                  + r_lift * 0.3
                  + r_cap * 1.0
-                 + r_orientation * 0.5
+                 + r_orientation * 10.0
                  + r_link6
                  + r_cup_topple
                  - joint_vel_penalty * 1.0e-3
@@ -482,12 +482,10 @@ class PourReward:
 
     def pour_orientation_rewards(self, env):
         """Reward keeping bottle at spawn orientation. Gated by 5cm lift."""
-        if self.default_bottle_quat is None or torch.all(self.default_bottle_quat == 0):
-            return torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
-
+        ref_quat = env.scene[self.object_name].data.default_root_state[:, 3:7]
         delta_quat = math_utils.quat_mul(
             self.object_pose[:, 3:7],
-            math_utils.quat_inv(self.default_bottle_quat))
+            math_utils.quat_inv(ref_quat))
         axis_angle = math_utils.axis_angle_from_quat(delta_quat)
         rotation_magnitude = torch.linalg.norm(axis_angle, dim=1)
         rotation_magnitude = torch.nan_to_num(rotation_magnitude, nan=1.0, posinf=1.0, neginf=0.0)

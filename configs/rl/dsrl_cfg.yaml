@@ -31,9 +31,10 @@ rfs:
 
   # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
   # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
-  clip_actions: true
+  clip_actions: false
 
   finger_smooth_alpha: 1.0  # 1.0 = disabled
+  num_warmup_steps: 10
 
 eval:
   interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)

@@ -176,6 +176,11 @@ def main():
     env_cfg.seed = args_cli.seed
     if hasattr(env_cfg, "table_z_range"):
         env_cfg.table_z_range = (0.0, 0.0)
+
+    internal_warmup = int(getattr(env_cfg, "num_warmup_steps", 0))
+    external_warmup = rfs_cfg.get("num_warmup_steps", 0)
+    env_cfg.episode_length_s += (internal_warmup + external_warmup) * env_cfg.decimation * env_cfg.sim.dt
+
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
 
     need_render = args_cli.video or (eval_cfg["record_video"] and not args_cli.no_eval_video)
@@ -198,6 +203,7 @@ def main():
         residual_scale=rfs_cfg["residual_scale"],
         clip_actions=rfs_cfg["clip_actions"],
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
+        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
     )
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)
