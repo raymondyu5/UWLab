@@ -31,9 +31,9 @@ rfs:
 
   # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
   # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
-  clip_actions: false
+  clip_actions: true
 
-  finger_smooth_alpha: 1.0  # 1.0 = disabled
+  finger_smooth_alpha: 0.7  # 1.0 = disabled; 0.7 = light smoothing
   num_warmup_steps: 10
 
 eval:

@@ -74,7 +74,9 @@ class RFSEvalCallback(BaseCallback):
         # Rolling buffer of episode successes for training-time success rate.
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
         self._success_buffer = collections.deque(maxlen=200)
+        self._partial_success_buffer = collections.deque(maxlen=200)
         self._last_success = [False] * rfs_env.num_envs
+        self._last_partial_success = [False] * rfs_env.num_envs
         self._rollout_count = 0
 
     def _on_training_start(self) -> None:
@@ -96,16 +98,23 @@ class RFSEvalCallback(BaseCallback):
         dones = self.locals.get("dones")
         if dones is not None and wandb.run is not None:
             isaac_env = self.rfs_env.env.unwrapped
-            success = isaac_env.cfg.is_success(isaac_env)  # (num_envs,) bool tensor
+            success = isaac_env.cfg.is_success(isaac_env)
+            partial = isaac_env.cfg.is_partial_success(isaac_env)
             for i, done in enumerate(dones):
                 if done:
                     self._success_buffer.append(float(self._last_success[i]))
+                    self._partial_success_buffer.append(float(self._last_partial_success[i]))
                     self._last_success[i] = False
+                    self._last_partial_success[i] = False
                 else:
                     self._last_success[i] = float(success[i].item())
+                    self._last_partial_success[i] = float(partial[i].item())
             if self._success_buffer:
                 wandb.log(
-                    {"train/success_rate": sum(self._success_buffer) / len(self._success_buffer)},
+                    {
+                        "train/success_rate": sum(self._success_buffer) / len(self._success_buffer),
+                        "train/partial_success_rate": sum(self._partial_success_buffer) / len(self._partial_success_buffer),
+                    },
                     step=self.num_timesteps,
                 )
         return True

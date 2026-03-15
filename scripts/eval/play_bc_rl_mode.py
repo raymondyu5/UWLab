@@ -138,13 +138,16 @@ def main():
     warmup_act = isaac_env.cfg.warmup_action(isaac_env)
 
     spawn_cfg = load_spawn_cfg(args_cli.spawn, os.path.join(_UWLAB_DIR, "configs/eval/spawns"))
-    # 1 episode per pose; num_envs parallel runs per episode (same as play_bc.py)
-    episodes = [(pose.name, pose) for pose in spawn_cfg.poses]
 
     _spawn_defaults = isaac_env.cfg.object_spawn_defaults
     default_pos = tuple(_spawn_defaults["default_pos"])
     default_rot = tuple(_spawn_defaults["default_rot"])
     reset_height = float(_spawn_defaults["reset_height"])
+
+    if spawn_cfg.poses:
+        episodes = [(pose.name, pose) for pose in spawn_cfg.poses for _ in range(spawn_cfg.num_trials)]
+    else:
+        episodes = [(f"random_{i}", None) for i in range(spawn_cfg.num_trials)]
 
     logger = EvalLogger(args_cli.output_dir, record_video=args_cli.record_video, record_plots=True)
 
@@ -153,30 +156,39 @@ def main():
             obs_raw, _ = env.reset()
             rfs_env.last_obs = obs_raw
 
-            _set_object_pose(env, pose.x, pose.y, pose.yaw,
-                             default_pos, default_rot, reset_height)
+            if pose is not None:
+                _set_object_pose(env, pose.x, pose.y, pose.yaw,
+                                 default_pos, default_rot, reset_height)
+                spawn_info = {"x": pose.x, "y": pose.y, "yaw": pose.yaw}
+            else:
+                spawn_info = None
 
             # Match play_bc.py: extra warmup on top of env's built-in warmup
             for _ in range(args_cli.num_warmup_steps):
                 obs_raw, _, _, _, _ = env.step(warmup_act)
             rfs_env.last_obs = obs_raw
 
-            logger.begin_episode(pose_name, {"x": pose.x, "y": pose.y, "yaw": pose.yaw})
+            logger.begin_episode(pose_name, spawn_info)
 
             per_env_done = [False] * num_envs
             per_env_success = [False] * num_envs
+            per_env_partial = [False] * num_envs
 
             for step in range(episode_steps):
                 diffusion_obs = rfs_env._get_diffusion_obs(rfs_env.last_obs["policy"])
                 # noise=None → torch.randn inside policy (random Gaussian, not PPO)
                 base_action = rfs_env.policy.predict_action(diffusion_obs, noise=None)["action_pred"][:, 0]
 
-                # Check success on current state BEFORE stepping to avoid
+                # Check success/partial on current state BEFORE stepping to avoid
                 # reading the auto-reset state when the episode truncates.
                 pre_step_success = isaac_env.cfg.is_success(isaac_env).cpu().numpy()
+                pre_step_partial = isaac_env.cfg.is_partial_success(isaac_env).cpu().numpy()
                 for i in range(num_envs):
-                    if pre_step_success[i] and not per_env_done[i]:
-                        per_env_success[i] = True
+                    if not per_env_done[i]:
+                        if pre_step_success[i]:
+                            per_env_success[i] = True
+                        if pre_step_partial[i]:
+                            per_env_partial[i] = True
 
                 obs_raw, _, terminated, truncated, _ = env.step(base_action)
                 rfs_env.last_obs = obs_raw
@@ -194,9 +206,11 @@ def main():
                     break
 
             n_success = sum(per_env_success)
-            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs)
+            n_partial = sum(per_env_partial)
+            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
+                               partial_success=n_partial / num_envs)
             print(f"[play_bc_rl_mode] Episode {ep_idx+1}/{len(episodes)} "
-                  f"(spawn={pose_name}): {n_success}/{num_envs} success")
+                  f"(spawn={pose_name}): {n_success}/{num_envs} success, {n_partial}/{num_envs} partial")
 
     results = logger.finalize()
     print(f"\n[play_bc_rl_mode] Success rate: {results['success_rate']:.1%} "
