@@ -408,7 +408,7 @@ class PourReward:
                  + r_contact * 0.3
                  + r_lift * 0.3
                  + r_cap * 1.0
-                 + r_orientation * 10.0
+                 + r_orientation * 2.0
                  + r_link6
                  + r_cup_topple
                  - joint_vel_penalty * 1.0e-3

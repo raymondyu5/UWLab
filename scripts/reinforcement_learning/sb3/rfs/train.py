@@ -56,6 +56,8 @@ parser.add_argument("--eval_spawn", type=str, default=None,
                     help="Override eval.spawn config name.")
 parser.add_argument("--no_eval_video", action="store_true", default=False)
 parser.add_argument("--no_eval_plots", action="store_true", default=False)
+parser.add_argument("--asymmetric_ac", action="store_true", default=False,
+                    help="Asymmetric AC: actor sees CFM embedding only; critic sees privileged sim state.")
 
 # Wandb
 parser.add_argument("--wandb_project", type=str, default=None)
@@ -115,6 +117,7 @@ import uwlab_tasks  # noqa: F401
 from wrapper import RFSWrapper
 from eval_callback import RFSEvalCallback
 from callbacks import WandbNoisePredCallback, WandbRewardTermCallback, WandbOutputFormat
+from asymmetric_policy import AsymmetricActorCriticPolicy
 from uwlab.eval.spawn import load_spawn_cfg
 
 
@@ -204,6 +207,7 @@ def main():
         clip_actions=rfs_cfg["clip_actions"],
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
+        asymmetric_ac=args_cli.asymmetric_ac,
     )
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)
@@ -241,7 +245,8 @@ def main():
     )
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_kwargs)
 
-    agent = PPO("MultiInputPolicy", sb3_env, **agent_kwargs)
+    policy_cls = AsymmetricActorCriticPolicy if args_cli.asymmetric_ac else "MultiInputPolicy"
+    agent = PPO(policy_cls, sb3_env, **agent_kwargs)
     if args_cli.checkpoint is not None:
         agent = PPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
 

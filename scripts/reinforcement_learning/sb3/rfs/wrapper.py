@@ -238,6 +238,7 @@ class RFSWrapper:
         clip_actions: bool = True,
         finger_smooth_alpha: float = 0.3,
         num_warmup_steps: int = 0,
+        asymmetric_ac: bool = False,
     ):
         self.env = env
         self.unwrapped = env.unwrapped
@@ -247,6 +248,7 @@ class RFSWrapper:
         self.clip_actions = clip_actions
         self.residual_scale = residual_scale
 
+        self.asymmetric_ac = asymmetric_ac
         self.noise_dims = noise_dims
         self.residual_dims = residual_dims
         self.noise_slice = slice(*noise_dims) if noise_dims else None
@@ -261,6 +263,7 @@ class RFSWrapper:
         self.last_action: torch.Tensor | None = None
         self.last_noise_flat: torch.Tensor | None = None
         self.last_residual: torch.Tensor | None = None
+        self.last_pcd_embedding: torch.Tensor | None = None
 
         self.policy, self.policy_cfg = _load_cfm_checkpoint(diffusion_path, self.device)
         self.horizon = self.policy.horizon
@@ -282,21 +285,22 @@ class RFSWrapper:
         self.env.unwrapped.single_action_space = single_as
         self.env.unwrapped.action_space = gym.vector.utils.batch_space(single_as, self.num_envs)
 
-        # Patch single_observation_space["policy"] for SB3 compatibility:
-        # - Remove seg_pc/rgb (CFM reads them directly; PPO policy doesn't see them).
-        # - Strip ee_pose to 3D xyz to match IsaacLab reference (sb3_wrapper.py:467-468
-        #   strips ee_pose to xyz-only for the policy obs).
+        # Patch single_observation_space["policy"] for SB3 compatibility.
         _SKIP_OBS_KEYS = {"seg_pc", "rgb"}
         policy_obs_space = self.env.unwrapped.single_observation_space.get("policy")
         if isinstance(policy_obs_space, gym.spaces.Dict):
-            for k in _SKIP_OBS_KEYS:
-                policy_obs_space.spaces.pop(k, None)
-            if "ee_pose" in policy_obs_space.spaces:
-                old = policy_obs_space.spaces["ee_pose"]
-                policy_obs_space.spaces["ee_pose"] = gym.spaces.Box(
-                    low=old.low[..., :3], high=old.high[..., :3],
-                    shape=(3,), dtype=old.dtype,
-                )
+            if self.asymmetric_ac:
+                self._setup_asymmetric_obs_space(policy_obs_space)
+            else:
+                # Symmetric (default): remove seg_pc/rgb, strip ee_pose to 3D.
+                for k in _SKIP_OBS_KEYS:
+                    policy_obs_space.spaces.pop(k, None)
+                if "ee_pose" in policy_obs_space.spaces:
+                    old = policy_obs_space.spaces["ee_pose"]
+                    policy_obs_space.spaces["ee_pose"] = gym.spaces.Box(
+                        low=old.low[..., :3], high=old.high[..., :3],
+                        shape=(3,), dtype=old.dtype,
+                    )
 
         if finger_smooth_alpha < 1.0:
             self.finger_filter = LPFilter(alpha=finger_smooth_alpha).to(self.device)
@@ -308,14 +312,68 @@ class RFSWrapper:
 
     _SKIP_PPO_KEYS = {"seg_pc", "rgb"}
 
+    def _setup_asymmetric_obs_space(self, policy_obs_space: gym.spaces.Dict):
+        """Replace the policy obs space with actor_*/critic_* keys for asymmetric AC.
+        Actor: pcd_feat embedding (256D) + abs ee_pose (7D) + hand_joint_pos (16D).
+        Critic: all current stripped keys (privileged sim state).
+        """
+        _SKIP = self._SKIP_PPO_KEYS
+        actor_spaces = {
+            "actor_pcd_emb": gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.policy.pcd_feat_dim,),
+                dtype=np.float32,
+            ),
+            "actor_ee_pose":        policy_obs_space.spaces["ee_pose"],
+            "actor_hand_joint_pos": policy_obs_space.spaces["hand_joint_pos"],
+        }
+        critic_spaces = {}
+        for k, space in policy_obs_space.spaces.items():
+            if k in _SKIP:
+                continue
+            if k == "ee_pose":
+                space = gym.spaces.Box(
+                    low=space.low[..., :3], high=space.high[..., :3],
+                    shape=(3,), dtype=space.dtype,
+                )
+            critic_spaces[f"critic_{k}"] = space
+        policy_obs_space.spaces.clear()
+        policy_obs_space.spaces.update({**actor_spaces, **critic_spaces})
+
     def _strip_ppo_obs(self, obs: dict) -> dict:
         """Return obs stripped for PPO: remove seg_pc/rgb, strip ee_pose to 3D xyz.
         self.last_obs is NOT modified — CFM still reads the full obs including seg_pc."""
+        if self.asymmetric_ac:
+            return self._asymmetric_ppo_obs(obs)
         policy = obs["policy"]
         stripped = {k: v for k, v in policy.items() if k not in self._SKIP_PPO_KEYS}
         if "ee_pose" in stripped:
             stripped["ee_pose"] = stripped["ee_pose"][..., :3]
         return {"policy": stripped}
+
+    def _compute_pcd_embedding(self) -> torch.Tensor:
+        """Run the frozen CFM PointNet on self.last_obs and return pcd_feat."""
+        diffusion_obs = self._get_diffusion_obs(self.last_obs["policy"])
+        with torch.no_grad():
+            nobs = self.policy.normalizer.normalize(diffusion_obs)
+            pcd_obs = {k: nobs[k][:, 0] for k in self.policy.obs_encoder.pcd_keys}
+            return self.policy.obs_encoder.encode_pcd_only(pcd_obs).detach()
+
+    def _asymmetric_ppo_obs(self, obs: dict) -> dict:
+        """Build actor_*/critic_* obs dict for asymmetric AC."""
+        policy = obs["policy"]
+        result = {
+            "actor_pcd_emb":        self.last_pcd_embedding,
+            "actor_ee_pose":        policy["ee_pose"],
+            "actor_hand_joint_pos": policy["hand_joint_pos"],
+        }
+        for k, v in policy.items():
+            if k in self._SKIP_PPO_KEYS:
+                continue
+            if k == "ee_pose":
+                v = v[..., :3]
+            result[f"critic_{k}"] = v
+        return {"policy": result}
 
     def _get_diffusion_obs(self, obs_dict: dict) -> dict:
         parts = [_parse_obs_key(k, obs_dict) for k in self.diffusion_obs_keys]
@@ -341,7 +399,10 @@ class RFSWrapper:
 
         diffusion_obs = self._get_diffusion_obs(self.last_obs["policy"])
         with torch.no_grad():
-            base_actions = self.policy.predict_action(diffusion_obs, noise=noise)["action_pred"]
+            cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
+        base_actions = cfm_result["action_pred"]
+        if self.asymmetric_ac:
+            self.last_pcd_embedding = cfm_result["pcd_feat"].detach()
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
@@ -397,6 +458,8 @@ class RFSWrapper:
             self.finger_filter(current_finger)
 
         self._do_warmup()
+        if self.asymmetric_ac:
+            self.last_pcd_embedding = self._compute_pcd_embedding()
         return self._strip_ppo_obs(self.last_obs), info
 
     def reset_to_spawn(self, spawn_pose, info=None):

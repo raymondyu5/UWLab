@@ -81,6 +81,8 @@ class CFMPCDPolicy(BaseImagePolicy):
         pcd_feat_dim = obs_feature_dim - low_dim_dim
         n_past_actions = (n_obs_steps - 1) if use_action_history else 0
         global_cond_dim = pcd_feat_dim + n_obs_steps * low_dim_dim + n_past_actions * action_dim
+        self.global_cond_dim = global_cond_dim
+        self.pcd_feat_dim = pcd_feat_dim
 
         self.model = ConditionalUnet1D(
             input_dim=action_dim,
@@ -121,9 +123,9 @@ class CFMPCDPolicy(BaseImagePolicy):
         # Past actions: (B, n_obs_steps-1, A) -> (B, (n_obs_steps-1)*A). Only present when n_obs_steps > 1.
         if "past_actions" in nobs:
             past_act_flat = nobs["past_actions"].reshape(batch_size, -1)
-            return torch.cat([pcd_feat, low_dim_flat, past_act_flat], dim=-1)
+            return torch.cat([pcd_feat, low_dim_flat, past_act_flat], dim=-1), pcd_feat
 
-        return torch.cat([pcd_feat, low_dim_flat], dim=-1)
+        return torch.cat([pcd_feat, low_dim_flat], dim=-1), pcd_feat
 
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
@@ -133,7 +135,7 @@ class CFMPCDPolicy(BaseImagePolicy):
         nactions = self.normalizer["action"].normalize(batch["action"])
 
         B = nactions.shape[0]
-        global_cond = self._encode_obs(nobs, B)
+        global_cond, _ = self._encode_obs(nobs, B)
 
         device = nactions.device
         noise = torch.randn_like(nactions)
@@ -148,7 +150,7 @@ class CFMPCDPolicy(BaseImagePolicy):
         nobs = self.normalizer.normalize(obs_dict)
 
         B = next(iter(nobs.values())).shape[0]
-        global_cond = self._encode_obs(nobs, B)
+        global_cond, pcd_feat = self._encode_obs(nobs, B)
 
         if noise is not None:
             trajectory = noise.to(device=self.device, dtype=self.dtype)
@@ -170,4 +172,4 @@ class CFMPCDPolicy(BaseImagePolicy):
         action_pred = self.normalizer["action"].unnormalize(trajectory)
         action = action_pred[:, : self.n_action_steps]
 
-        return {"action": action, "action_pred": action_pred}
+        return {"action": action, "action_pred": action_pred, "global_cond": global_cond, "pcd_feat": pcd_feat}
