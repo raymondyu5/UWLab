@@ -189,12 +189,15 @@ def main():
     need_render = args_cli.video or (eval_cfg["record_video"] and not args_cli.no_eval_video)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if need_render else None)
 
+
+    control_hz = 1 / (env_cfg.sim.dt * env_cfg.decimation) 
     if args_cli.video:
         env = gym.wrappers.RecordVideo(env, **{
             "video_folder": os.path.join(log_dir, "videos", "train"),
             "step_trigger": lambda step: step % args_cli.video_interval == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
+            "fps": control_hz
         })
 
     rfs_env = RFSWrapper(
