@@ -141,7 +141,13 @@ def main():
         os.path.splitext(os.path.basename(checkpoint_path))[0],
     )
     os.makedirs(output_dir, exist_ok=True)
-    logger = EvalLogger(output_dir, record_video=args_cli.record_video, record_plots=True)
+    video_fps = 1.0 / (env_cfg.sim.dt * env_cfg.decimation)
+    logger = EvalLogger(
+        output_dir,
+        record_video=args_cli.record_video,
+        record_plots=True,
+        video_fps=video_fps,
+    )
 
     isaac_env = env.unwrapped
     horizon = getattr(env_cfg, "horizon", 200)

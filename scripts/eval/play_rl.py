@@ -135,7 +135,14 @@ def main():
         os.path.splitext(os.path.basename(args_cli.eval_cfg))[0],
     )
     os.makedirs(output_dir, exist_ok=True)
-    logger = EvalLogger(output_dir, record_video=record_video, record_plots=record_plots)
+    cfg = isaac_env.cfg
+    video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+    logger = EvalLogger(
+        output_dir,
+        record_video=record_video,
+        record_plots=record_plots,
+        video_fps=video_fps,
+    )
 
     if spawn_cfg.poses:
         episodes = [(pose.name, pose) for pose in spawn_cfg.poses for _ in range(spawn_cfg.num_trials)]

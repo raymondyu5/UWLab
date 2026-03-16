@@ -138,9 +138,9 @@ gym.register(
 
 gym.register(
     id="UW-FrankaLeap-Sysid-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.sysid_cfg:FrankaLeapSysidEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapSysidCfg",
     },
     disable_env_checker=True,
 )

@@ -11,7 +11,7 @@ class EvalLogger:
     then writes results, trajectory plots, and optional success heatmaps.
 
     Usage:
-        logger = EvalLogger(output_dir, record_video=False, record_plots=True)
+        logger = EvalLogger(output_dir, record_video=False, record_plots=True, video_fps=10.0)
         for each episode:
             logger.begin_episode(spawn_name, spawn_pose)
             for each step:
@@ -25,10 +25,12 @@ class EvalLogger:
         output_dir: str,
         record_video: bool = False,
         record_plots: bool = True,
+        video_fps: float = 10.0,
     ):
         self.output_dir = output_dir
         self.record_video = record_video
         self.record_plots = record_plots
+        self.video_fps = video_fps
 
         os.makedirs(output_dir, exist_ok=True)
         if record_video:
@@ -314,5 +316,5 @@ class EvalLogger:
         success_val = ep["success"]
         tag = "success" if (success_val if isinstance(success_val, bool) else success_val >= 0.5) else "fail"
         out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
-        imageio.mimsave(out_path, frames, fps=30)
+        imageio.mimsave(out_path, frames, fps=self.video_fps)
         print(f"[EvalLogger] video -> {out_path}")

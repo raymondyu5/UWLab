@@ -149,7 +149,14 @@ def main():
     else:
         episodes = [(f"random_{i}", None) for i in range(spawn_cfg.num_trials)]
 
-    logger = EvalLogger(args_cli.output_dir, record_video=args_cli.record_video, record_plots=True)
+    cfg = isaac_env.cfg
+    video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+    logger = EvalLogger(
+        args_cli.output_dir,
+        record_video=args_cli.record_video,
+        record_plots=True,
+        video_fps=video_fps,
+    )
 
     with torch.inference_mode():
         for ep_idx, (pose_name, pose) in enumerate(episodes):

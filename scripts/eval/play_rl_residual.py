@@ -201,7 +201,14 @@ def main():
 
     output_dir = args_cli.output_dir or os.path.join(
         os.path.dirname(args_cli.ppo_checkpoint), "eval_uwlab")
-    logger = EvalLogger(output_dir, record_video=args_cli.record_video, record_plots=True)
+    cfg = isaac_env.cfg
+    video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+    logger = EvalLogger(
+        output_dir,
+        record_video=args_cli.record_video,
+        record_plots=True,
+        video_fps=video_fps,
+    )
 
     with torch.inference_mode():
         for ep_idx in range(args_cli.num_episodes):

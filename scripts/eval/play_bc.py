@@ -297,7 +297,14 @@ def main():
         checkpoint_basename = os.path.basename(checkpoint_dir.rstrip("/"))
         output_dir = os.path.join(eval_base, eval_config_stem, checkpoint_basename)
     os.makedirs(output_dir, exist_ok=True)
-    logger = EvalLogger(output_dir, record_video=record_video, record_plots=record_plots)
+    cfg = env.unwrapped.cfg
+    video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+    logger = EvalLogger(
+        output_dir,
+        record_video=record_video,
+        record_plots=record_plots,
+        video_fps=video_fps,
+    )
 
     _spawn_defaults = env.unwrapped.cfg.object_spawn_defaults
     default_pos = tuple(eval_cfg.get("object_default_pos", _spawn_defaults["default_pos"]))

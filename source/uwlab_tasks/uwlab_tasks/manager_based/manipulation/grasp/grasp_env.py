@@ -206,6 +206,4 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.control_hz = 1 / (self.sim.dt * self.decimation) # control update frequency (number of control updates per second)
         self.episode_length_s = self.horizon * self.decimation * self.sim.dt
-
-
         self.scene.replicate_physics = False

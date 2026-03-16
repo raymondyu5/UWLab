@@ -149,7 +149,14 @@ def main():
     episode_steps = int(isaac_env.max_episode_length)
 
     output_dir = args_cli.output_dir or os.path.join(args_cli.checkpoint, "eval_legacy")
-    logger = EvalLogger(output_dir, record_video=args_cli.record_video, record_plots=True)
+    cfg = isaac_env.cfg
+    video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+    logger = EvalLogger(
+        output_dir,
+        record_video=args_cli.record_video,
+        record_plots=True,
+        video_fps=video_fps,
+    )
 
     ee_cfg = SceneEntityCfg("robot")
 

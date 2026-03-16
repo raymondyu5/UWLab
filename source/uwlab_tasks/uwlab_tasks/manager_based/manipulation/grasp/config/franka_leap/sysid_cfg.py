@@ -3,94 +3,81 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scene and manager-based env config for Franka LEAP arm system identification (CMA-ES).
+"""Sysid config based on GraspFrankaLeapJointAbsCfg with real robot gains.
 
-Uses open-loop joint position replay: same FrankaLeapJointPositionAction as RL.
-Arm-only sysid (7 joints). ImplicitActuatorCfg, no delay.
+Uses the same env as RL (GraspFrankaLeapJointAbsCfg) but overrides the robot to use
+FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG (DelayedPDActuatorCfg) for sysid.
+run_mode=RL_MODE disables cameras.
 """
 
 from __future__ import annotations
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg, ArticulationCfg
-from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import SceneEntityCfg
-from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.envs import ViewerCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.utils import configclass
-from isaaclab.envs.mdp import time_out
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ...mdp import joint_pos_w
+from .grasp_franka_leap import FrankaLeapEmptySceneCfg, GraspFrankaLeapJointAbsCfg, RL_MODE
 
 # Default simulation timestep for sysid (60 Hz, matches typical Franka control rate)
 SYSID_SIM_DT = 1.0 / 60.0
 
 
 @configclass
-class FrankaLeapSysidSceneCfg(InteractiveSceneCfg):
-    """Scene for system identification: robot + ground + light, no objects."""
+class FrankaLeapSysidSceneCfg(FrankaLeapEmptySceneCfg):
+    """Same as FrankaLeapEmptySceneCfg but robot uses real gains for sysid. No cameras (rl_mode)."""
 
+    fixed_camera = None  # no scene cameras; viewport (ViewerCfg) used for sim.render() when recording
     robot = franka_leap.IMPLICIT_FRANKA_LEAP.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
-        init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.0),
-            rot=(1.0, 0.0, 0.0, 0.0),
-            joint_pos=franka_leap.IMPLICIT_FRANKA_LEAP.init_state.joint_pos,
-        ),
-    )
-
-    ground = AssetBaseCfg(
-        prim_path="/World/defaultGroundPlane",
-        spawn=sim_utils.GroundPlaneCfg(),
-    )
-
-    dome_light = AssetBaseCfg(
-        prim_path="/World/Light",
-        spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
+        actuators=franka_leap.FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG
+        | franka_leap.FRANKA_LEAP_HAND_ACTUATOR_CFG,
     )
 
 
 @configclass
-class SysidObservationsCfg:
-    @configclass
-    class PolicyCfg(ObsGroup):
-        joint_pos = ObsTerm(
-            func=joint_pos_w,
-            params={"asset_cfg": SceneEntityCfg("robot")},
-        )
+class FrankaLeapSysidSceneWithCameraCfg(FrankaLeapSysidSceneCfg):
+    """Sysid scene with fixed camera for video recording. Adds overhead; use only when --record_video_every > 0."""
 
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = True
-
-    policy: PolicyCfg = PolicyCfg()
+    train_camera = None  # disable to reduce overhead; only fixed_camera needed for recording
+    fixed_camera = None
+    # fixed_camera = CameraCfg(
+    #     prim_path="{ENV_REGEX_NS}/FixedCamera",
+    #     update_period=0.03,
+    #     height=480,
+    #     width=480,
+    #     data_types=["rgb"],
+    #     spawn=sim_utils.PinholeCameraCfg(
+    #         focal_length=24.0,
+    #         focus_distance=400.0,
+    #         horizontal_aperture=20.955,
+    #         clipping_range=(0.1, 1.0e5),
+    #     ),
+    #     offset=CameraCfg.OffsetCfg(
+    #         pos=(1.43, 0.24, 0.6),
+    #         rot=(1.0, 0.0, 0.0, 0.0),
+    #         convention="ros",
+    #     ),
+    # )
 
 
 @configclass
-class SysidRewardsCfg:
-    pass
-
-
-@configclass
-class SysidTerminationsCfg:
-    time_out = DoneTerm(func=time_out, time_out=True)
-
-
-@configclass
-class FrankaLeapSysidEnvCfg(ManagerBasedRLEnvCfg):
-    """Manager-based env for Franka LEAP arm sysid: joint position replay, decimation=1."""
+class GraspFrankaLeapSysidCfg(GraspFrankaLeapJointAbsCfg):
+    """GraspFrankaLeapJointAbsCfg with real robot gains for sysid. Same env as RL, decimation=1."""
 
     scene: FrankaLeapSysidSceneCfg = FrankaLeapSysidSceneCfg(num_envs=512, env_spacing=2.0)
-    actions = franka_leap.FrankaLeapJointPositionAction()
-    observations: SysidObservationsCfg = SysidObservationsCfg()
-    rewards: SysidRewardsCfg = SysidRewardsCfg()
-    terminations: SysidTerminationsCfg = SysidTerminationsCfg()
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(1.4327373524611016, 0.2400519659762369, 0.6),
+        lookat=(0.0, -0.15, 0.0),
+        origin_type="env",
+        env_index=0,
+    )
 
     def __post_init__(self) -> None:
+        super().__post_init__()
+        self.run_mode = RL_MODE
         self.decimation = 1
         self.episode_length_s = 99999.0
         self.sim.dt = SYSID_SIM_DT

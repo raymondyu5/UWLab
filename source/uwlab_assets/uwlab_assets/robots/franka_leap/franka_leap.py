@@ -8,7 +8,7 @@
 # TODO: upload to UWLAB_CLOUD_ASSETS_DIR when bucket credentials are available.
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.actuators import ImplicitActuatorCfg, DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
 FRANKA_LEAP_ASSETS_DIR = "/workspace/uwlab/assets/robot/franka_leap"
@@ -50,52 +50,123 @@ FRANKA_LEAP_ARM_ACTUATOR_CFG = {
 FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG = {
     "panda_link1": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint1"],
-        stiffness=40.0,
+        stiffness=60.0,
         damping=4.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
     ),  
     "panda_link2": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[2]"],
-        stiffness=30.0,
+        stiffness=55.0,
         damping=6.0,
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link3": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[3]"],
-        stiffness=50.0,
+        stiffness=80.0,
         damping=5.0,
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link4": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[4]"],
-        stiffness=25.0,
+        stiffness=40.0,
         damping=5.0,
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link5": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[5]"],
-        stiffness=35.0,
+        stiffness=55.0,
         damping=3.0,
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
     "panda_link6": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[6]"],
-        stiffness=25.0,
+        stiffness=40.0,
         damping=2.0,
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
     "panda_link7": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[7]"],
-        stiffness=10.0,
+        stiffness=16.0,
         damping=1.0,
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
 }
+
+
+FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG= {
+    "panda_link1": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint1"],
+        stiffness=60.0,
+        damping=4.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link2": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[2]"],
+        stiffness=55.0,
+        damping=6.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link3": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[3]"],
+        stiffness=80.0,
+        damping=5.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link4": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[4]"],
+        stiffness=40.0,
+        damping=5.0,
+        effort_limit_sim=86.0,
+        velocity_limit_sim=1.575,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link5": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[5]"],
+        stiffness=55.0,
+        damping=3.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link6": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[6]"],
+        stiffness=40.0,
+        damping=2.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
+        min_delay=0,
+        max_delay=5,
+    ),
+    "panda_link7": DelayedPDActuatorCfg(
+        joint_names_expr=["panda_joint[7]"],
+        stiffness=16.0,
+        damping=1.0,
+        effort_limit_sim=11.5,
+        velocity_limit_sim=2.01,
+        min_delay=0,
+        max_delay=5,
+    ),
+} 
+
+
 
 # LEAP hand
 FRANKA_LEAP_HAND_ACTUATOR_CFG = {

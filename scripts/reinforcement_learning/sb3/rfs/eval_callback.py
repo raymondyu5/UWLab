@@ -126,9 +126,15 @@ class RFSEvalCallback(BaseCallback):
     def _run_eval(self):
         step_tag = f"step_{self.num_timesteps:010d}"
         output_dir = os.path.join(self.log_dir, "eval", step_tag)
-        logger = EvalLogger(output_dir, record_video=self.record_video, record_plots=self.record_plots)
-
         isaac_env = self.rfs_env.env.unwrapped
+        cfg = isaac_env.cfg
+        video_fps = 1.0 / (cfg.sim.dt * cfg.decimation)
+        logger = EvalLogger(
+            output_dir,
+            record_video=self.record_video,
+            record_plots=self.record_plots,
+            video_fps=video_fps,
+        )
         device = self.rfs_env.device
         num_envs = self.rfs_env.num_envs
 
