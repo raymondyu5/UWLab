@@ -24,7 +24,7 @@ from isaaclab.utils import configclass
 from . import mdp
 
 DEFAULT_GRASP_HORIZON = 100
-DEFAULT_GRASP_DECIMATION = 3
+DEFAULT_GRASP_DECIMATION = 6
 DEFAULT_GRASP_PHYSICS_HZ = 60.0
 
 @configclass

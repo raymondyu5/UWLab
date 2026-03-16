@@ -132,3 +132,15 @@ gym.register(
     },
     disable_env_checker=True,
 )
+
+
+########## Sysid (arm-only CMA-ES) #########
+
+gym.register(
+    id="UW-FrankaLeap-Sysid-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.sysid_cfg:FrankaLeapSysidEnvCfg",
+    },
+    disable_env_checker=True,
+)
