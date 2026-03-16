@@ -77,6 +77,7 @@ class RFSEvalCallback(BaseCallback):
         self._partial_success_buffer = collections.deque(maxlen=200)
         self._last_success = [False] * rfs_env.num_envs
         self._last_partial_success = [False] * rfs_env.num_envs
+        self._cache_initialized = [False] * rfs_env.num_envs
         self._rollout_count = 0
 
     def _on_training_start(self) -> None:
@@ -102,13 +103,16 @@ class RFSEvalCallback(BaseCallback):
             partial = isaac_env.cfg.is_partial_success(isaac_env)
             for i, done in enumerate(dones):
                 if done:
-                    self._success_buffer.append(float(self._last_success[i]))
-                    self._partial_success_buffer.append(float(self._last_partial_success[i]))
+                    if self._cache_initialized[i]:
+                        self._success_buffer.append(float(self._last_success[i]))
+                        self._partial_success_buffer.append(float(self._last_partial_success[i]))
                     self._last_success[i] = False
                     self._last_partial_success[i] = False
+                    self._cache_initialized[i] = False
                 else:
                     self._last_success[i] = float(success[i].item())
                     self._last_partial_success[i] = float(partial[i].item())
+                    self._cache_initialized[i] = True
             if self._success_buffer:
                 wandb.log(
                     {
