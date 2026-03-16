@@ -73,8 +73,8 @@ class RFSEvalCallback(BaseCallback):
         self.record_plots = record_plots
         # Rolling buffer of episode successes for training-time success rate.
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
-        self._success_buffer = collections.deque(maxlen=200)
-        self._partial_success_buffer = collections.deque(maxlen=200)
+        self._success_buffer = collections.deque(maxlen=400)
+        self._partial_success_buffer = collections.deque(maxlen=400)
         self._last_success = [False] * rfs_env.num_envs
         self._last_partial_success = [False] * rfs_env.num_envs
         self._cache_initialized = [False] * rfs_env.num_envs
@@ -113,7 +113,7 @@ class RFSEvalCallback(BaseCallback):
                     self._last_success[i] = float(success[i].item())
                     self._last_partial_success[i] = float(partial[i].item())
                     self._cache_initialized[i] = True
-            if self._success_buffer:
+            if len(self._success_buffer) == self._success_buffer.maxlen:
                 wandb.log(
                     {
                         "train/success_rate": sum(self._success_buffer) / len(self._success_buffer),
