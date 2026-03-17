@@ -65,6 +65,8 @@ parser.add_argument("--asymmetric_ac", action="store_true", default=False,
                     help="Load AsymmetricActorCriticPolicy; actor sees PCD embedding + ee_pose + hand_joint_pos.")
 parser.add_argument("--finger_smooth_alpha", type=float, default=0.7,
                     help="LPFilter alpha for finger dims (matches dsrl_cfg.yaml). 1.0 = disabled.")
+parser.add_argument("--horizon", type=int, default=None,
+                    help="Override episode horizon (max steps). Defaults to task config value.")
 parser.add_argument("--disable_fabric", action="store_true", help="Disable fabric.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -201,6 +203,9 @@ def main():
         num_envs=1,
         use_fabric=not args_cli.disable_fabric,
     )
+    if args_cli.horizon is not None:
+        env_cfg.horizon = args_cli.horizon
+        env_cfg.episode_length_s = args_cli.horizon * env_cfg.decimation * env_cfg.sim.dt
     env = gym.make(args_cli.task, cfg=env_cfg)
     isaac_env = env.unwrapped
     episode_steps = int(isaac_env.max_episode_length)
@@ -213,10 +218,19 @@ def main():
     finger_filter = LPFilter(alpha=args_cli.finger_smooth_alpha).to(device) \
         if args_cli.finger_smooth_alpha < 1.0 else None
 
+    # num_episodes = target number of SUCCESSFUL episodes to save.
+    # Loop until that many successes are collected; failures are discarded.
+    # Note: PourBottle has no success termination — only failure terminations
+    # (bottle_dropped, bottle_too_far, cup_toppled). terminated=True always means
+    # failure; success is only possible at truncated=True (timeout). We check
+    # is_success() BEFORE env.step() because IsaacLab auto-resets on termination,
+    # so querying after would return the reset state.
     n_success = 0
+    n_attempts = 0
     with torch.inference_mode():
-        pbar = tqdm(range(args_cli.num_episodes), desc="collect_distill")
-        for ep_idx in pbar:
+        pbar = tqdm(total=args_cli.num_episodes, desc="collect_distill")
+        while n_success < args_cli.num_episodes:
+            n_attempts += 1
             obs_raw, _ = env.reset()
             if finger_filter is not None:
                 finger_filter.reset()
@@ -293,27 +307,34 @@ def main():
                 if terminated.any() or truncated.any():
                     break
 
-            success = bool(success_before.cpu()[0])
+            # terminated=True means a failure condition fired — discard regardless of success_before.
+            # truncated=True means timeout — success_before determines the outcome.
+            episode_failed = bool(terminated[0].cpu().numpy())
+            success = (not episode_failed) and bool(success_before.cpu()[0])
+
             if success:
+                episode_data = {
+                    "arm_joint_pos":        np.array(arm_joint_pos_list),
+                    "hand_joint_pos":       np.array(hand_joint_pos_list),
+                    "ee_pose":              np.array(ee_pose_list),
+                    "actions":              np.array(actions_list),
+                    "noise":                np.array(noise_list),
+                    "seg_pc":               np.array(seg_pc_list),
+                    "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
+                    "ee_pose_cmd":          np.array(ee_pose_cmd_list),
+                    "rewards":              np.array(rewards_list),
+                    "dones":                np.array(dones_list),
+                }
+                _save_episode_zarr(args_cli.output_dir, n_success, episode_data)
                 n_success += 1
+                pbar.update(1)
 
-            episode_data = {
-                "arm_joint_pos":        np.array(arm_joint_pos_list),
-                "hand_joint_pos":       np.array(hand_joint_pos_list),
-                "ee_pose":              np.array(ee_pose_list),
-                "actions":              np.array(actions_list),
-                "noise":                np.array(noise_list),
-                "seg_pc":               np.array(seg_pc_list),
-                "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
-                "ee_pose_cmd":          np.array(ee_pose_cmd_list),
-                "rewards":              np.array(rewards_list),
-                "dones":                np.array(dones_list),
-            }
-            _save_episode_zarr(args_cli.output_dir, ep_idx, episode_data)
-            pbar.set_postfix(success=n_success, steps=len(actions_list))
+            rate = 100 * n_success / n_attempts
+            pbar.set_postfix(saved=n_success, attempts=n_attempts, rate=f"{rate:.1f}%", steps=len(actions_list))
+        pbar.close()
 
-    rate = 100 * n_success / args_cli.num_episodes if args_cli.num_episodes else 0
-    print(f"\n[collect_distill] Done. Success rate: {n_success}/{args_cli.num_episodes} ({rate:.1f}%)")
+    rate = 100 * n_success / n_attempts
+    print(f"\n[collect_distill] Done. Saved {n_success} successful episodes from {n_attempts} attempts ({rate:.1f}%)")
     print(f"[collect_distill] Episodes saved to {args_cli.output_dir}")
     env.close()
 
