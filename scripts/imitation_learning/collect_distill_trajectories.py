@@ -33,14 +33,12 @@ import argparse
 import os
 import sys
 
-_EXTRA_PATHS = [
-    "/workspace/uwlab/third_party/diffusion_policy",
-    "/workspace/uwlab/third_party/pip_packages",
-    "/workspace/uwlab/scripts/reinforcement_learning/sb3/rfs",
-]
-for _p in _EXTRA_PATHS:
-    if _p not in sys.path and os.path.isdir(_p):
-        sys.path.insert(0, _p)
+from uwlab.utils.paths import setup_third_party_paths
+setup_third_party_paths()
+
+_RFS_PATH = "/workspace/uwlab/scripts/reinforcement_learning/sb3/rfs"
+if _RFS_PATH not in sys.path:
+    sys.path.insert(0, _RFS_PATH)
 
 from isaaclab.app import AppLauncher
 
@@ -165,10 +163,9 @@ def _save_episode_zarr(output_dir: str, episode_idx: int, data: dict) -> str:
     os.makedirs(ep_dir, exist_ok=True)
     zarr_path = os.path.join(ep_dir, f"episode_{episode_idx}.zarr")
     store = zarr.open(zarr_path, mode="w")
-    grp = store.create_group("data")
+    grp = store.require_group("data")
     for key, arr in data.items():
-        arr_np = np.asarray(arr)
-        grp.create_dataset(key, data=arr_np)
+        grp[key] = np.asarray(arr)
     return zarr_path
 
 
@@ -204,8 +201,13 @@ def main():
         use_fabric=not args_cli.disable_fabric,
     )
     if args_cli.horizon is not None:
-        env_cfg.horizon = args_cli.horizon
-        env_cfg.episode_length_s = args_cli.horizon * env_cfg.decimation * env_cfg.sim.dt
+        # horizon = policy steps only; add both warmup budgets so the episode
+        # isn't cut short before the policy gets args_cli.horizon full steps.
+        total_steps = (args_cli.horizon
+                       + env_cfg.num_warmup_steps        # internal env warmup
+                       + args_cli.num_warmup_steps)      # external script warmup
+        env_cfg.horizon = total_steps
+        env_cfg.episode_length_s = total_steps * env_cfg.decimation * env_cfg.sim.dt
     env = gym.make(args_cli.task, cfg=env_cfg)
     isaac_env = env.unwrapped
     episode_steps = int(isaac_env.max_episode_length)
