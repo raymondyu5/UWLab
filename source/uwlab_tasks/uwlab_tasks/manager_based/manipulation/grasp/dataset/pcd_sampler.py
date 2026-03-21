@@ -148,11 +148,13 @@ class PCDSequenceSampler:
             if key in self.image_keys:
                 sample = self._load_pcd(sample)
 
-            # pad with zeros at start, repeat last frame at end
+            # repeat boundary frames at both ends
             if sample_start_idx > 0 or sample_end_idx < self.sequence_length:
-                data = np.zeros(
+                data = np.empty(
                     (self.sequence_length,) + sample.shape[1:], dtype=sample.dtype
                 )
+                if sample_start_idx > 0:
+                    data[:sample_start_idx] = sample[0]
                 if sample_end_idx < self.sequence_length:
                     data[sample_end_idx:] = sample[-1]
                 data[sample_start_idx:sample_end_idx] = sample

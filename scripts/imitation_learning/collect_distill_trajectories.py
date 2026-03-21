@@ -247,6 +247,7 @@ def main():
             ee_pose_list = []
             actions_list = []
             noise_list = []
+            noise_mean_list = []
             seg_pc_list = []
             arm_joint_pos_target_list = []
             ee_pose_cmd_list = []
@@ -260,15 +261,23 @@ def main():
                     actor_obs = _format_asymmetric_actor_obs(
                         policy_obs, diffusion, downsample_points, device
                     )
-                    ppo_action_np, _ = agent.predict(actor_obs)
+                    obs_tensor, _ = agent.policy.obs_to_tensor(actor_obs)
                 else:
                     ppo_obs_np = _format_ppo_obs(policy_obs)
-                    ppo_action_np, _ = agent.predict(ppo_obs_np[0])
+                    obs_tensor, _ = agent.policy.obs_to_tensor(ppo_obs_np[0])
+
+                dist = agent.policy.get_distribution(obs_tensor)
+                # mean: deterministic prediction — stored as supervision target for BC
+                ppo_mean = dist.distribution.loc.squeeze(0)           # (output_dim,)
+                # sample: used for env stepping (preserves stochastic behavior)
+                ppo_action_np = dist.get_actions(deterministic=False).squeeze(0).detach().cpu().numpy()
+                ppo_action_np = np.clip(ppo_action_np, agent.action_space.low, agent.action_space.high)
 
                 ppo_action = torch.as_tensor(ppo_action_np, device=device).unsqueeze(0)
 
                 residual_raw = ppo_action[:, :args_cli.n_residual]
                 noise = ppo_action[:, args_cli.n_residual:].reshape(-1, diffusion_horizon, action_dim)
+                noise_mean = ppo_mean[args_cli.n_residual:].reshape(diffusion_horizon, action_dim)
 
                 diff_obs = _format_diffusion_obs(policy_obs, downsample_points, device)
                 base = diffusion.predict_action(diff_obs, noise)["action_pred"][:, 0]
@@ -290,6 +299,7 @@ def main():
                 ee_pose_list.append(policy_obs["ee_pose"][0].cpu().numpy())
                 actions_list.append(env_action[0].cpu().numpy())
                 noise_list.append(noise[0].cpu().numpy())
+                noise_mean_list.append(noise_mean.detach().cpu().numpy())
                 # seg_pc is camera-rendered in distill_mode (RenderedSegPC); this is what we store
                 # so the downstream BC student learns from camera-domain observations.
                 seg_pc_list.append(policy_obs["seg_pc"][0].T.cpu().numpy())
@@ -321,6 +331,7 @@ def main():
                     "ee_pose":              np.array(ee_pose_list),
                     "actions":              np.array(actions_list),
                     "noise":                np.array(noise_list),
+                    "noise_mean":           np.array(noise_mean_list),
                     "seg_pc":               np.array(seg_pc_list),
                     "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
                     "ee_pose_cmd":          np.array(ee_pose_cmd_list),

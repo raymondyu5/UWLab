@@ -128,6 +128,7 @@ class TrainCFMWorkspace:
 
             train_loss = np.mean(train_losses)
             log = {"train_loss": train_loss, "epoch": self.epoch, "lr": lr_scheduler.get_last_lr()[0]}
+            print(f"[epoch {self.epoch:04d}] train_loss={train_loss:.6f} lr={lr_scheduler.get_last_lr()[0]:.2e}")
 
             # ---- val ----
             if self.epoch % cfg.training.val_every == 0:
@@ -149,6 +150,8 @@ class TrainCFMWorkspace:
                 val_mse = np.mean(val_mses)
                 log["val_loss"] = val_loss
                 log["val_action_mse"] = val_mse
+                print(f"[epoch {self.epoch:04d}] val_loss={val_loss:.6f} val_mse={val_mse:.6f}" +
+                      (" *" if val_mse < self.best_val_mse else ""))
 
                 if val_mse < self.best_val_mse:
                     self.best_val_mse = val_mse

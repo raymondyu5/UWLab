@@ -45,24 +45,29 @@ class BCObsFormatter:
         self.action_dim = action_dim
         self._agent_pos_buf: deque | None = None
         self._past_action_buf: deque | None = None
+        self._past_action_first: bool = False
 
     def reset(self):
         """Call at the start of each episode to clear all history buffers."""
         self._agent_pos_buf = None
-        # Pre-initialize past_action buffer with zeros so the first policy
-        # query (before any action is taken) matches training's zero pad_before.
-        if self.n_obs_steps > 1 and self.action_dim > 0:
-            zeros = [torch.zeros(1, self.action_dim, device=self.device)] * (self.n_obs_steps - 1)
-            self._past_action_buf = deque(zeros, maxlen=self.n_obs_steps - 1)
-        else:
-            self._past_action_buf = None
+        self._past_action_buf = None
+        self._past_action_first = self.n_obs_steps > 1 and self.action_dim > 0
 
     def update_action(self, action: torch.Tensor):
         """Push the executed action into the past-action buffer.
         Call this after env.step() and before the next format() call.
         action: (B, A)
         """
-        if self._past_action_buf is not None:
+        if not (self.n_obs_steps > 1 and self.action_dim > 0):
+            return
+        if self._past_action_first:
+            # First real action: fill entire buffer by repeating it to match
+            # training's boundary-frame repetition at episode start.
+            self._past_action_buf = deque(
+                [action] * (self.n_obs_steps - 1), maxlen=self.n_obs_steps - 1
+            )
+            self._past_action_first = False
+        else:
             self._past_action_buf.append(action)
 
     def format(self, raw_obs: dict) -> Dict[str, torch.Tensor]:
@@ -90,16 +95,22 @@ class BCObsFormatter:
         agent_pos = torch.cat(obs_parts, dim=-1)  # (B, D_total)
 
         if self._agent_pos_buf is None:
-            zeros = [torch.zeros_like(agent_pos)] * (self.n_obs_steps - 1)
-            self._agent_pos_buf = deque(zeros + [agent_pos], maxlen=self.n_obs_steps)
+            self._agent_pos_buf = deque([agent_pos] * self.n_obs_steps, maxlen=self.n_obs_steps)
         else:
             self._agent_pos_buf.append(agent_pos)
 
         result = {"agent_pos": torch.stack(list(self._agent_pos_buf), dim=1)}
 
         # --- past actions ---
-        if self._past_action_buf is not None:
-            result["past_actions"] = torch.stack(list(self._past_action_buf), dim=1)
+        if self.n_obs_steps > 1 and self.action_dim > 0:
+            if self._past_action_buf is not None:
+                result["past_actions"] = torch.stack(list(self._past_action_buf), dim=1)
+            else:
+                # Before first action is taken: use zeros as placeholder
+                B = agent_pos.shape[0]
+                result["past_actions"] = torch.zeros(
+                    B, self.n_obs_steps - 1, self.action_dim, device=self.device
+                )
 
         # --- pcd: current frame only, no history ---
         for key in self.image_keys:

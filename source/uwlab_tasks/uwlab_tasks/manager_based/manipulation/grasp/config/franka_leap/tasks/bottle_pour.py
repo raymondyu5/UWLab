@@ -240,6 +240,14 @@ class PourBottleFrankaLeapJointAbsCfg(PourBottleFrankaLeapCfg):
 
 
 @configclass
+class PourBottleFrankaLeapJointRelCfg(PourBottleFrankaLeapCfg):
+    actions = franka_leap.FrankaLeapJointRelArmHandJointAction()
+
+    def warmup_action(self, env) -> torch.Tensor:
+        return torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
+
+
+@configclass
 class PourBottleFrankaLeapIkRelCfg(PourBottleFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 

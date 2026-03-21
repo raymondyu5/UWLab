@@ -23,6 +23,9 @@ parser.add_argument("--output_dir", type=str, default="logs/sysid/open_loop_traj
 
 parser.add_argument("--trajectory_file", type=str, default=None, help="Path to the trajectory file.")
 parser.add_argument("--action_type", type=str, choices=['delta_ee', 'abs_ee', 'joint'], default='joint', help="Type of action to use.")
+parser.add_argument("--blocking", action="store_true", default=False, help="Enable blocking control: loop env.step() until convergence.")
+parser.add_argument("--blocking_max_steps", type=int, default=50, help="Max extra env.step() calls per trajectory step when blocking.")
+parser.add_argument("--blocking_tol", type=float, default=0.005, help="L-inf joint error (rad) to consider converged.")
 
 parser.add_argument(
     "--debug_cameras",
@@ -347,7 +350,8 @@ def compare_trajectories(real_obs_list: list, sim_results: dict, output_dir: str
     return metrics
 
 
-def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_dir: str, action_type: str, camera_name: str = "fixed_camera"):
+def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_dir: str, action_type: str, camera_name: str = "fixed_camera",
+                                blocking: bool = False, blocking_max_steps: int = 50, blocking_tol: float = 0.005):
     """Replay an open loop trajectory."""
 
     # Ensure the episode horizon in seconds is at least as long as the trajectory.
@@ -365,6 +369,10 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
     action_space_shape = env.action_space.shape
     expected_action_dim = action_space_shape[-1]
     num_steps = len(traj_actions)
+
+    robot = env.unwrapped.scene["robot"]
+    ARM_DOF = 7
+    blocking_steps_used = []
 
     with torch.inference_mode():
         for i in tqdm(range(num_steps)):
@@ -386,6 +394,21 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
 
             obs, _, _, _, _ = env.step(action)
 
+            # Blocking: keep stepping with same action until arm converges
+            extra = 0
+            if blocking:
+                for extra in range(1, blocking_max_steps + 1):
+                    q = robot.data.joint_pos[0, :ARM_DOF]
+                    if action_type == "joint":
+                        q_target = base_action[:ARM_DOF].to(q.device)
+                    else:
+                        q_target = robot.data.joint_pos_target[0, :ARM_DOF]
+                    err = (q - q_target).abs().max().item()
+                    if err < blocking_tol:
+                        break
+                    obs, _, _, _, _ = env.step(action)
+            blocking_steps_used.append(extra)
+
             rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy()
             frames.append(rgb)
             obs_list.append(_extract_sim_observation(env, obs))
@@ -394,6 +417,16 @@ def replay_open_loop_trajectory(env, traj_obs: list, traj_actions: list, output_
     output_video_path = os.path.join(output_dir, 'open_loop_trajectory.mp4')
     imageio.mimwrite(output_video_path, frames, fps=30)
     print(f"[INFO]: Video saved to {output_video_path}")
+
+    if blocking and blocking_steps_used:
+        arr = np.array(blocking_steps_used)
+        print(f"\n=== Blocking stats (tol={blocking_tol} rad, max={blocking_max_steps}) ===")
+        print(f"  mean extra steps: {arr.mean():.1f}")
+        print(f"  p50:  {np.percentile(arr, 50):.0f}")
+        print(f"  p90:  {np.percentile(arr, 90):.0f}")
+        print(f"  max:  {arr.max():.0f}")
+        print(f"  converged ({arr < blocking_max_steps} / {len(arr)}): "
+              f"{(arr < blocking_max_steps).sum()}/{len(arr)} steps")
 
     return obs_list
 
@@ -439,7 +472,10 @@ def main():
     
 
     sim_obs = replay_open_loop_trajectory(
-        env, traj_obs, traj_actions, output_dir, args_cli.action_type
+        env, traj_obs, traj_actions, output_dir, args_cli.action_type,
+        blocking=args_cli.blocking,
+        blocking_max_steps=args_cli.blocking_max_steps,
+        blocking_tol=args_cli.blocking_tol,
     )
     metrics = compare_trajectories(traj_obs, sim_obs, output_dir)
 

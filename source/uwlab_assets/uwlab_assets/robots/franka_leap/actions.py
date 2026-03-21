@@ -13,7 +13,7 @@ from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.utils import configclass
 
 from . import franka_leap as fl
-from .bounded_joint_position_action import BoundedJointPositionActionCfg
+from .bounded_joint_position_action import BoundedJointPositionActionCfg, BoundedRelativeJointPositionActionCfg
 from .bounded_differential_ik_action import BoundedDifferentialInverseKinematicsActionCfg
 
 ##
@@ -99,4 +99,22 @@ class FrankaLeapIkRelArmHandJointAction:
 class FrankaLeapIkAbsArmHandJointAction:
     """IK-absolute arm (6D) + absolute hand joint position (16D)."""
     arm_action = FRANKA_LEAP_IK_ABS_ARM
+    hand_action = FRANKA_LEAP_HAND_JOINT_POSITION
+
+
+# Delta arm joint position (7D) + absolute hand joint position (16D)
+FRANKA_LEAP_ARM_JOINT_RELATIVE = BoundedRelativeJointPositionActionCfg(
+    asset_name="robot",
+    joint_names=["panda_joint.*"],
+    scale=1.0,
+    use_zero_offset=True,
+    arm_joint_limits=dict(fl.FRANKA_LEAP_ARM_JOINT_LIMITS),
+    arm_joint_order=_ARM_JOINT_ORDER,
+)
+
+
+@configclass
+class FrankaLeapJointRelArmHandJointAction:
+    """Delta arm joint position (7D) + absolute hand joint position (16D)."""
+    arm_action = FRANKA_LEAP_ARM_JOINT_RELATIVE
     hand_action = FRANKA_LEAP_HAND_JOINT_POSITION

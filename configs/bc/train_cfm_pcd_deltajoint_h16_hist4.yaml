@@ -1,0 +1,8 @@
+defaults:
+  - train_cfm_pcd_deltajoint
+  - _self_
+
+horizon: 16
+n_obs_steps: 4
+dataset:
+  pad_after: 15

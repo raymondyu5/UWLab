@@ -182,12 +182,13 @@ def main():
                 # Check success/partial on current state BEFORE stepping to avoid
                 # reading the auto-reset state when the episode truncates.
                 pre_step_success = isaac_env.cfg.is_success(isaac_env).cpu().numpy()
-                pre_step_partial = isaac_env.cfg.is_partial_success(isaac_env).cpu().numpy()
+                _has_partial = hasattr(isaac_env.cfg, "is_partial_success")
+                pre_step_partial = isaac_env.cfg.is_partial_success(isaac_env).cpu().numpy() if _has_partial else None
                 for i in range(num_envs):
                     if not per_env_done[i]:
                         if pre_step_success[i]:
                             per_env_success[i] = True
-                        if pre_step_partial[i]:
+                        if pre_step_partial is not None and pre_step_partial[i]:
                             per_env_partial[i] = True
 
                 obs_raw, _, terminated, truncated, _ = env.step(base_action)
@@ -207,10 +208,13 @@ def main():
 
             n_success = sum(per_env_success)
             n_partial = sum(per_env_partial)
+            partial_arg = n_partial / num_envs if _has_partial else None
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
-                               partial_success=n_partial / num_envs)
-            print(f"[play_bc_rl_mode] Episode {ep_idx+1}/{len(episodes)} "
-                  f"(spawn={pose_name}): {n_success}/{num_envs} success, {n_partial}/{num_envs} partial")
+                               partial_success=partial_arg)
+            msg = f"[play_bc_rl_mode] Episode {ep_idx+1}/{len(episodes)} (spawn={pose_name}): {n_success}/{num_envs} success"
+            if _has_partial:
+                msg += f", {n_partial}/{num_envs} partial"
+            print(msg)
 
     results = logger.finalize()
     print(f"\n[play_bc_rl_mode] Success rate: {results['success_rate']:.1%} "
