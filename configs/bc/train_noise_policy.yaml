@@ -1,0 +1,42 @@
+diffusion_checkpoint: ???   # path to CFM checkpoint dir
+ppo_checkpoint: ???          # path to PPO .zip (source of log_std)
+
+net_arch: [256, 128, 64]     # matches PPO actor architecture
+activation_fn: elu           # elu | relu | tanh
+
+dataset:
+  data_path: ???             # path to distillation episode zarr dir
+  val_ratio: 0.05
+
+ema:
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: false
+
+training:
+  device: cuda:0
+  seed: 42
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  weight_decay: 1.0e-6
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 1000
+  val_every: 10
+  checkpoint_every: 100
+  checkpoint_dir: ${hydra:run.dir}/checkpoints
+  use_wandb: false
+  wandb_project: uwlab_bc
+  wandb_run_name: null
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}

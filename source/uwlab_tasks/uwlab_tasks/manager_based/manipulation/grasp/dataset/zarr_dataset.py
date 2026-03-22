@@ -4,6 +4,7 @@ import copy
 import numpy as np
 import zarr
 import torch
+import tqdm
 from torch.utils.data import Dataset
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
@@ -129,9 +130,10 @@ class ZarrDataset(Dataset):
         self,
         data_path: str,
         load_list: List[str],
-        num_demo: int = 150,
+        num_demo: Optional[int] = None,
         obs_keys: List[str] = None,
         action_key: str = "actions",
+        action_base_keys: Optional[List[str]] = None,
         image_keys: List[str] = None,
         horizon: int = 4,
         n_obs_steps: int = 1,
@@ -156,7 +158,9 @@ class ZarrDataset(Dataset):
             obs_noise = {}
 
         self.obs_keys = obs_keys
-        self.action_key = action_key
+        self.action_keys = [action_key] if isinstance(action_key, str) else list(action_key)
+        self.action_key = self.action_keys[0]  # kept for backward compat
+        self.action_base_keys = list(action_base_keys) if action_base_keys is not None else None
         self.image_keys = image_keys
         self.horizon = horizon
         self.n_obs_steps = n_obs_steps
@@ -182,22 +186,25 @@ class ZarrDataset(Dataset):
         ]
 
         # Nested format: data_path/episode_0/episode_0.zarr, episode_2/episode_2.zarr, ...
-        if len(zarr_paths) == 0:
-            for e in entries:
-                subdir = os.path.join(data_path, e)
-                nested = os.path.join(subdir, f"{e}.zarr")
-                if os.path.isdir(subdir) and os.path.isdir(nested):
-                    zarr_paths.append(nested)
-            zarr_paths = sorted(zarr_paths)
+        nested_paths = []
+        for e in entries:
+            subdir = os.path.join(data_path, e)
+            nested = os.path.join(subdir, f"{e}.zarr")
+            if os.path.isdir(subdir) and os.path.isdir(nested):
+                nested_paths.append(nested)
+        nested_paths = sorted(nested_paths)
+        if len(zarr_paths) == 0 or (len(nested_paths) > len(zarr_paths)):
+            zarr_paths = nested_paths
 
-        zarr_paths = zarr_paths[:num_demo]
+        if num_demo is not None:
+            zarr_paths = zarr_paths[:num_demo]
 
         if len(zarr_paths) == 0:
             raise ValueError(f"No .zarr episodes found in {data_path}")
 
         # --- load into RAM ---
         replay_buffer = _ReplayBuffer()
-        for ep_path in zarr_paths:
+        for ep_path in tqdm.tqdm(zarr_paths, desc=f"Loading episodes from {os.path.basename(data_path)}"):
             try:
                 store = _open_zarr(ep_path)
             except Exception as e:
@@ -208,7 +215,13 @@ class ZarrDataset(Dataset):
                 episode = {}
 
                 # actions
-                episode["action"] = _load_zarr_key(store, action_key)
+                action_arrays = []
+                for i, k in enumerate(self.action_keys):
+                    arr = _load_zarr_key(store, k)
+                    if self.action_base_keys is not None and self.action_base_keys[i] is not None:
+                        arr = arr - _load_zarr_key(store, self.action_base_keys[i])
+                    action_arrays.append(arr)
+                episode["action"] = np.concatenate(action_arrays, axis=-1) if len(action_arrays) > 1 else action_arrays[0]
 
                 # obs keys -> will be concatenated to agent_pos in __getitem__
                 for key in obs_keys:
@@ -231,8 +244,9 @@ class ZarrDataset(Dataset):
 
         print(
             f"Loaded {replay_buffer.n_episodes} episodes, "
-            f"{replay_buffer.episode_ends[-1]} total steps. "
-            f"action_dim={self.action_dim}, obs_dim={self.low_obs_dim}"
+            f"{replay_buffer.episode_ends[-1]} total steps "
+            f"from {data_path} "
+            f"(action_dim={self.action_dim}, obs_dim={self.low_obs_dim})"
         )
 
         # --- train/val split ---

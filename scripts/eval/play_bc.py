@@ -132,7 +132,7 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
     # the same arch params and load state dict.
     #
     # For obs dims: we load them from the ckpt's normalizer state_dict keys.
-    ckpt_path = _find_checkpoint(checkpoint_dir)
+    ckpt_path = _find_checkpoint(checkpoint_dir, eval_overrides and eval_overrides.get("checkpoint_name"))
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     # Extract dims from normalizer state dict
@@ -189,10 +189,17 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
     return policy, ds_cfg
 
 
-def _find_checkpoint(checkpoint_dir: str) -> str:
-    path = os.path.join(checkpoint_dir, "checkpoints", "best.ckpt")
-    if os.path.isfile(path):
-        return path
+def _find_checkpoint(checkpoint_dir: str, ckpt_name: str | None = None) -> str:
+    if ckpt_name is not None:
+        path = os.path.join(checkpoint_dir, "checkpoints", ckpt_name)
+        if os.path.isfile(path):
+            return path
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    for name in ("best.ckpt", "latest.ckpt"):
+        path = os.path.join(checkpoint_dir, "checkpoints", name)
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}/checkpoints/")
 
 
 def _get_object_asset(env):
@@ -276,6 +283,13 @@ def main():
         num_envs=num_envs,
     )
     env_cfg.seed = args_cli.seed
+    if not record_video:
+        env_cfg.scene.train_camera = None
+        env_cfg.scene.fixed_camera = None
+        if hasattr(env_cfg.events, "reset_camera"):
+            env_cfg.events.reset_camera = None
+        if hasattr(env_cfg.events, "reset_fixed_camera"):
+            env_cfg.events.reset_fixed_camera = None
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
     # Load spawn config

@@ -401,8 +401,6 @@ class RFSWrapper:
         with torch.no_grad():
             cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
         base_actions = cfm_result["action_pred"]
-        if self.asymmetric_ac:
-            self.last_pcd_embedding = cfm_result["pcd_feat"].detach()
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
@@ -426,6 +424,11 @@ class RFSWrapper:
 
             if self.env.unwrapped.episode_length_buf[0] == self.env.unwrapped.max_episode_length - 1:
                 break
+
+        # Update pcd embedding from the final obs so it is consistent with the
+        # state returned to the agent — no lag between pcd_emb and state.
+        if self.asymmetric_ac:
+            self.last_pcd_embedding = self._compute_pcd_embedding()
 
         self._ep_rewards += rewards
         dones = terminated | truncated

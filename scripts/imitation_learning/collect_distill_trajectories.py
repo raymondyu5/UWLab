@@ -1,17 +1,28 @@
 """
-Collect trajectories from an RFS policy in distill_mode for BC/distillation training.
+Collect trajectories from an RFS/DSRL policy in distill_mode for BC/distillation training.
 
 Uses depth-rendered point clouds from randomly sampled camera views (DISTILL_MODE).
 Saves episodes in zarr format compatible with ZarrDataset and load_real_episode_zarr.
 
-RFS policy: diffusion base + PPO residual (same as play_rl_residual.py).
+RFS/DSRL policy: diffusion base + PPO noise (DSRL: no residual, full output is noise).
 Requires --enable_cameras for depth rendering.
 
 Usage (inside container):
     ./uwlab.sh -p scripts/imitation_learning/collect_distill_trajectories.py \\
         --headless \\
         --enable_cameras \\
-        --task UW-FrankaLeap-GraspPinkCup-IkRel-v0 \\
+        --task UW-FrankaLeap-PourBottle-IkRel-v0 \\
+        --diffusion_checkpoint /path/to/cfm/checkpoint_dir \\
+        --ppo_checkpoint /path/to/ppo/model.zip \\
+        --output_dir logs/distill_collection \\
+        --num_episodes 100
+
+    # Asymmetric AC (actor sees PCD embedding + ee_pose + hand_joint_pos):
+    ./uwlab.sh -p scripts/imitation_learning/collect_distill_trajectories.py \\
+        --headless \\
+        --enable_cameras \\
+        --asymmetric_ac \\
+        --task UW-FrankaLeap-PourBottle-IkRel-v0 \\
         --diffusion_checkpoint /path/to/cfm/checkpoint_dir \\
         --ppo_checkpoint /path/to/ppo/model.zip \\
         --output_dir logs/distill_collection \\
@@ -22,32 +33,38 @@ import argparse
 import os
 import sys
 
-_EXTRA_PATHS = [
-    "/workspace/uwlab/third_party/diffusion_policy",
-    "/workspace/uwlab/third_party/pip_packages",
-]
-for _p in _EXTRA_PATHS:
-    if _p not in sys.path and os.path.isdir(_p):
-        sys.path.insert(0, _p)
+from uwlab.utils.paths import setup_third_party_paths
+setup_third_party_paths()
+
+_RFS_PATH = "/workspace/uwlab/scripts/reinforcement_learning/sb3/rfs"
+if _RFS_PATH not in sys.path:
+    sys.path.insert(0, _RFS_PATH)
 
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(
-    description="Collect RFS policy trajectories in distill_mode (depth-rendered PC) for BC training."
+    description="Collect RFS/DSRL policy trajectories in distill_mode (depth-rendered PC) for BC training."
 )
 parser.add_argument("--diffusion_checkpoint", type=str, required=True,
                     help="Dir containing checkpoints/latest.ckpt (IsaacLab BC format)")
 parser.add_argument("--ppo_checkpoint", type=str, required=True,
                     help="Path to SB3 PPO .zip file")
-parser.add_argument("--diffusion_ckpt_name", type=str, default="latest.ckpt")
 parser.add_argument("--task", type=str, default="UW-FrankaLeap-GraspPinkCup-IkRel-v0",
                     help="Task with seg_pc (GraspPinkCup, PourBottle, GraspBottle). Must use IkRel-v0.")
 parser.add_argument("--output_dir", type=str, default="logs/distill_collection")
 parser.add_argument("--num_episodes", type=int, default=100)
 parser.add_argument("--num_warmup_steps", type=int, default=10)
+parser.add_argument("--n_residual", type=int, default=0,
+                    help="Number of leading PPO output dims that are residual (0 = DSRL/pure noise, 22 = RFS).")
 parser.add_argument("--arm_residual_xyz", type=float, default=0.005)
 parser.add_argument("--arm_residual_rpy", type=float, default=0.01)
 parser.add_argument("--hand_residual", type=float, default=0.1)
+parser.add_argument("--asymmetric_ac", action="store_true", default=False,
+                    help="Load AsymmetricActorCriticPolicy; actor sees PCD embedding + ee_pose + hand_joint_pos.")
+parser.add_argument("--finger_smooth_alpha", type=float, default=0.7,
+                    help="LPFilter alpha for finger dims (matches dsrl_cfg.yaml). 1.0 = disabled.")
+parser.add_argument("--horizon", type=int, default=None,
+                    help="Override episode horizon (max steps). Defaults to task config value.")
 parser.add_argument("--disable_fabric", action="store_true", help="Disable fabric.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -65,13 +82,7 @@ import torch
 import zarr
 from tqdm import tqdm
 from stable_baselines3 import PPO
-from stable_baselines3.common.buffers import RolloutBuffer
-
-from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
-
-from uwlab.policy.backbone.pcd.pointnet import PointNet
-from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
-from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
+from stable_baselines3.common.buffers import DictRolloutBuffer
 
 import uwlab_tasks  # noqa: F401
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import (
@@ -79,51 +90,15 @@ from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_frank
     DISTILL_MODE,
 )
 
+from wrapper import _load_cfm_checkpoint, LPFilter  # handles both old and new checkpoint formats
 
-class _RolloutBuffer(RolloutBuffer):
+if args_cli.asymmetric_ac:
+    from asymmetric_policy import AsymmetricActorCriticPolicy
+
+
+class _RolloutBuffer(DictRolloutBuffer):
     def __init__(self, *args, gpu_buffer=False, **kwargs):
         super().__init__(*args, **kwargs)
-
-
-def _load_diffusion(checkpoint_dir: str, ckpt_name: str, device: torch.device):
-    path = os.path.join(checkpoint_dir, "checkpoints", ckpt_name)
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    state_dict = ckpt["state_dicts"]["ema_model"]
-    cfg = ckpt["cfg"]
-
-    shape_meta = {
-        "action": {"shape": list(cfg.shape_meta.action.shape)},
-        "obs": {
-            "agent_pos": {"shape": list(cfg.shape_meta.obs.agent_pos.shape), "type": "low_dim"},
-            "seg_pc": {"shape": list(cfg.shape_meta.obs.seg_pc.shape), "type": "pcd"},
-        },
-    }
-    pcd_model = PointNet(
-        in_channels=3,
-        local_channels=(64, 64, 64, 128, 1024),
-        global_channels=(512, 256),
-        use_bn=False,
-    )
-    obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
-    noise_scheduler = ConditionalFlowMatcher(sigma=float(cfg.policy.noise_scheduler.sigma))
-    policy = CFMPCDPolicy(
-        shape_meta=shape_meta,
-        obs_encoder=obs_encoder,
-        noise_scheduler=noise_scheduler,
-        horizon=int(cfg.horizon),
-        n_action_steps=int(cfg.n_action_steps) + int(cfg.n_latency_steps),
-        n_obs_steps=int(cfg.n_obs_steps),
-        num_inference_steps=5,
-        diffusion_step_embed_dim=256,
-        down_dims=tuple(cfg.policy.down_dims),
-        kernel_size=5,
-        n_groups=8,
-        cond_predict_scale=True,
-    )
-    policy.load_state_dict(state_dict, strict=False)
-    policy.to(device)
-    policy.eval()
-    return policy, cfg
 
 
 def _format_diffusion_obs(policy_obs: dict, downsample_points: int, device: torch.device) -> dict:
@@ -164,34 +139,48 @@ def _format_ppo_obs(policy_obs: dict) -> np.ndarray:
     return obs.cpu().numpy()
 
 
+def _format_asymmetric_actor_obs(
+    policy_obs: dict, diffusion, downsample_points: int, device: torch.device
+) -> dict:
+    """Build actor obs dict for AsymmetricActorCriticPolicy inference.
+
+    Actor sees: PCD embedding (frozen CFM PointNet on mesh_pc) + ee_pose + hand_joint_pos.
+    Mirrors RFSWrapper._asymmetric_ppo_obs / _compute_pcd_embedding.
+    """
+    diff_obs = _format_diffusion_obs(policy_obs, downsample_points, device)
+    nobs = diffusion.normalizer.normalize(diff_obs)
+    pcd_obs = {k: nobs[k][:, 0] for k in diffusion.obs_encoder.pcd_keys}
+    pcd_emb = diffusion.obs_encoder.encode_pcd_only(pcd_obs)  # (B, pcd_feat_dim)
+    return {
+        "actor_pcd_emb":        pcd_emb[0].cpu().numpy(),
+        "actor_ee_pose":        policy_obs["ee_pose"][0].cpu().numpy(),
+        "actor_hand_joint_pos": policy_obs["hand_joint_pos"][0].cpu().numpy(),
+    }
+
+
 def _save_episode_zarr(output_dir: str, episode_idx: int, data: dict) -> str:
     ep_dir = os.path.join(output_dir, f"episode_{episode_idx}")
     os.makedirs(ep_dir, exist_ok=True)
     zarr_path = os.path.join(ep_dir, f"episode_{episode_idx}.zarr")
     store = zarr.open(zarr_path, mode="w")
-    grp = store.create_group("data")
+    grp = store.require_group("data")
     for key, arr in data.items():
-        arr_np = np.asarray(arr)
-        grp.create_dataset(key, data=arr_np)
+        grp[key] = np.asarray(arr)
     return zarr_path
 
 
 def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    diffusion, diff_cfg = _load_diffusion(
-        args_cli.diffusion_checkpoint, args_cli.diffusion_ckpt_name, device
-    )
-    ds = getattr(diff_cfg, "dataset", diff_cfg)
-    downsample_points = int(getattr(ds, "downsample_points", 2048))
+    diffusion, _ = _load_cfm_checkpoint(args_cli.diffusion_checkpoint, device)
+    downsample_points = diffusion.obs_encoder.shape_meta["obs"]["seg_pc"]["shape"][-1]
     diffusion_horizon = diffusion.horizon
     action_dim = diffusion.action_dim
 
-    agent = PPO.load(
-        args_cli.ppo_checkpoint,
-        device=device,
-        custom_objects={"rollout_buffer_class": _RolloutBuffer},
-    )
+    custom_objects = {"rollout_buffer_class": _RolloutBuffer}
+    if args_cli.asymmetric_ac:
+        custom_objects["policy_class"] = AsymmetricActorCriticPolicy
+    agent = PPO.load(args_cli.ppo_checkpoint, device=device, custom_objects=custom_objects)
 
     residual_lower = torch.tensor(
         [-args_cli.arm_residual_xyz] * 3 + [-args_cli.arm_residual_rpy] * 3
@@ -211,6 +200,14 @@ def main():
         num_envs=1,
         use_fabric=not args_cli.disable_fabric,
     )
+    if args_cli.horizon is not None:
+        # horizon = policy steps only; add both warmup budgets so the episode
+        # isn't cut short before the policy gets args_cli.horizon full steps.
+        total_steps = (args_cli.horizon
+                       + env_cfg.num_warmup_steps        # internal env warmup
+                       + args_cli.num_warmup_steps)      # external script warmup
+        env_cfg.horizon = total_steps
+        env_cfg.episode_length_s = total_steps * env_cfg.decimation * env_cfg.sim.dt
     env = gym.make(args_cli.task, cfg=env_cfg)
     isaac_env = env.unwrapped
     episode_steps = int(isaac_env.max_episode_length)
@@ -218,11 +215,29 @@ def main():
     os.makedirs(args_cli.output_dir, exist_ok=True)
     print(f"[collect_distill] Output: {args_cli.output_dir}")
     print(f"[collect_distill] Task: {args_cli.task}, episodes: {args_cli.num_episodes}")
+    print(f"[collect_distill] asymmetric_ac: {args_cli.asymmetric_ac}")
 
+    finger_filter = LPFilter(alpha=args_cli.finger_smooth_alpha).to(device) \
+        if args_cli.finger_smooth_alpha < 1.0 else None
+
+    # num_episodes = target number of SUCCESSFUL episodes to save.
+    # Loop until that many successes are collected; failures are discarded.
+    # Note: PourBottle has no success termination — only failure terminations
+    # (bottle_dropped, bottle_too_far, cup_toppled). terminated=True always means
+    # failure; success is only possible at truncated=True (timeout). We check
+    # is_success() BEFORE env.step() because IsaacLab auto-resets on termination,
+    # so querying after would return the reset state.
     n_success = 0
+    n_attempts = 0
     with torch.inference_mode():
-        for ep_idx in tqdm(range(args_cli.num_episodes), desc="collect_distill"):
+        pbar = tqdm(total=args_cli.num_episodes, desc="collect_distill")
+        while n_success < args_cli.num_episodes:
+            n_attempts += 1
             obs_raw, _ = env.reset()
+            if finger_filter is not None:
+                finger_filter.reset()
+                current_fingers = isaac_env.scene["robot"].data.joint_pos[:, 7:]
+                finger_filter(current_fingers)
             warmup_act = isaac_env.cfg.warmup_action(isaac_env)
             for _ in range(args_cli.num_warmup_steps):
                 obs_raw, _, _, _, _ = env.step(warmup_act)
@@ -231,6 +246,8 @@ def main():
             hand_joint_pos_list = []
             ee_pose_list = []
             actions_list = []
+            noise_list = []
+            noise_mean_list = []
             seg_pc_list = []
             arm_joint_pos_target_list = []
             ee_pose_cmd_list = []
@@ -240,23 +257,40 @@ def main():
             for step in range(episode_steps):
                 policy_obs = obs_raw["policy"]
 
-                ppo_obs_np = _format_ppo_obs(policy_obs)
-                ppo_action_np, _ = agent.predict(ppo_obs_np[0], deterministic=True)
+                if args_cli.asymmetric_ac:
+                    actor_obs = _format_asymmetric_actor_obs(
+                        policy_obs, diffusion, downsample_points, device
+                    )
+                    obs_tensor, _ = agent.policy.obs_to_tensor(actor_obs)
+                else:
+                    ppo_obs_np = _format_ppo_obs(policy_obs)
+                    obs_tensor, _ = agent.policy.obs_to_tensor(ppo_obs_np[0])
+
+                dist = agent.policy.get_distribution(obs_tensor)
+                # mean: deterministic prediction — stored as supervision target for BC
+                ppo_mean = dist.distribution.loc.squeeze(0)           # (output_dim,)
+                # sample: used for env stepping (preserves stochastic behavior)
+                ppo_action_np = dist.get_actions(deterministic=False).squeeze(0).detach().cpu().numpy()
+                ppo_action_np = np.clip(ppo_action_np, agent.action_space.low, agent.action_space.high)
+
                 ppo_action = torch.as_tensor(ppo_action_np, device=device).unsqueeze(0)
 
-                residual_raw = ppo_action[:, :22]
-                noise = ppo_action[:, 22:].reshape(-1, diffusion_horizon, action_dim)
-
-                residual = (residual_raw + 1.0) / 2.0 * (
-                    residual_upper - residual_lower
-                ) + residual_lower
+                residual_raw = ppo_action[:, :args_cli.n_residual]
+                noise = ppo_action[:, args_cli.n_residual:].reshape(-1, diffusion_horizon, action_dim)
+                noise_mean = ppo_mean[args_cli.n_residual:].reshape(diffusion_horizon, action_dim)
 
                 diff_obs = _format_diffusion_obs(policy_obs, downsample_points, device)
                 base = diffusion.predict_action(diff_obs, noise)["action_pred"][:, 0]
 
                 env_action = base.clone()
-                env_action[:, :6] += residual[:, :6]
-                env_action[:, 6:] += residual[:, 6:]
+                if finger_filter is not None:
+                    env_action[:, 6:] = finger_filter(env_action[:, 6:])
+                if args_cli.n_residual > 0:
+                    residual = (residual_raw + 1.0) / 2.0 * (
+                        residual_upper - residual_lower
+                    ) + residual_lower
+                    env_action[:, :6] += residual[:, :6]
+                    env_action[:, 6:] += residual[:, 6:]
                 env_action[:, :3] = env_action[:, :3].clamp(-0.03, 0.03)
                 env_action[:, 3:6] = env_action[:, 3:6].clamp(-0.05, 0.05)
 
@@ -264,11 +298,14 @@ def main():
                 hand_joint_pos_list.append(policy_obs["joint_pos"][0, 7:23].cpu().numpy())
                 ee_pose_list.append(policy_obs["ee_pose"][0].cpu().numpy())
                 actions_list.append(env_action[0].cpu().numpy())
+                noise_list.append(noise[0].cpu().numpy())
+                noise_mean_list.append(noise_mean.detach().cpu().numpy())
                 # seg_pc is camera-rendered in distill_mode (RenderedSegPC); this is what we store
                 # so the downstream BC student learns from camera-domain observations.
                 seg_pc_list.append(policy_obs["seg_pc"][0].T.cpu().numpy())
                 ee_pose_cmd_list.append(policy_obs["ee_pose"][0].cpu().numpy())
 
+                success_before = isaac_env.cfg.is_success(isaac_env)
                 obs_raw, reward, terminated, truncated, _ = env.step(env_action)
 
                 next_joint_pos = obs_raw["policy"]["joint_pos"][0, :7].cpu().numpy()
@@ -282,26 +319,35 @@ def main():
                 if terminated.any() or truncated.any():
                     break
 
-            success = bool(isaac_env.cfg.is_success(isaac_env).cpu()[0])
+            # terminated=True means a failure condition fired — discard regardless of success_before.
+            # truncated=True means timeout — success_before determines the outcome.
+            episode_failed = bool(terminated[0].cpu().numpy())
+            success = (not episode_failed) and bool(success_before.cpu()[0])
+
             if success:
+                episode_data = {
+                    "arm_joint_pos":        np.array(arm_joint_pos_list),
+                    "hand_joint_pos":       np.array(hand_joint_pos_list),
+                    "ee_pose":              np.array(ee_pose_list),
+                    "actions":              np.array(actions_list),
+                    "noise":                np.array(noise_list),
+                    "noise_mean":           np.array(noise_mean_list),
+                    "seg_pc":               np.array(seg_pc_list),
+                    "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
+                    "ee_pose_cmd":          np.array(ee_pose_cmd_list),
+                    "rewards":              np.array(rewards_list),
+                    "dones":                np.array(dones_list),
+                }
+                _save_episode_zarr(args_cli.output_dir, n_success, episode_data)
                 n_success += 1
+                pbar.update(1)
 
-            episode_data = {
-                "arm_joint_pos": np.array(arm_joint_pos_list),
-                "hand_joint_pos": np.array(hand_joint_pos_list),
-                "ee_pose": np.array(ee_pose_list),
-                "actions": np.array(actions_list),
-                "seg_pc": np.array(seg_pc_list),
-                "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
-                "ee_pose_cmd": np.array(ee_pose_cmd_list),
-                "rewards": np.array(rewards_list),
-                "dones": np.array(dones_list),
-            }
-            zarr_path = _save_episode_zarr(args_cli.output_dir, ep_idx, episode_data)
-            pbar.set_postfix(success=n_success, steps=len(actions_list))
+            rate = 100 * n_success / n_attempts
+            pbar.set_postfix(saved=n_success, attempts=n_attempts, rate=f"{rate:.1f}%", steps=len(actions_list))
+        pbar.close()
 
-    rate = 100 * n_success / args_cli.num_episodes if args_cli.num_episodes else 0
-    print(f"\n[collect_distill] Done. Success rate: {n_success}/{args_cli.num_episodes} ({rate:.1f}%)")
+    rate = 100 * n_success / n_attempts
+    print(f"\n[collect_distill] Done. Saved {n_success} successful episodes from {n_attempts} attempts ({rate:.1f}%)")
     print(f"[collect_distill] Episodes saved to {args_cli.output_dir}")
     env.close()
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 import torch
 
 from isaaclab.envs import ManagerBasedEnv
-from isaaclab.envs.mdp.actions import JointPositionAction
-from isaaclab.envs.mdp.actions.actions_cfg import JointPositionActionCfg
+from isaaclab.envs.mdp.actions import JointPositionAction, RelativeJointPositionAction
+from isaaclab.envs.mdp.actions.actions_cfg import JointPositionActionCfg, RelativeJointPositionActionCfg
 from isaaclab.utils import configclass
 
 
@@ -40,6 +40,43 @@ class BoundedJointPositionAction(JointPositionAction):
         self._processed_actions[:, : self._num_arm_joints] = self._processed_actions[
             :, : self._num_arm_joints
         ].clamp(self._arm_low, self._arm_high)
+
+
+class BoundedRelativeJointPositionAction(RelativeJointPositionAction):
+    """Relative joint position action that clamps the resulting position of the first N joints to arm_joint_limits."""
+
+    def __init__(self, cfg: BoundedRelativeJointPositionActionCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        order = cfg.arm_joint_order
+        limits = cfg.arm_joint_limits
+        self._num_arm_joints = len(order)
+        self._arm_low = torch.tensor(
+            [limits[j][0] for j in order],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self._arm_high = torch.tensor(
+            [limits[j][1] for j in order],
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+    def apply_actions(self):
+        resulting = self.processed_actions + self._asset.data.joint_pos[:, self._joint_ids]
+        resulting[:, : self._num_arm_joints] = resulting[:, : self._num_arm_joints].clamp(
+            self._arm_low, self._arm_high
+        )
+        self._asset.set_joint_position_target(resulting, joint_ids=self._joint_ids)
+
+
+@configclass
+class BoundedRelativeJointPositionActionCfg(RelativeJointPositionActionCfg):
+    """Config for BoundedRelativeJointPositionAction. Clamps resulting joint positions (current + delta) to arm limits."""
+
+    class_type: type[RelativeJointPositionAction] = BoundedRelativeJointPositionAction
+
+    arm_joint_limits: dict[str, tuple[float, float]] = {}
+    arm_joint_order: list[str] = []
 
 
 @configclass

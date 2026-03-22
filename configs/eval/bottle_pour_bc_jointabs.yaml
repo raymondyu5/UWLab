@@ -1,0 +1,10 @@
+task_id: UW-FrankaLeap-PourBottle-JointAbs-v0
+checkpoint: logs/bc_cfm_pcd_bourbon_0312_jointpos_
+num_inference_steps: 5
+device: cuda:0
+num_envs: 1
+action_horizon: 1
+num_warmup_steps: 5
+spawn: bottle_pour_narrow
+record_video: false
+record_plots: true

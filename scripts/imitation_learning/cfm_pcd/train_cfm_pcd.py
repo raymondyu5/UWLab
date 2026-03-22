@@ -23,29 +23,41 @@ from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
 from uwlab.policy.train_cfm_workspace import TrainCFMWorkspace
 from uwlab_tasks.manager_based.manipulation.grasp.dataset.zarr_dataset import ZarrDataset
+from uwlab_tasks.manager_based.manipulation.grasp.dataset.cotrain_zarr_dataset import CotrainZarrDataset
 
 
-@hydra.main(config_path="../../../configs/bc", config_name="train_cfm_pcd", version_base=None)
-def main(cfg: DictConfig):
-    # dataset
-    dataset = ZarrDataset(
-        data_path=cfg.dataset.data_path,
+def _build_zarr_dataset(cfg, data_path, seed):
+    return ZarrDataset(
+        data_path=data_path,
         load_list=list(cfg.dataset.load_list),
-        num_demo=cfg.dataset.num_demo,
         obs_keys=list(cfg.dataset.obs_keys),
         action_key=cfg.dataset.action_key,
+        action_base_keys=list(cfg.dataset.action_base_keys) if cfg.dataset.get("action_base_keys") else None,
         image_keys=list(cfg.dataset.image_keys),
         horizon=cfg.horizon,
         n_obs_steps=cfg.n_obs_steps,
         pad_after=cfg.dataset.pad_after,
         val_ratio=cfg.dataset.val_ratio,
-        seed=cfg.training.seed,
+        seed=seed,
         downsample_points=cfg.dataset.downsample_points,
         pcd_noise=cfg.dataset.pcd_noise,
         noise_extrinsic=cfg.dataset.noise_extrinsic,
         noise_extrinsic_parameter=list(cfg.dataset.noise_extrinsic_parameter),
         obs_noise=dict(cfg.dataset.get("obs_noise", {})),
     )
+
+
+@hydra.main(config_path="../../../configs/bc", config_name="train_cfm_pcd", version_base=None)
+def main(cfg: DictConfig):
+    # dataset
+    real_data_path = cfg.dataset.get("real_data_path", None)
+    if real_data_path:
+        sim_dataset = _build_zarr_dataset(cfg, cfg.dataset.data_path, cfg.training.seed)
+        real_dataset = _build_zarr_dataset(cfg, real_data_path, cfg.training.seed)
+        sim_ratio = cfg.dataset.get("sim_ratio", 0.95)
+        dataset = CotrainZarrDataset(sim_dataset=sim_dataset, real_dataset=real_dataset, sim_ratio=sim_ratio)
+    else:
+        dataset = _build_zarr_dataset(cfg, cfg.dataset.data_path, cfg.training.seed)
 
     # shape_meta: infer action/obs dims from dataset
     shape_meta = {
