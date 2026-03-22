@@ -13,6 +13,7 @@ from .observations import (
 )
 from .rewards import GraspReward, PourReward
 from .events import (
+    apply_sysid_params_on_reset,
     reset_robot_joints,
     reset_object_pose,
     reset_table_block,

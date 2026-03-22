@@ -23,6 +23,15 @@ gym.register(
     disable_env_checker=True,
 )
 
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCup-JointAbs-SysidApplied-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.pink_cup:GraspPinkCupFrankaLeapJointAbsSysidAppliedCfg",
+    },
+    disable_env_checker=True,
+)
+
 
 gym.register(
     id="UW-FrankaLeap-GraspPinkCup-IkRel-v0",
@@ -51,6 +60,15 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottle-JointAbs-SysidApplied-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle:GraspBottleFrankaLeapJointAbsSysidAppliedCfg",
     },
     disable_env_checker=True,
 )
@@ -141,6 +159,15 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapSysidCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-JointAbs-SysidApplied-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapJointAbsSysidAppliedCfg",
     },
     disable_env_checker=True,
 )

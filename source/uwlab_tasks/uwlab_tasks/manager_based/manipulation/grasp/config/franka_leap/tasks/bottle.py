@@ -23,6 +23,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
+from .... import mdp
 from ....mdp import GraspReward, reset_object_pose, reset_table_block
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
@@ -74,6 +75,17 @@ class GraspBottleSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
                 disable_gravity=False,
             ),
         ),
+    )
+
+
+@configclass
+class GraspBottleSysidSceneCfg(GraspBottleSceneCfg):
+    """Bottle scene with delayed actuators for sysid-applied overlay. Keeps cameras for seg_pc."""
+
+    robot = franka_leap.IMPLICIT_FRANKA_LEAP.replace(
+        prim_path="{ENV_REGEX_NS}/Robot",
+        actuators=franka_leap.FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG
+        | franka_leap.FRANKA_LEAP_HAND_ACTUATOR_CFG,
     )
 
 
@@ -202,6 +214,24 @@ class GraspBottleFrankaLeapJointAbsCfg(GraspBottleFrankaLeapCfg):
     def warmup_action(self, env) -> torch.Tensor:
         reset = torch.tensor(ARM_RESET + HAND_RESET, device=env.device, dtype=torch.float32)
         return reset.unsqueeze(0).repeat(env.num_envs, 1)
+
+
+@configclass
+class GraspBottleFrankaLeapJointAbsSysidAppliedCfg(GraspBottleFrankaLeapJointAbsCfg):
+    """Bottle JointAbs with sysid params applied on reset. Has seg_pc for overlay scripts."""
+
+    scene: GraspBottleSysidSceneCfg = GraspBottleSysidSceneCfg(num_envs=1, env_spacing=2.5)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.events.apply_sysid_params = EventTerm(
+            func=mdp.apply_sysid_params_on_reset,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "params": franka_leap.FRANKA_LEAP_SYSID_PARAMS,
+            },
+        )
 
 
 @configclass

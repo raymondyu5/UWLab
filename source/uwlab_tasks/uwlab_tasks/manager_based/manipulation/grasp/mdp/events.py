@@ -68,6 +68,26 @@ def set_fixed_camera_view(
     env.scene[camera_name].set_world_poses_from_view(eye, look_at, env_ids=env_ids)
 
 
+def apply_sysid_params_on_reset(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    params: dict,
+):
+    """Apply sysid params to robot on reset. Use with DelayedPDActuatorCfg scene."""
+    import uwlab_assets.robots.franka_leap as franka_leap
+
+    robot = env.scene[asset_cfg.name]
+    arm_joint_ids = robot.find_joints(franka_leap.ARM_JOINT_NAMES)[0]
+    if isinstance(arm_joint_ids, torch.Tensor):
+        pass
+    else:
+        arm_joint_ids = torch.tensor(arm_joint_ids, device=env.device)
+    franka_leap.apply_sysid_params_to_robot(
+        robot, params, arm_joint_ids, robot.num_joints, env.device
+    )
+
+
 def reset_robot_joints(
     env,
     env_ids: torch.Tensor,

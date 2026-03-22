@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import isaaclab.sim as sim_utils
 from isaaclab.envs import ViewerCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
+from ... import mdp
 from .grasp_franka_leap import FrankaLeapEmptySceneCfg, GraspFrankaLeapJointAbsCfg, RL_MODE
 
 # Default simulation timestep for sysid (60 Hz, matches typical Franka control rate)
@@ -81,3 +84,28 @@ class GraspFrankaLeapSysidCfg(GraspFrankaLeapJointAbsCfg):
         self.decimation = 1
         self.episode_length_s = 99999.0
         self.sim.dt = SYSID_SIM_DT
+
+
+@configclass
+class GraspFrankaLeapJointAbsSysidAppliedCfg(GraspFrankaLeapJointAbsCfg):
+    """GraspFrankaLeapJointAbsCfg with sysid params applied on reset.
+
+    Uses delayed actuator scene and applies FRANKA_LEAP_SYSID_PARAMS each reset.
+    Update franka_leap.FRANKA_LEAP_SYSID_PARAMS with your sysid output.
+    Encoder bias: add to arm_joint_pos in reset_robot when resetting to real data.
+    """
+
+    scene: FrankaLeapSysidSceneCfg = FrankaLeapSysidSceneCfg(num_envs=1, env_spacing=2.5)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.events.reset_fixed_camera = None  # Sysid scene has no fixed_camera
+        self.events.reset_camera = None  # Sysid scene has no train_camera
+        self.events.apply_sysid_params = EventTerm(
+            func=mdp.apply_sysid_params_on_reset,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "params": franka_leap.FRANKA_LEAP_SYSID_PARAMS,
+            },
+        )

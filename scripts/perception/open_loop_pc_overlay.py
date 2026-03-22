@@ -4,7 +4,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Open-loop rollout a trajectory and save per-step viewport frames with sim point cloud
-overlaid on real point cloud. Combines test_open_loop_trajectory and visualize_synthetic_pc."""
+overlaid on real point cloud. Combines test_open_loop_trajectory and visualize_synthetic_pc.
+
+Trajectory format: any path accepted by uwlab_tasks.utils.trajectory_utils.load_real_episode:
+  - Zarr store: path ending in .zarr (e.g. .../episode_15/episode_15.zarr), or a directory
+    episode_N that contains episode_N/episode_N.zarr
+  - Legacy: episode directory with episode_N.npy or a standalone .npy file
+"""
 
 import argparse
 import os
@@ -18,7 +24,10 @@ parser.add_argument(
     "--trajectory_file",
     type=str,
     required=True,
-    help="Path to trajectory: directory (e.g. episode_30) or episode .npy file.",
+    help=(
+        "Episode trajectory: zarr (.zarr path or episode_N dir with episode_N.zarr inside), "
+        "or legacy .npy / npy episode directory (see load_real_episode)."
+    ),
 )
 parser.add_argument(
     "--output_dir",
@@ -37,13 +46,31 @@ parser.add_argument(
     "--task",
     type=str,
     default="UW-FrankaLeap-GraspBottle-JointAbs-v0",
-    help="Task with seg_pc (e.g. PourBottle, GraspPinkCup). Must have seg_pc observation.",
+    help="Task with seg_pc (e.g. GraspBottle, GraspPinkCup). For sysid params use *-JointAbs-SysidApplied-v0.",
 )
 parser.add_argument(
     "--trajectory_downsample",
     type=int,
     default=2048,
     help="Downsample real point cloud to this many points.",
+)
+parser.add_argument(
+    "--cross_section_downsample",
+    type=int,
+    default=16384,
+    help="Downsample real point cloud for cross-section plot (use more points than trajectory_downsample).",
+)
+parser.add_argument(
+    "--cross_section_y_center",
+    type=float,
+    default=0.005,
+    help="Y coordinate (m) for cross-section slice.",
+)
+parser.add_argument(
+    "--sim_pc_downsample",
+    type=int,
+    default=16384,
+    help="Downsample sim seg_pc to this many points (env override). Default 16384 for denser cross-sections.",
 )
 
 parser.add_argument(
@@ -130,8 +157,14 @@ from tqdm import tqdm
 
 
 def load_episode(episode_file: str, action_type: str):
-    """Load an episode and construct per-step actions for the requested action_type."""
-    episode = load_real_episode(episode_file)
+    """Load an episode (zarr, npy, or episode dir) and build per-step actions for action_type.
+
+    Uses load_real_episode (same zarr layout as collection / sysid conversion).
+    """
+    episode_path = os.path.abspath(os.path.expanduser(episode_file))
+    if not os.path.exists(episode_path):
+        raise FileNotFoundError(f"Trajectory not found: {episode_path}")
+    episode = load_real_episode(episode_path)
     obs_list = episode["obs"]
     raw_actions = episode["actions"]
 
@@ -511,6 +544,60 @@ def capture_viewport_image(env, output_path: str, camera_name: str = "fixed_came
     return True
 
 
+def plot_pc_cross_sections(
+    real_pc: np.ndarray,
+    sim_pc: np.ndarray,
+    output_path: str,
+    y_center: float = 0.005,
+    slice_thickness: float = 0.02,
+) -> None:
+    """Plot Y-slice (XZ view) at y_center: one view and one from the opposite side (flipped x)."""
+    if real_pc.size == 0 and sim_pc.size == 0:
+        return
+    combined = np.vstack([p for p in (real_pc, sim_pc) if p.size > 0])
+    y_min, y_max = combined[:, 1].min(), combined[:, 1].max()
+    y_use = np.clip(y_center, y_min, y_max)
+
+    def slice_points(pc: np.ndarray, center: float, half_thick: float) -> np.ndarray:
+        if pc.size == 0:
+            return np.empty((0, 3))
+        mask = np.abs(pc[:, 1] - center) <= half_thick
+        return pc[mask]
+
+    half_thick = slice_thickness / 2
+    r_slice = slice_points(real_pc, y_use, half_thick)
+    s_slice = slice_points(sim_pc, y_use, half_thick)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+    if r_slice.size > 0:
+        ax1.scatter(r_slice[:, 0], r_slice[:, 2], c="red", s=4, alpha=0.7, label="Real")
+        ax2.scatter(r_slice[:, 0], r_slice[:, 2], c="red", s=4, alpha=0.7, label="Real")
+    if s_slice.size > 0:
+        ax1.scatter(s_slice[:, 0], s_slice[:, 2], c="blue", s=4, alpha=0.7, label="Sim")
+        ax2.scatter(s_slice[:, 0], s_slice[:, 2], c="blue", s=4, alpha=0.7, label="Sim")
+
+    ax1.set_xlabel("x")
+    ax1.set_ylabel("z")
+    ax1.set_title(f"Y-slice y≈{y_use:.3f}m (XZ view)")
+    ax1.axis("equal")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.invert_xaxis()
+    ax2.set_xlabel("x (flipped)")
+    ax2.set_ylabel("z")
+    ax2.set_title(f"Y-slice y≈{y_use:.3f}m (XZ view, other side)")
+    ax2.axis("equal")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.suptitle("Point cloud cross-sections (Frame 0): Red=Real, Blue=Sim", fontsize=14, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
 def compare_trajectories(real_obs_list: list, sim_results: list, output_dir: str, mode: str = "open_loop") -> dict:
     """Compare real vs sim trajectories and generate plots (same as test_open_loop_trajectory)."""
     real_ee_poses = np.asarray(
@@ -718,6 +805,13 @@ def main():
             "yaw": (0.0, 0.0),
         }
 
+    env_cfg.seg_pc_num_downsample_points = args_cli.sim_pc_downsample
+    seg_term = getattr(getattr(env_cfg.observations.policy, "seg_pc", None), "func", None)
+    if seg_term is not None:
+        pc_obj = getattr(seg_term, "__self__", None)
+        if pc_obj is not None and hasattr(pc_obj, "num_downsample_points"):
+            pc_obj.num_downsample_points = env_cfg.seg_pc_num_downsample_points
+
     env = gym.make(task, cfg=env_cfg)
     if args_cli.debug:
         max_ep = int(env.unwrapped.max_episode_length)
@@ -771,6 +865,20 @@ def main():
                 rgb = _get_camera_rgb(env, args_cli.camera)
         frames.append(rgb)
         imageio.imwrite(os.path.join(frames_dir, "frame_00000.png"), rgb)
+
+        real_pc_cross = get_real_pc_for_frame(
+            traj_obs, pointclouds, real_pcd_latency, env.unwrapped.device, args_cli.cross_section_downsample
+        )
+        real_pc_for_plot = real_pc_cross if real_pc_cross is not None and real_pc_cross.shape[0] > 0 else np.empty((0, 3))
+        if real_pc_for_plot.shape[0] > 0 or sim_pc_0.shape[0] > 0:
+            plot_pc_cross_sections(
+                real_pc_for_plot,
+                sim_pc_0,
+                os.path.join(output_dir, "pc_cross_sections_frame0.png"),
+                y_center=args_cli.cross_section_y_center,
+                slice_thickness=0.02,
+            )
+            print(f"[INFO] Saved point cloud cross-sections to {output_dir}/pc_cross_sections_frame0.png")
 
         mode = args_cli.mode
         rollout_desc = "Direct joints" if mode == "direct_joints" else "Open-loop rollout"

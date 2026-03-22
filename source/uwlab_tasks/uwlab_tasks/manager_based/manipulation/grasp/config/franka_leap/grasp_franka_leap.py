@@ -240,11 +240,12 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
 
     focal_length = cam_cfg.spawn.focal_length
     horizontal_aperture = cam_cfg.spawn.horizontal_aperture
+    num_downsample = getattr(cfg, "seg_pc_num_downsample_points", 2048)
     rendered_pc = RenderedSegPC(
         camera_name=camera_name,
         depth_key="depth",
         pcd_crop_region=cfg.pcd_crop_region,
-        num_downsample_points=2048,
+        num_downsample_points=num_downsample,
         focal_length=focal_length,
         horizontal_aperture=horizontal_aperture,
         include_entity_names=cfg.distill_include_entity_names,
