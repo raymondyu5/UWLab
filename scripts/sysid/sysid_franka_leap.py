@@ -64,10 +64,10 @@ parser.add_argument("--viscous_friction_min", type=float, default=0.0)
 parser.add_argument("--viscous_friction_max", type=float, default=20.0)
 parser.add_argument("--bias_min", type=float, default=-0.1)
 parser.add_argument("--bias_max", type=float, default=0.1)
-parser.add_argument("--delay_max", type=int, default=5,
-                    help="Max motor delay in physics steps. CMA-ES searches [0, delay_max].")
 parser.add_argument("--no_warm_start", action="store_true",
                     help="Initialize CMA-ES at bounds center instead of sim defaults.")
+parser.add_argument("--max_length", type=int, default=None,
+                    help="Max length of trajectories to load. If not provided, the shortest trajectory will be used.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -83,7 +83,7 @@ from isaaclab.assets import Articulation
 import uwlab_tasks  # noqa: F401  # register gym envs
 
 from uwlab_tasks.utils.trajectory_utils import load_real_episode
-from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.sysid_cfg import GraspFrankaLeapSysidCfg
+from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.sysid_cfg import GraspFrankaLeapSysidJointRelCfg, GraspFrankaLeapSysidJointAbsCfg
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import RL_MODE
 from uwlab_tasks.manager_based.manipulation.grasp.mdp.observations import ee_pose_w
 from isaaclab.managers import SceneEntityCfg
@@ -93,9 +93,8 @@ import uwlab_assets.robots.franka_leap as franka_leap
 NUM_ARM_JOINTS = 7
 ARM_JOINT_NAMES = [f"panda_joint{i}" for i in range(1, 8)]
 NUM_HAND_JOINTS = 16
-# Arm actuator names (DelayedPDActuatorCfg per link)
+# Arm actuator names (ImplicitActuatorCfg per link)
 ARM_ACTUATOR_NAMES = [f"panda_link{i}" for i in range(1, 8)]
-DELAY_PARAM_IDX = NUM_ARM_JOINTS * 5  # 35
 
 
 # ============================================================================
@@ -147,7 +146,7 @@ class CMAES:
 # ============================================================================
 
 def build_bounds(args):
-    """36 params: [armature*7, static_friction*7, dynamic_ratio*7, viscous_friction*7, encoder_bias*7, delay]."""
+    """35 params: [armature*7, static_friction*7, dynamic_ratio*7, viscous_friction*7, encoder_bias*7]."""
     bounds = []
     for _ in range(NUM_ARM_JOINTS):
         bounds.append([args.armature_min, args.armature_max])
@@ -159,12 +158,11 @@ def build_bounds(args):
         bounds.append([args.viscous_friction_min, args.viscous_friction_max])
     for _ in range(NUM_ARM_JOINTS):
         bounds.append([args.bias_min, args.bias_max])  # encoder_bias (rad)
-    bounds.append([0.0, float(args.delay_max)])  # motor delay (physics steps)
     return bounds
 
 
 def apply_params_to_envs(robot, params_tensor, arm_joint_ids, num_joints, device):
-    """Apply 36 params to all envs (joint dynamics + delay). Encoder bias applied to initial pos and score."""
+    """Apply 35 params to all envs (joint dynamics). Encoder bias applied to initial pos and score."""
     N = params_tensor.shape[0]
     env_ids = torch.arange(N, device=device)
     J = NUM_ARM_JOINTS
@@ -188,13 +186,6 @@ def apply_params_to_envs(robot, params_tensor, arm_joint_ids, num_joints, device
         joint_viscous_friction_coeff=viscous_friction_full,
         env_ids=env_ids,
     )
-
-    delay_int = torch.round(params_tensor[:, DELAY_PARAM_IDX]).clamp(min=0).to(torch.int)
-    for name in ARM_ACTUATOR_NAMES:
-        act = robot.actuators[name]
-        act.positions_delay_buffer.set_time_lag(delay_int)
-        act.velocities_delay_buffer.set_time_lag(delay_int)
-        act.efforts_delay_buffer.set_time_lag(delay_int)
 
 
 def record_trajectory_video(
@@ -498,8 +489,8 @@ def _load_episode_as_sysid_dict(path: str, max_steps, episode_dt: float):
     }
 
 
-def load_trajectories(paths, max_steps, device, episode_dt: float):
-    """Load trajectories from .pt and/or zarr/npy, pad to max length, return list of dicts."""
+def load_trajectories(paths, max_steps, device, episode_dt: float, max_length: int = None):
+    """Load trajectories from .pt and/or zarr/npy, crop to uniform length (max length if provided, else the minimum length ), return list of dicts."""
     trajectories = []
     lengths = []
     for path in paths:
@@ -513,22 +504,17 @@ def load_trajectories(paths, max_steps, device, episode_dt: float):
             "initial_arm_joint_pos": data["initial_arm_joint_pos"],
             "initial_hand_joint_pos": data["initial_hand_joint_pos"],
             "dt": data["dt"],
-        })
+        })    
 
-    T_max = max(lengths)
+    T_max = min(min(lengths), max_length) if max_length is not None else min(lengths) # min length of all trajectories, or max_length if its smaller
     dt = trajectories[0]["dt"]
 
     for i, traj in enumerate(trajectories):
-        T = lengths[i]
-        if T < T_max:
-            # Pad by repeating last frame
-            pad_arm = traj["arm_joint_pos"][-1:].expand(T_max - T, -1)
-            pad_target = traj["arm_joint_pos_target"][-1:].expand(T_max - T, -1)
-            pad_hand = traj["hand_actions"][-1:].expand(T_max - T, -1)
-            traj["arm_joint_pos"] = torch.cat([traj["arm_joint_pos"], pad_arm], dim=0)
-            traj["arm_joint_pos_target"] = torch.cat([traj["arm_joint_pos_target"], pad_target], dim=0)
-            traj["hand_actions"] = torch.cat([traj["hand_actions"], pad_hand], dim=0)
-        traj["valid_length"] = T
+        print(f"Trajectory {i} length: {traj['arm_joint_pos'].shape[0]}")
+        traj["arm_joint_pos"] = traj["arm_joint_pos"][:T_max]
+        traj["arm_joint_pos_target"] = traj["arm_joint_pos_target"][:T_max]
+        traj["hand_actions"] = traj["hand_actions"][:T_max]
+        traj["valid_length"] = T_max
         traj["arm_joint_pos"] = traj["arm_joint_pos"].to(device).float()
         traj["arm_joint_pos_target"] = traj["arm_joint_pos_target"].to(device).float()
         traj["hand_actions"] = traj["hand_actions"].to(device).float()
@@ -546,32 +532,32 @@ def main():
     args = args_cli
     device_str = args.device
     N = args.num_envs
-    num_params = NUM_ARM_JOINTS * 5 + 1  # 36 (dynamics + delay)
+    num_params = NUM_ARM_JOINTS * 5  # 35 (dynamics)
 
     print("\n" + "="*60)
     print("Franka LEAP Arm System Identification - CMA-ES (Open-Loop Joint Replay)")
     print("="*60)
     print(f"Envs: {N}  Params: {num_params}  Iters: {args.max_iter}  Sigma: {args.sigma}")
     print(f"Controller: FrankaLeapJointPositionAction (same as RL)")
-    print(f"Arm-only sysid (7 joints), DelayedPDActuatorCfg, delay in search [0, {args.delay_max}]")
+    print(f"Arm-only sysid (7 joints), ImplicitActuatorCfg")
 
     # Load trajectories (multiple .pt files, padded to max length)
     print(f"\nLoading {len(args.real_data)} trajectory file(s):")
     for p in args.real_data:
         print(f"  {p}")
     trajectories, T_max, dt = load_trajectories(
-        args.real_data, args.max_steps, device_str, args.episode_dt
+        args.real_data, args.max_steps, device_str, args.episode_dt, args.max_length    
     )
     traj0 = trajectories[0]
     print(f"  {len(trajectories)} trajectories, T_max={T_max} samples ({T_max*dt:.2f}s), dt={dt*1000:.1f}ms")
 
     # GraspFrankaLeapJointAbsCfg with real gains (same env as RL)
-    env_cfg = GraspFrankaLeapSysidCfg()
+    env_cfg = GraspFrankaLeapSysidJointAbsCfg()
     env_cfg.scene.num_envs = N
     env_cfg.scene.env_spacing = 2.0
     env_cfg.run_mode = RL_MODE  # no scene cameras; viewport (sim.render) used for recording
 
-    env = gym.make("UW-FrankaLeap-Sysid-v0", cfg=env_cfg, render_mode="rgb_array" if args.record_video_every > 0 else None)
+    env = gym.make("UW-FrankaLeap-Sysid-JointAbs-v0", cfg=env_cfg, render_mode="rgb_array" if args.record_video_every > 0 else None)
     env.reset()
 
     unwrapped = env.unwrapped
@@ -590,28 +576,21 @@ def main():
     static_fric = robot.data.joint_friction_coeff[0, arm_ids].cpu().numpy()
     dynamic_fric = robot.data.joint_dynamic_friction_coeff[0, arm_ids].cpu().numpy()
     viscous_fric = robot.data.joint_viscous_friction_coeff[0, arm_ids].cpu().numpy()
-    delay_vals = []
-    for name in ARM_ACTUATOR_NAMES:
-        lag = robot.actuators[name].positions_delay_buffer.time_lags[0].item()
-        delay_vals.append(int(lag))
     print("\nDefault joint dynamics (arm only, env 0, before sysid overwrites):")
     print(f"  armature:           {armature}")
     print(f"  static_friction:    {static_fric}")
     print(f"  dynamic_friction:   {dynamic_fric}")
     print(f"  viscous_friction:   {viscous_fric}")
-    print(f"  delay (phys steps): {delay_vals}")
     print(f"  bias: 0 (sysid param, not stored in sim)")
 
     # Build initial params from defaults for CMA-ES warm start
     dynamic_ratio = np.where(static_fric > 1e-12, np.clip(dynamic_fric / static_fric, 0.0, 1.0), 0.5)
-    delay_default = delay_vals[0] if delay_vals else 0
     default_params = np.concatenate([
         armature,
         static_fric,
         dynamic_ratio,
         viscous_fric,
         np.zeros(NUM_ARM_JOINTS),  # bias
-        np.array([float(delay_default)]),
     ])
 
     sim_dt = env_cfg.sim.dt
@@ -634,7 +613,7 @@ def main():
     print(f"\nBounds: armature[{args.armature_min},{args.armature_max}] "
           f"friction[{args.friction_min},{args.friction_max}] "
           f"dyn_ratio[0,1] viscous[{args.viscous_friction_min},{args.viscous_friction_max}] "
-          f"bias[{args.bias_min},{args.bias_max}] delay[0,{args.delay_max}]")
+          f"bias[{args.bias_min},{args.bias_max}]")
     print(f"CMA-ES initialized from {'bounds center' if args.no_warm_start else 'sim defaults'}")
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -764,18 +743,15 @@ def main():
     dfric = dratio * sfric
     vfric = best_params_ever[21:28]
     ebias = best_params_ever[28:35]
-    delay = int(round(best_params_ever[DELAY_PARAM_IDX]))
 
     print(f"\n  {'Joint':<20s} {'Arm':>8s} {'SFric':>8s} {'DRat':>8s} {'DFric':>8s} {'VFric':>8s} {'Bias°':>8s}")
     for i, name in enumerate(ARM_JOINT_NAMES):
         print(f"  {name:<20s} {arm[i]:8.4f} {sfric[i]:8.4f} {dratio[i]:8.4f} {dfric[i]:8.4f} {vfric[i]:8.4f} {np.degrees(ebias[i]):8.4f}")
-    print(f"  delay (physics steps): {delay}")
 
     final = {"best_params": best_params_ever, "best_score": best_score_ever,
              "best_armature": arm.tolist(), "best_friction": sfric.tolist(),
              "best_dynamic_ratio": dratio.tolist(), "best_dynamic_friction": dfric.tolist(),
              "best_viscous_friction": vfric.tolist(), "best_encoder_bias": ebias.tolist(),
-             "best_delay": delay,
              "history": history, "bounds": bounds, "args": vars(args)}
     final_path = os.path.join(output_dir, "final_results.pt")
     torch.save(final, final_path)

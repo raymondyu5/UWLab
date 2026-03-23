@@ -104,15 +104,6 @@ gym.register(
 )
 
 gym.register(
-    id="UW-FrankaLeap-PourBottle-JointRel-v0",
-    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointRelCfg",
-    },
-    disable_env_checker=True,
-)
-
-gym.register(
     id="UW-FrankaLeap-PourBottle-IkRel-v0",
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
@@ -126,6 +117,15 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-PourBottle-JointRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointRelCfg",
     },
     disable_env_checker=True,
 )
@@ -164,10 +164,19 @@ gym.register(
 ########## Sysid (arm-only CMA-ES) #########
 
 gym.register(
-    id="UW-FrankaLeap-Sysid-v0",
+    id="UW-FrankaLeap-Sysid-JointAbs-v0",
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapSysidCfg",
+        "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapSysidJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-Sysid-JointRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.sysid_cfg:GraspFrankaLeapSysidJointRelCfg",
     },
     disable_env_checker=True,
 )

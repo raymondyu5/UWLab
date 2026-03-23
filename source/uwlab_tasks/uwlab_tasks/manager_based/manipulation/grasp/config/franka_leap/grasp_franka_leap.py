@@ -183,8 +183,20 @@ class GraspFrankaLeapIkRelCfg(FrankaLeapEmptyGraspEnvCfg):
 
     def warmup_action(self, env) -> torch.Tensor:
         """Zero delta EE + zero hand — safe no-op for IK-relative control."""
-        return torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
+        arm_reset = torch.zeros(6, device=env.device, dtype=torch.float32)
+        hand_reset = torch.as_tensor(HAND_RESET, device=env.device, dtype=torch.float32)
+        return torch.cat([arm_reset, hand_reset], dim=-1).unsqueeze(0).repeat(env.num_envs, 1)
 
+@configclass
+class GraspFrankaLeapJointRelCfg(FrankaLeapEmptyGraspEnvCfg):
+    actions = franka_leap.FrankaLeapJointRelArmHandJointAction()
+
+    def warmup_action(self, env) -> torch.Tensor:
+        """Hold at reset joint position — safe no-op for joint absolute control."""
+        arm_reset = torch.zeros(7, device=env.device, dtype=torch.float32)
+        hand_reset = torch.as_tensor(HAND_RESET, device=env.device, dtype=torch.float32)
+        reset = torch.cat([arm_reset, hand_reset], dim=-1)
+        return reset.unsqueeze(0).repeat(env.num_envs, 1)
 
 @configclass
 class GraspFrankaLeapIkAbsCfg(FrankaLeapEmptyGraspEnvCfg):

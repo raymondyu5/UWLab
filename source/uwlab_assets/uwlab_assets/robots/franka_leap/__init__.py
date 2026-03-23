@@ -23,4 +23,5 @@ from .franka_leap import (
     FRANKA_LEAP_SYSID_PARAMS,
     apply_sysid_params_to_robot,
     IMPLICIT_FRANKA_LEAP,
+    REAL_GAINS_FRANKA_LEAP,
 )

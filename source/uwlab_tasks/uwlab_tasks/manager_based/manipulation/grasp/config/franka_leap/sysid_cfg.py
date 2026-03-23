@@ -16,29 +16,30 @@ import isaaclab.sim as sim_utils
 from isaaclab.envs import ViewerCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+
 from isaaclab.sensors import CameraCfg
 from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from ... import mdp
-from .grasp_franka_leap import FrankaLeapEmptySceneCfg, GraspFrankaLeapJointAbsCfg, RL_MODE
-
-# Default simulation timestep for sysid (60 Hz, matches typical Franka control rate)
-SYSID_SIM_DT = 1.0 / 60.0
+from .grasp_franka_leap import (
+    FrankaLeapEmptySceneCfg,
+    GraspFrankaLeapJointAbsCfg,
+    GraspFrankaLeapJointRelCfg,
+    RL_MODE,
+    ARM_NUM_POINTS,
+    HAND_NUM_POINTS,
+)
 
 
 @configclass
 class FrankaLeapSysidSceneCfg(FrankaLeapEmptySceneCfg):
     """Same as FrankaLeapEmptySceneCfg but robot uses real gains for sysid. No cameras (rl_mode)."""
 
-    fixed_camera = None  # no scene cameras; viewport (ViewerCfg) used for sim.render() when recording
-    robot = franka_leap.IMPLICIT_FRANKA_LEAP.replace(
-        prim_path="{ENV_REGEX_NS}/Robot",
-        actuators=franka_leap.FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG
-        | franka_leap.FRANKA_LEAP_HAND_ACTUATOR_CFG,
-    )
-
+    #fixed_camera = None  # no scene cameras; viewport (ViewerCfg) used for sim.render() when recording
+    robot = franka_leap.REAL_GAINS_FRANKA_LEAP.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
 @configclass
 class FrankaLeapSysidSceneWithCameraCfg(FrankaLeapSysidSceneCfg):
@@ -55,10 +56,7 @@ class FrankaLeapSysidSceneWithCameraCfg(FrankaLeapSysidSceneCfg):
     #     spawn=sim_utils.PinholeCameraCfg(
     #         focal_length=24.0,
     #         focus_distance=400.0,
-    #         horizontal_aperture=20.955,
-    #         clipping_range=(0.1, 1.0e5),
-    #     ),
-    #     offset=CameraCfg.OffsetCfg(
+    #         horizontal_aperture=20.955,gains
     #         pos=(1.43, 0.24, 0.6),
     #         rot=(1.0, 0.0, 0.0, 0.0),
     #         convention="ros",
@@ -67,8 +65,8 @@ class FrankaLeapSysidSceneWithCameraCfg(FrankaLeapSysidSceneCfg):
 
 
 @configclass
-class GraspFrankaLeapSysidCfg(GraspFrankaLeapJointAbsCfg):
-    """GraspFrankaLeapJointAbsCfg with real robot gains for sysid. Same env as RL, decimation=1."""
+class GraspFrankaLeapSysidJointAbsCfg(GraspFrankaLeapJointAbsCfg):
+    """GraspFrankaLeapJointAbsCfg with real robot gains for sysid. Same env as RL."""
 
     scene: FrankaLeapSysidSceneCfg = FrankaLeapSysidSceneCfg(num_envs=512, env_spacing=2.0)
     viewer: ViewerCfg = ViewerCfg(
@@ -81,9 +79,49 @@ class GraspFrankaLeapSysidCfg(GraspFrankaLeapJointAbsCfg):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.run_mode = RL_MODE
-        self.decimation = 1
         self.episode_length_s = 99999.0
-        self.sim.dt = SYSID_SIM_DT
+
+        # synth_pc = mdp.CachedSamplePC(
+        #     asset_name="robot",
+        #     object_names=[],
+        #     num_arm_pcd=ARM_NUM_POINTS,
+        #     num_hand_pcd=HAND_NUM_POINTS,
+        #     num_object_pcd=[],
+        #     num_downsample_points=2048,
+        # )
+        # self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+
+
+@configclass
+class GraspFrankaLeapSysidJointRelCfg(GraspFrankaLeapJointRelCfg):
+    """Sysid empty scene with real gains and mesh seg_pc, but joint-relative arm actions (7D delta + 16D hand).
+
+    Same runtime settings as GraspFrankaLeapSysidJointAbsCfg; only the action term differs
+    (FrankaLeapJointRelArmHandJointAction). Use for scripts that expect relative arm deltas.
+    """
+
+    scene: FrankaLeapSysidSceneCfg = FrankaLeapSysidSceneCfg(num_envs=512, env_spacing=2.0)
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(1.4327373524611016, 0.2400519659762369, 0.6),
+        lookat=(0.0, -0.15, 0.0),
+        origin_type="env",
+        env_index=0,
+    )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.run_mode = RL_MODE
+        self.episode_length_s = 99999.0
+
+        synth_pc = mdp.CachedSamplePC(
+            asset_name="robot",
+            object_names=[],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[],
+            num_downsample_points=2048,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 
 
 @configclass

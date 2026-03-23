@@ -49,7 +49,7 @@ FRANKA_LEAP_ARM_ACTUATOR_CFG = {
 # p and d gains from the real robot
 FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG = {
     "panda_link1": ImplicitActuatorCfg(
-        joint_names_expr=["panda_joint1"],
+        joint_names_expr=["panda_joint[1]"],
         stiffness=60.0,
         damping=4.0,
         effort_limit_sim=86.0,
@@ -102,7 +102,7 @@ FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG = {
 
 FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_DELAYED_CFG= {
     "panda_link1": DelayedPDActuatorCfg(
-        joint_names_expr=["panda_joint1"],
+        joint_names_expr=["panda_joint[1]"],
         stiffness=60.0,
         damping=4.0,
         effort_limit_sim=86.0,
@@ -305,3 +305,6 @@ FRANKA_LEAP_ARTICULATION = ArticulationCfg(
 IMPLICIT_FRANKA_LEAP = FRANKA_LEAP_ARTICULATION.copy()
 IMPLICIT_FRANKA_LEAP.actuators = FRANKA_LEAP_ARM_ACTUATOR_CFG | FRANKA_LEAP_HAND_ACTUATOR_CFG
 
+
+REAL_GAINS_FRANKA_LEAP = FRANKA_LEAP_ARTICULATION.copy()
+REAL_GAINS_FRANKA_LEAP.actuators = FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG | FRANKA_LEAP_HAND_ACTUATOR_CFG

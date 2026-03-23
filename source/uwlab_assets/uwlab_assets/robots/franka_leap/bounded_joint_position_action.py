@@ -60,13 +60,18 @@ class BoundedRelativeJointPositionAction(RelativeJointPositionAction):
             device=self.device,
             dtype=torch.float32,
         )
+        # Latched joint target computed once in process_actions and reused in apply_actions.
+        self._joint_target = torch.zeros((self.num_envs, self.action_dim), device=self.device, dtype=torch.float32)
 
-    def apply_actions(self):
-        resulting = self.processed_actions + self._asset.data.joint_pos[:, self._joint_ids]
-        resulting[:, : self._num_arm_joints] = resulting[:, : self._num_arm_joints].clamp(
+    def process_actions(self, actions: torch.Tensor):
+        super().process_actions(actions)
+        self._joint_target[:] = self.processed_actions + self._asset.data.joint_pos[:, self._joint_ids]
+        self._joint_target[:, : self._num_arm_joints] = self._joint_target[:, : self._num_arm_joints].clamp(
             self._arm_low, self._arm_high
         )
-        self._asset.set_joint_position_target(resulting, joint_ids=self._joint_ids)
+
+    def apply_actions(self):
+        self._asset.set_joint_position_target(self._joint_target, joint_ids=self._joint_ids)
 
 
 @configclass

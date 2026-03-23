@@ -80,6 +80,7 @@ class CachedSamplePC:
     Combines the accuracy of SamplePC (uses USD colliders, same geometry as sim) with the
     speed of SynthesizePC (caches points on first run, only transforms on later steps).
     Requires only the USD asset/object prim paths—no external mesh files.
+    ``object_names`` may be empty (arm + hand only).
     """
 
     def __init__(
@@ -164,7 +165,12 @@ class CachedSamplePC:
             timings["object_transform_ms"] = (time.perf_counter() - t0) * 1000
             t0 = time.perf_counter()
 
-        object_vertices_all = torch.cat(object_parts, dim=1)
+        if object_parts:
+            object_vertices_all = torch.cat(object_parts, dim=1)
+        else:
+            object_vertices_all = torch.empty(
+                env.num_envs, 0, 3, device=env.device, dtype=arm_vertices.dtype
+            )
         all_pcd = torch.cat([arm_vertices, hand_vertices, object_vertices_all], dim=1)
         points_index = torch.randperm(all_pcd.shape[1]).to(env.device)
         sampled_pcd = all_pcd[:, points_index[: self.num_downsample_points * 10]]

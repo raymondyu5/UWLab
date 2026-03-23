@@ -38,14 +38,14 @@ parser.add_argument(
 parser.add_argument(
     "--action_type",
     type=str,
-    choices=["delta_ee", "abs_ee", "joint"],
+    choices=["delta_ee", "abs_ee", "joint", "delta_joint"],
     default="joint",
     help="Type of action to use.",
 )
 parser.add_argument(
     "--task",
     type=str,
-    default="UW-FrankaLeap-GraspBottle-JointAbs-v0",
+    default="UW-FrankaLeap-Sysid-JointAbs-v0",
     help="Task with seg_pc (e.g. GraspBottle, GraspPinkCup). For sysid params use *-JointAbs-SysidApplied-v0.",
 )
 parser.add_argument(
@@ -205,6 +205,13 @@ def load_episode(episode_file: str, action_type: str):
                     raise KeyError(
                         "Missing key 'ik_joint_pos_desired' or 'commanded_joint_positions' in obs for joint "
                         f"action_type at step {i}"
+                    )
+            elif action_type == "delta_joint":
+                if "commanded_joint_positions" in obs_i:
+                    arm_cmd = np.asarray(obs_i["commanded_joint_positions"], dtype=np.float32).reshape(-1) - np.asarray(obs_i["joint_positions"], dtype=np.float32).reshape(-1)
+                else:
+                    raise KeyError(
+                        "Missing key 'commanded_joint_positions' or 'joint_pos' in obs for delta_joint action_type at step {i}"
                     )
             else:
                 raise ValueError(f"Unsupported action_type: {action_type}")
@@ -366,6 +373,10 @@ def get_hold_action(env, obs: dict, action_type: str) -> torch.Tensor:
         return torch.cat([arm_part, hand_part], dim=-1).unsqueeze(0)
     if action_type == "abs_ee":
         return unwrapped.cfg.warmup_action(unwrapped)
+    elif action_type == "delta_joint":
+        arm_part = torch.zeros(7, device=dev, dtype=torch.float32)
+        hand_part = joint_pos_0[7:7 + 16]
+        return torch.cat([arm_part, hand_part], dim=-1).unsqueeze(0)
     raise ValueError(f"Unsupported action_type for hold: {action_type}")
 
 
@@ -378,6 +389,8 @@ def _build_hold_from_real_obs(obs: dict, action_type: str, device: torch.device,
 
     if action_type == "joint":
         arr = np.concatenate([arm, hand], axis=-1)
+    elif action_type == "delta_joint":
+        arr = np.concatenate([np.zeros(7, dtype=np.float32), hand], axis=-1)
     elif action_type == "delta_ee":
         arr = np.concatenate([np.zeros(6, dtype=np.float32), hand], axis=-1)
     elif action_type == "abs_ee":
