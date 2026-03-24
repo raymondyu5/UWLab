@@ -53,6 +53,36 @@ class BCObsFormatter:
         self._past_action_buf = None
         self._past_action_first = self.n_obs_steps > 1 and self.action_dim > 0
 
+    def reset_envs(self, reset_mask: torch.Tensor, current_obs: dict):
+        """Reinitialize history for specific envs after a mid-episode auto-reset.
+
+        Called when some envs in a vectorized batch terminate while others continue.
+        Fills the agent_pos history for reset envs with their current obs (boundary
+        repetition, matching episode-start behavior). Zeros out their past_actions.
+
+        reset_mask: (B,) bool tensor — True for envs that just reset
+        current_obs: raw policy obs dict (same format as format() input), post-reset
+        """
+        if not reset_mask.any() or self._agent_pos_buf is None:
+            return
+
+        obs_parts = []
+        for key in self.obs_keys:
+            val = current_obs[key]
+            if isinstance(val, torch.Tensor):
+                val = val.float()
+            else:
+                val = torch.from_numpy(val).to(self.device).float()
+            obs_parts.append(val)
+        current_agent_pos = torch.cat(obs_parts, dim=-1)  # (B, D)
+
+        for frame in self._agent_pos_buf:
+            frame[reset_mask] = current_agent_pos[reset_mask]
+
+        if self._past_action_buf is not None:
+            for frame in self._past_action_buf:
+                frame[reset_mask] = 0.0
+
     def update_action(self, action: torch.Tensor):
         """Push the executed action into the past-action buffer.
         Call this after env.step() and before the next format() call.

@@ -121,8 +121,6 @@ class ZarrDataset(Dataset):
         seed:        random seed for val split and noise
         downsample_points: number of points to sample from each PCD frame
         pcd_noise:   std of Gaussian noise added to xyz
-        noise_extrinsic: whether to apply random rotation+translation augmentation
-        noise_extrinsic_parameter: [translation_scale, rotation_scale_rad]
         obs_noise:   dict of obs_key -> noise std for proprio augmentation
     """
 
@@ -145,6 +143,7 @@ class ZarrDataset(Dataset):
         noise_extrinsic: bool = False,
         noise_extrinsic_parameter: Optional[List[float]] = None,
         obs_noise: Optional[Dict[str, float]] = None,
+        hand_dropout_prob: float = 0.0,
     ):
         super().__init__()
 
@@ -170,6 +169,7 @@ class ZarrDataset(Dataset):
         self.pad_after = pad_after
         self.pcd_noise = pcd_noise
         self.obs_noise = obs_noise
+        self.hand_dropout_prob = hand_dropout_prob
         # total window = history frames + action frames
         self._window_size = n_obs_steps - 1 + horizon
 
@@ -266,6 +266,7 @@ class ZarrDataset(Dataset):
             episode_mask=train_mask,
             noise_extrinsic=noise_extrinsic,
             noise_extrinsic_parameter=noise_extrinsic_parameter,
+            n_obs_steps=n_obs_steps,
         )
 
     def get_validation_dataset(self) -> "ZarrDataset":
@@ -280,6 +281,7 @@ class ZarrDataset(Dataset):
             episode_mask=~self.train_mask,
             noise_extrinsic=self.sampler.noise_extrinsic,
             noise_extrinsic_parameter=self.sampler.noise_extrinsic_parameter,
+            n_obs_steps=self.sampler.n_obs_steps,
         )
         val_set.train_mask = ~self.train_mask
         return val_set
@@ -315,6 +317,9 @@ class ZarrDataset(Dataset):
             arr = sample[key].astype(np.float32)
             if key in self.obs_noise:
                 arr = arr + np.random.randn(*arr.shape).astype(np.float32) * self.obs_noise[key]
+            if key == 'hand_joint_pos' and self.hand_dropout_prob > 0:
+                mask = (np.random.rand(arr.shape[-1]) > self.hand_dropout_prob).astype(np.float32)
+                arr = arr * mask
             obs_list.append(arr)
 
         agent_pos = np.concatenate(obs_list, axis=-1) if obs_list else np.zeros((self._window_size, 1), dtype=np.float32)

@@ -93,6 +93,7 @@ class CachedSamplePC:
         num_object_pcd: list[int] = [512],
         num_downsample_points: int = 2048,
         object_prim_path_patterns: list[str] | None = None,
+        pcd_noise: float = 0.0,
     ):
         if object_prim_path_patterns is not None and len(object_prim_path_patterns) != len(object_names):
             raise ValueError(
@@ -111,6 +112,7 @@ class CachedSamplePC:
         self.mesh_init = False
         self._printed_msg = False
         self.pcd_crop_region = pcd_crop_region
+        self.pcd_noise = pcd_noise
 
     def get_seg_pc(self, env):
         if not self.mesh_init:
@@ -189,6 +191,9 @@ class CachedSamplePC:
             t0 = time.perf_counter()
 
         sampled_pcd = fps_points(sampled_pcd[None], self.num_downsample_points)
+
+        if self.pcd_noise > 0:
+            sampled_pcd = sampled_pcd + (torch.rand_like(sampled_pcd) * 2 - 1) * self.pcd_noise
 
         if do_benchmark:
             _benchmark_sync(env)
@@ -327,6 +332,7 @@ class RenderedSegPC:
         focal_length: float,
         horizontal_aperture: float,
         include_entity_names: tuple[str, ...] | None = None,
+        pcd_noise: float = 0.0,
     ):
         self.camera_name = camera_name
         self.depth_key = depth_key
@@ -335,6 +341,7 @@ class RenderedSegPC:
         self.focal_length = focal_length
         self.horizontal_aperture = horizontal_aperture
         self.include_entity_names = include_entity_names or ()
+        self.pcd_noise = pcd_noise
         self._printed_msg = False
 
     def get_seg_pc(self, env):
@@ -394,6 +401,9 @@ class RenderedSegPC:
             out = torch.cat(batch_pcd, dim=0).permute(0, 2, 1)
         else:
             out = torch.zeros(1, 3, self.num_downsample_points, device=device, dtype=torch.float32)
+
+        if self.pcd_noise > 0:
+            out = out + (torch.rand_like(out) * 2 - 1) * self.pcd_noise
 
         if not self._printed_msg:
             filt = f", instance-filtered to {list(self.include_entity_names)}" if self.include_entity_names else ""

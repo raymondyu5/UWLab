@@ -58,7 +58,7 @@ class CFMPCDPolicy(BaseImagePolicy):
         kernel_size: int = 5,
         n_groups: int = 8,
         cond_predict_scale: bool = True,
-        use_action_history: bool = True,
+        use_action_history: bool = False,
     ):
         super().__init__()
 

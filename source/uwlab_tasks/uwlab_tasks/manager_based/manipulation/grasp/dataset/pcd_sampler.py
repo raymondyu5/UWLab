@@ -73,8 +73,8 @@ class PCDSequenceSampler:
       - replay_buffer.episode_ends -> np.ndarray of shape (n_episodes,)
         containing cumulative step counts, e.g. [120, 240, 360, ...]
 
-    image_keys are loaded with PCD augmentation (random downsample + optional
-    extrinsic noise). All other keys are loaded as plain slices.
+    image_keys are loaded with PCD augmentation (random downsample).
+    All other keys are loaded as plain slices.
     """
 
     def __init__(
@@ -88,12 +88,14 @@ class PCDSequenceSampler:
         episode_mask: Optional[np.ndarray] = None,
         noise_extrinsic: bool = False,
         noise_extrinsic_parameter: Optional[list] = None,
+        n_obs_steps: int = 1,
     ):
         assert sequence_length >= 1
         self.image_keys = image_keys
         self.downsample_points = downsample_points
         self.noise_extrinsic = noise_extrinsic
         self.noise_extrinsic_parameter = noise_extrinsic_parameter
+        self.n_obs_steps = n_obs_steps
 
         episode_ends = replay_buffer.episode_ends
         if episode_mask is None:
@@ -133,7 +135,8 @@ class PCDSequenceSampler:
             euler_angles = (np.random.rand(3) * 2 - 1) * rotation_scale
             rotation_matrix = R.from_euler('xyz', euler_angles).as_matrix()
             translation = (np.random.rand(3) * 2 - 1) * translation_scale
-            data[0, :, :3] = data[0, :, :3] @ rotation_matrix + translation
+            obs_idx = self.n_obs_steps - 1
+            data[obs_idx, :, :3] = data[obs_idx, :, :3] @ rotation_matrix + translation
 
         return data.transpose(0, 2, 1)  # (T, 3, downsample_points)
 

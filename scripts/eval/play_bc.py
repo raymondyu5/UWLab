@@ -116,43 +116,64 @@ def _load_train_cfg(checkpoint_dir: str) -> dict:
 
 
 def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
-                 eval_overrides: dict | None = None) -> CFMPCDPolicy:
+                 eval_overrides: dict | None = None, ckpt: dict | None = None) -> CFMPCDPolicy:
     ds_cfg = train_cfg["dataset"]
     pol_cfg = dict(train_cfg["policy"])
+    num_inference_steps = None
     if eval_overrides and "num_inference_steps" in eval_overrides:
-        pol_cfg["num_inference_steps"] = int(eval_overrides["num_inference_steps"])
+        num_inference_steps = int(eval_overrides["num_inference_steps"])
 
-    obs_keys = list(ds_cfg["obs_keys"])
-    image_keys = list(ds_cfg["image_keys"])
-    downsample_points = int(ds_cfg["downsample_points"])
+    if ckpt is None:
+        ckpt_path = _find_checkpoint(checkpoint_dir, eval_overrides and eval_overrides.get("checkpoint_name"))
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-    # We need the actual dims — stored in train_cfg if we saved them, or
-    # we re-derive from the policy's shape_meta (not stored). As a workaround,
-    # the checkpoint itself has the full model weights, so we reconstruct with
-    # the same arch params and load state dict.
-    #
-    # For obs dims: we load them from the ckpt's normalizer state_dict keys.
-    ckpt_path = _find_checkpoint(checkpoint_dir, eval_overrides and eval_overrides.get("checkpoint_name"))
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    policy = load_cfm_policy(ckpt=ckpt, train_cfg=train_cfg, device=device,
+                             num_inference_steps=num_inference_steps)
+    return policy, ds_cfg
 
-    # Extract dims from normalizer state dict
-    # normalizer["agent_pos"] stores params_dict with 'scale', 'offset' of shape (D,)
-    normalizer_state = ckpt["ema_model"]
-    agent_pos_scale_key = "normalizer.params_dict.agent_pos.scale"
-    action_scale_key = "normalizer.params_dict.action.scale"
-    low_obs_dim = normalizer_state[agent_pos_scale_key].shape[0]
-    action_dim = normalizer_state[action_scale_key].shape[0]
+
+def load_cfm_policy(
+    ckpt_path: str | None = None,
+    *,
+    ckpt: dict | None = None,
+    train_cfg: dict | None = None,
+    device: str | torch.device = "cpu",
+    num_inference_steps: int | None = None,
+) -> CFMPCDPolicy:
+    """Load a CFMPCDPolicy from a checkpoint file or pre-loaded ckpt dict.
+
+    Can be called with just a path:
+        policy = load_cfm_policy("path/to/best.ckpt")
+    """
+    if ckpt is None:
+        assert ckpt_path is not None
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+    # Config: prefer embedded cfg (new checkpoints), fall back to caller-supplied
+    if train_cfg is None:
+        train_cfg = ckpt.get("cfg")
+    if train_cfg is None:
+        raise ValueError("No cfg in checkpoint and no train_cfg supplied. "
+                         "Pass a checkpoint dir to _build_policy or retrain with the updated workspace.")
+
+    ds_cfg  = train_cfg["dataset"]
+    pol_cfg = dict(train_cfg["policy"])
+    pn_cfg  = train_cfg["pointnet"]
+    if num_inference_steps is not None:
+        pol_cfg["num_inference_steps"] = int(num_inference_steps)
+
+    sd = ckpt["ema_model"]
+    low_obs_dim = sd["normalizer.params_dict.agent_pos.scale"].shape[0]
+    action_dim  = sd["normalizer.params_dict.action.scale"].shape[0]
+    use_action_history = "normalizer.params_dict.past_actions.scale" in sd
 
     shape_meta = {
         "action": {"shape": [action_dim]},
-        "obs": {
-            "agent_pos": {"shape": [low_obs_dim], "type": "low_dim"},
-        },
+        "obs": {"agent_pos": {"shape": [low_obs_dim], "type": "low_dim"}},
     }
-    for key in image_keys:
-        shape_meta["obs"][key] = {"shape": [3, downsample_points], "type": "pcd"}
+    for key in list(ds_cfg["image_keys"]):
+        shape_meta["obs"][key] = {"shape": [3, int(ds_cfg["downsample_points"])], "type": "pcd"}
 
-    pn_cfg = train_cfg["pointnet"]
     pcd_model = PointNet(
         in_channels=int(pn_cfg["in_channels"]),
         local_channels=tuple(pn_cfg["local_channels"]),
@@ -161,15 +182,10 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
     )
     obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
 
-    # Detect whether this checkpoint was trained with action history.
-    # Checkpoints trained without it won't have past_actions in the normalizer.
-    use_action_history = "normalizer.params_dict.past_actions.scale" in normalizer_state
-
-    noise_scheduler = ConditionalFlowMatcher(sigma=float(pol_cfg["sigma"]))
     policy = CFMPCDPolicy(
         shape_meta=shape_meta,
         obs_encoder=obs_encoder,
-        noise_scheduler=noise_scheduler,
+        noise_scheduler=ConditionalFlowMatcher(sigma=float(pol_cfg["sigma"])),
         horizon=int(train_cfg["horizon"]),
         n_action_steps=int(train_cfg["n_action_steps"]),
         n_obs_steps=int(train_cfg["n_obs_steps"]),
@@ -181,12 +197,9 @@ def _build_policy(train_cfg: dict, checkpoint_dir: str, device: torch.device,
         cond_predict_scale=bool(pol_cfg["cond_predict_scale"]),
         use_action_history=use_action_history,
     )
-
-    # Load EMA weights and normalizer
-    policy.load_state_dict(ckpt["ema_model"])
-    policy.to(device)
-    policy.eval()
-    return policy, ds_cfg
+    policy.load_state_dict(sd)
+    policy.to(device).eval()
+    return policy
 
 
 def _find_checkpoint(checkpoint_dir: str, ckpt_name: str | None = None) -> str:
@@ -262,9 +275,12 @@ def main():
     record_video = bool(eval_cfg.get("record_video", False))
     record_plots = bool(eval_cfg.get("record_plots", True))
 
-    # Load training config and build policy
-    train_cfg = _load_train_cfg(checkpoint_dir)
-    policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device, eval_overrides=eval_cfg)
+    # Load training config and build policy.
+    # Prefer cfg embedded in checkpoint; fall back to .hydra/config.yaml for old checkpoints.
+    ckpt_path = _find_checkpoint(checkpoint_dir, eval_cfg.get("checkpoint_name"))
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    train_cfg = ckpt.get("cfg") or _load_train_cfg(checkpoint_dir)
+    policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device, eval_overrides=eval_cfg, ckpt=ckpt)
 
     obs_keys = list(eval_cfg.get("obs_keys") or ds_cfg["obs_keys"])
     image_keys = list(ds_cfg["image_keys"])
@@ -283,13 +299,15 @@ def main():
         num_envs=num_envs,
     )
     env_cfg.seed = args_cli.seed
-    if not record_video:
+    # In distill mode, train_camera is needed for RenderedSegPC — keep it alive.
+    # In eval mode (synthetic PCD), cameras are not needed so disable them to save overhead.
+    if args_cli.sim_type == "eval":
         env_cfg.scene.train_camera = None
-        env_cfg.scene.fixed_camera = None
         if hasattr(env_cfg.events, "reset_camera"):
             env_cfg.events.reset_camera = None
-        if hasattr(env_cfg.events, "reset_fixed_camera"):
-            env_cfg.events.reset_fixed_camera = None
+    env_cfg.scene.fixed_camera = None
+    if hasattr(env_cfg.events, "reset_fixed_camera"):
+        env_cfg.events.reset_fixed_camera = None
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
     # Load spawn config
@@ -362,11 +380,12 @@ def main():
             logger.begin_episode(spawn_name_ep, spawn_pose_dict)
 
             action_seq = None
-            per_env_done = [False] * num_envs
-            per_env_success = [False] * num_envs
+            per_env_done = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            per_env_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            per_env_partial = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
             for step in range(episode_steps):
-                if step % action_horizon == 0:
+                if step % action_horizon == 0 and not per_env_done.all():
                     obs_dict = formatter.format(policy_obs)
                     result = policy.predict_action(obs_dict)
                     action_seq = result["action"]  # (B, n_action_steps, A)
@@ -374,22 +393,29 @@ def main():
                 action_idx = step % action_horizon
                 if action_idx >= action_seq.shape[1]:
                     action_idx = action_seq.shape[1] - 1
-                action_step = action_seq[:, action_idx]  # (B, A)
+                action_step = action_seq[:, action_idx].clone()  # (B, A)
+
+                # Hold position for already-done envs so they don't receive
+                # stale policy actions after their auto-reset.
+                if per_env_done.any():
+                    action_step[per_env_done] = warmup_act[per_env_done]
 
                 # Check success on current state BEFORE stepping to avoid
                 # reading the auto-reset state when the episode truncates.
                 pre_step_success = _check_success(env)
-                for i in range(num_envs):
-                    if pre_step_success[i] and not per_env_done[i]:
-                        per_env_success[i] = True
+                active = ~per_env_done
+                per_env_success |= torch.from_numpy(pre_step_success).to(device) & active
+                per_env_partial |= torch.from_numpy(_check_partial_success(env)).to(device) & active
 
                 obs_raw, reward, terminated, truncated, info = env.step(action_step)
                 policy_obs = obs_raw["policy"]
-                formatter.update_action(action_step)
 
-                for i in range(num_envs):
-                    if (terminated[i] or truncated[i]) and not per_env_done[i]:
-                        per_env_done[i] = True
+                reset_mask = terminated | truncated
+                formatter.update_action(action_step)
+                if reset_mask.any():
+                    formatter.reset_envs(reset_mask, policy_obs)
+
+                per_env_done |= reset_mask
 
                 ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
                     isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
@@ -404,23 +430,21 @@ def main():
                     frame=frame,
                 )
 
-                if all(per_env_done):
+                if per_env_done.all():
                     break
 
-            n_success = sum(per_env_success)
-            partial_success = _check_partial_success(env)
-            n_partial = int(partial_success.sum())
+            n_success = int(per_env_success.sum())
+            n_partial = int(per_env_partial.sum())
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
                                partial_success=bool(n_partial > 0))
             status = "SUCCESS" if n_success > 0 else ("partial" if n_partial > 0 else "fail")
             print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status} "
-                  f"({n_success}/{num_envs})"
+                  f"({n_success}/{num_envs} success, {n_partial}/{num_envs} partial)"
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
     results = logger.finalize()
     print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_episodes']})")
-    if results.get("n_partial_success", 0) > 0:
-        print(f"[play_bc] Partial success: {results['partial_success_rate']:.1%} ({results['n_partial_success']}/{results['n_episodes']})")
+    print(f"[play_bc] Partial success: {results['partial_success_rate']:.1%} ({results['n_partial_success']}/{results['n_episodes']})")
     print(f"[play_bc] Results saved to: {output_dir}")
 
     env.close()

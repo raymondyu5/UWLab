@@ -121,11 +121,17 @@ class EvalLogger:
                 rec["partial_success"] = ep["partial_success"]
             records.append(rec)
 
+        partial_eps = [e for e in self._episodes if e.get("partial_success") is not None]
+        n_partial_success = sum(1 for e in partial_eps if e["partial_success"])
+        partial_success_rate = n_partial_success / len(partial_eps) if partial_eps else 0.0
+
         summary = {
             "n_episodes": n_episodes,
             "n_success": n_success,
             "n_total": n_total,
             "success_rate": success_rate,
+            "n_partial_success": n_partial_success,
+            "partial_success_rate": partial_success_rate,
             "episodes": records,
         }
 
@@ -133,12 +139,9 @@ class EvalLogger:
         with open(out_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        partial_eps = [e for e in self._episodes if e.get("partial_success") is not None]
-        n_partial = sum(1 for e in partial_eps if e["partial_success"])
         msg = f"[EvalLogger] {n_success}/{n_total} success ({100*success_rate:.1f}%)"
-        if n_partial > 0:
-            partial_rate = n_partial / len(partial_eps)
-            msg += f", {n_partial} partial success ({100*partial_rate:.1f}%)"
+        if n_partial_success > 0:
+            msg += f", {n_partial_success} partial success ({100*partial_success_rate:.1f}%)"
         print(f"{msg} -> {out_path}")
         return summary
 

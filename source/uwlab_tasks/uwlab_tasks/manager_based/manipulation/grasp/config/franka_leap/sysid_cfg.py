@@ -120,6 +120,7 @@ class GraspFrankaLeapSysidJointRelCfg(GraspFrankaLeapJointRelCfg):
             num_hand_pcd=HAND_NUM_POINTS,
             num_object_pcd=[],
             num_downsample_points=2048,
+            pcd_noise=0.02,
         )
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 

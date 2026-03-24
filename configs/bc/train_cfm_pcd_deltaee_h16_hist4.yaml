@@ -1,5 +1,5 @@
 defaults:
-  - train_cfm_pcd_deltajoint
+  - train_cfm_pcd_deltaee
   - _self_
 
 horizon: 16

@@ -7,16 +7,13 @@ dataset:
   load_list: [all]
   obs_keys: [arm_joint_pos, hand_joint_pos]
   action_key: [arm_joint_pos_target, hand_action]
-  action_base_keys: [arm_joint_pos, null]
+  action_base_keys: null
   image_keys: [seg_pc]
   # pad_before is derived automatically as n_obs_steps-1 inside ZarrDataset
   pad_after: 3          # = horizon - 1; allows last episode steps to be starting points
   val_ratio: 0.05
   downsample_points: 2048
   pcd_noise: 0.02
-  noise_extrinsic: false
-  noise_extrinsic_parameter: [0.05, 0.2]
-  hand_dropout_prob: 0.0
   obs_noise:
     arm_joint_pos: 0.05
     hand_joint_pos: 0.05

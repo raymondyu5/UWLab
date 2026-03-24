@@ -150,6 +150,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             num_object_pcd=[BOTTLE_OBJECT_NUM_POINTS, PINK_CUP_OBJECT_NUM_POINTS],
             num_downsample_points=2048,
             pcd_crop_region=self.pcd_crop_region,
+            pcd_noise=0.0,
         )
 
         self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)

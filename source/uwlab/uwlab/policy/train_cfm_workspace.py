@@ -171,6 +171,7 @@ class TrainCFMWorkspace:
             wandb.finish()
 
     def _save_checkpoint(self, path: str):
+        from omegaconf import OmegaConf
         torch.save({
             "model": self.model.state_dict(),
             "ema_model": self.ema_model.state_dict(),
@@ -178,6 +179,7 @@ class TrainCFMWorkspace:
             "global_step": self.global_step,
             "epoch": self.epoch,
             "best_val_mse": self.best_val_mse,
+            "cfg": OmegaConf.to_container(self.cfg, resolve=True),
         }, path)
 
     def _load_checkpoint(self, path: str):

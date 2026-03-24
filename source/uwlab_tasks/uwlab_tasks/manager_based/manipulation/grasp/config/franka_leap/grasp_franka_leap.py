@@ -261,6 +261,7 @@ def _apply_distill_mode(cfg: FrankaLeapGraspEnvCfg) -> None:
         focal_length=focal_length,
         horizontal_aperture=horizontal_aperture,
         include_entity_names=cfg.distill_include_entity_names,
+        pcd_noise=0.02,
     )
     # Replace seg_pc with camera-rendered version.
     cfg.observations.policy.seg_pc = ObsTerm(func=rendered_pc.get_seg_pc)

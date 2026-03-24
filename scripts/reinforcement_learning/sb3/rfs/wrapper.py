@@ -20,10 +20,8 @@ Usage:
     sb3_env = Sb3VecEnvWrapper(rfs_env)
 """
 
-import copy
 import os
 import sys
-from types import SimpleNamespace
 
 import yaml
 
@@ -46,6 +44,8 @@ import torch
 import torch.nn as nn
 from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 
+from uwlab.eval.bc_obs_formatter import BCObsFormatter
+
 
 class LPFilter(nn.Module):
     def __init__(self, alpha: float):
@@ -66,20 +66,6 @@ class LPFilter(nn.Module):
 from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.backbone.pcd.pointnet import PointNet
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
-
-
-# TODO: remove _OBS_KEY_MAP once UWLab obs keys are aligned with checkpoint format.
-# Maps checkpoint obs_key names → (env_obs_dict_key, slice).
-# "joint_pos" in the UWLab env is 23D (arm7 + hand16 concatenated).
-_OBS_KEY_MAP = {
-    "joint_positions":    ("joint_pos", slice(0, 7)),    # arm
-    "gripper_position":   ("joint_pos", slice(7, 23)),   # hand
-    "cartesian_position": ("ee_pose",   slice(None)),
-    "arm_joint_pos":      ("joint_pos", slice(0, 7)),
-    "hand_joint_pos":     ("joint_pos", slice(7, 23)),
-    "ee_pose":            ("ee_pose",   slice(None)),
-    "joint_pos":          ("joint_pos", slice(None)),    # 23D combined
-}
 
 
 def _resolve_hydra_refs(cfg: dict) -> dict:
@@ -131,6 +117,9 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         n_action_steps = int(cfg.n_action_steps) + int(getattr(cfg, "n_latency_steps", 0))
         n_obs_steps = int(cfg.n_obs_steps)
         down_dims = tuple(cfg.policy.down_dims)
+        obs_keys = list(cfg.dataset.obs_keys)
+        image_keys = list(getattr(cfg.dataset, "image_keys", ["seg_pc"]))
+        downsample_points = int(getattr(cfg.dataset, "downsample_points", 2048))
     else:
         state_dict = ckpt["ema_model"]
         config_path = os.path.join(diffusion_path, "config.yaml")
@@ -142,7 +131,10 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
             train_cfg = _resolve_hydra_refs(yaml.safe_load(f))
         agent_pos_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
         action_dim = int(state_dict["normalizer.params_dict.action.scale"].shape[0])
-        downsample_points = int(train_cfg["dataset"]["downsample_points"])
+        ds = train_cfg["dataset"]
+        downsample_points = int(ds["downsample_points"])
+        obs_keys = ds.get("obs_keys", ds.get("obs_key", []))
+        image_keys = ds.get("image_keys", ["seg_pc"])
         shape_meta = {
             "action": {"shape": [action_dim]},
             "obs": {
@@ -151,16 +143,13 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
             },
         }
         pol = train_cfg["policy"]
-        ds = train_cfg["dataset"]
         sigma = float(pol.get("sigma", 0.0))
         horizon = int(train_cfg.get("horizon", 4))
         n_action_steps = int(train_cfg.get("n_action_steps", 8))
         n_obs_steps = int(train_cfg.get("n_obs_steps", 1))
         down_dims = tuple(pol["down_dims"])
-        obs_keys = ds.get("obs_keys", ds.get("obs_key", []))
-        cfg = SimpleNamespace(
-            dataset=SimpleNamespace(obs_keys=obs_keys),
-        )
+
+    use_action_history = "normalizer.params_dict.past_actions.scale" in state_dict
 
     pcd_model = PointNet(
         in_channels=3,
@@ -184,28 +173,24 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         kernel_size=5,
         n_groups=8,
         cond_predict_scale=True,
+        use_action_history=use_action_history,
     )
     policy.load_state_dict(state_dict, strict=False)
     policy.to(device)
     policy.eval()
 
+    metadata = {
+        "obs_keys": obs_keys,
+        "image_keys": image_keys,
+        "downsample_points": downsample_points,
+        "n_obs_steps": n_obs_steps,
+        "use_action_history": use_action_history,
+    }
+
     print(f"[RFSWrapper] CFM policy loaded: horizon={policy.horizon}, "
-          f"action_dim={policy.action_dim}, n_obs_steps={policy.n_obs_steps}")
-    return policy, cfg
-
-
-def _parse_obs_key(obs_key: str, obs_dict: dict) -> torch.Tensor:
-    if obs_key not in _OBS_KEY_MAP:
-        raise KeyError(
-            f"Unknown obs_key '{obs_key}'. Add it to _OBS_KEY_MAP in rfs/wrapper.py."
-        )
-    env_key, slc = _OBS_KEY_MAP[obs_key]
-    if env_key not in obs_dict:
-        raise KeyError(
-            f"obs_key '{obs_key}' maps to env key '{env_key}' which is not in obs_dict. "
-            f"Available keys: {list(obs_dict.keys())}"
-        )
-    return obs_dict[env_key][:, slc] if slc != slice(None) else obs_dict[env_key]
+          f"action_dim={policy.action_dim}, n_obs_steps={n_obs_steps}, "
+          f"use_action_history={use_action_history}")
+    return policy, metadata
 
 
 class RFSWrapper:
@@ -265,14 +250,20 @@ class RFSWrapper:
         self.last_residual: torch.Tensor | None = None
         self.last_pcd_embedding: torch.Tensor | None = None
 
-        self.policy, self.policy_cfg = _load_cfm_checkpoint(diffusion_path, self.device)
+        self.policy, metadata = _load_cfm_checkpoint(diffusion_path, self.device)
         self.horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
-        dataset_cfg = self.policy_cfg.dataset
-        obs_key_attr = "obs_keys" if hasattr(dataset_cfg, "obs_keys") else "obs_key"
-        self.diffusion_obs_keys = list(getattr(dataset_cfg, obs_key_attr))
 
-        print(f"[RFSWrapper] Diffusion obs keys from checkpoint: {self.diffusion_obs_keys}")
+        self.formatter = BCObsFormatter(
+            obs_keys=metadata["obs_keys"],
+            image_keys=metadata["image_keys"],
+            downsample_points=metadata["downsample_points"],
+            device=self.device,
+            n_obs_steps=metadata["n_obs_steps"],
+            action_dim=self.policy.action_dim if metadata["use_action_history"] else 0,
+        )
+
+        print(f"[RFSWrapper] Diffusion obs keys from checkpoint: {metadata['obs_keys']}")
         print(f"[RFSWrapper] noise_dims={noise_dims}, residual_dims={residual_dims}")
 
         total_ppo_dim = self.n_residual + self.n_noise * self.horizon
@@ -352,11 +343,18 @@ class RFSWrapper:
         return {"policy": stripped}
 
     def _compute_pcd_embedding(self) -> torch.Tensor:
-        """Run the frozen CFM PointNet on self.last_obs and return pcd_feat."""
-        diffusion_obs = self._get_diffusion_obs(self.last_obs["policy"])
+        """Encode the current frame's PCD from self.last_obs without touching formatter state."""
+        policy_obs = self.last_obs["policy"]
+        for key in self.policy.obs_encoder.pcd_keys:
+            pcd = policy_obs[key].float()  # (B, 3, N)
+            N = pcd.shape[-1]
+            if N > self.formatter.downsample_points:
+                perm = torch.randperm(N, device=self.device)[:self.formatter.downsample_points]
+                pcd = pcd[:, :, perm]
+            # normalizer expects (B, 1, 3, N); index back to (B, 3, N) after
+            nobs_pcd = self.policy.normalizer[key].normalize(pcd.unsqueeze(1))
+            pcd_obs = {key: nobs_pcd[:, 0]}
         with torch.no_grad():
-            nobs = self.policy.normalizer.normalize(diffusion_obs)
-            pcd_obs = {k: nobs[k][:, 0] for k in self.policy.obs_encoder.pcd_keys}
             return self.policy.obs_encoder.encode_pcd_only(pcd_obs).detach()
 
     def _asymmetric_ppo_obs(self, obs: dict) -> dict:
@@ -375,15 +373,6 @@ class RFSWrapper:
             result[f"critic_{k}"] = v
         return {"policy": result}
 
-    def _get_diffusion_obs(self, obs_dict: dict) -> dict:
-        parts = [_parse_obs_key(k, obs_dict) for k in self.diffusion_obs_keys]
-        agent_pos = torch.cat(parts, dim=-1)  # (B, D)
-        seg_pc = obs_dict["seg_pc"]           # (B, 3, N)
-        return {
-            "agent_pos": agent_pos.unsqueeze(1),  # (B, 1, D)
-            "seg_pc": seg_pc.unsqueeze(1),         # (B, 1, 3, N)
-        }
-
     def step(self, ppo_actions: torch.Tensor):
         ppo_out = ppo_actions.clamp(-1.0, 1.0)
 
@@ -397,12 +386,13 @@ class RFSWrapper:
         if self.noise_slice is not None and self.n_noise > 0:
             noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.horizon, self.n_noise)
 
-        diffusion_obs = self._get_diffusion_obs(self.last_obs["policy"])
+        diffusion_obs = self.formatter.format(self.last_obs["policy"])
         with torch.no_grad():
             cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
         base_actions = cfm_result["action_pred"]
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        any_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         for substep in range(self.residual_step):
             action = base_actions[:, substep].clone()
@@ -421,9 +411,20 @@ class RFSWrapper:
             obs, step_rewards, terminated, truncated, info = self.env.step(action)
             rewards += step_rewards
             self.last_obs = obs
+            any_reset |= terminated | truncated
 
             if self.env.unwrapped.episode_length_buf[0] == self.env.unwrapped.max_episode_length - 1:
                 break
+
+        # Reset formatter history for envs that auto-reset during this PPO step.
+        # Use zeros for their past_actions update to match episode-start behavior.
+        if any_reset.any():
+            self.formatter.reset_envs(any_reset, self.last_obs["policy"])
+            masked_action = self.last_action.clone()
+            masked_action[any_reset] = 0.0
+            self.formatter.update_action(masked_action)
+        else:
+            self.formatter.update_action(self.last_action)
 
         # Update pcd embedding from the final obs so it is consistent with the
         # state returned to the agent — no lag between pcd_emb and state.
@@ -454,6 +455,7 @@ class RFSWrapper:
         obs, info = self.env.reset(**kwargs)
         self.last_obs = obs
         self._ep_rewards.zero_()
+        self.formatter.reset()
 
         if self.finger_filter is not None:
             self.finger_filter.reset()

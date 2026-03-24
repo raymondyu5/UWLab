@@ -1,5 +1,5 @@
-task_id: UW-FrankaLeap-PourBottle-JointRel-v0
-checkpoint: logs/bc_cfm_pcd_bourbon_0312_deltajoint_h16_hist4
+task_id: UW-FrankaLeap-PourBottle-IkRel-v0
+checkpoint: logs/bc_cfm_pcd_bourbon_0312
 num_inference_steps: 5
 device: cuda:0
 num_envs: 1

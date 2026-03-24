@@ -41,9 +41,10 @@ def _build_zarr_dataset(cfg, data_path, seed):
         seed=seed,
         downsample_points=cfg.dataset.downsample_points,
         pcd_noise=cfg.dataset.pcd_noise,
-        noise_extrinsic=cfg.dataset.noise_extrinsic,
-        noise_extrinsic_parameter=list(cfg.dataset.noise_extrinsic_parameter),
+        noise_extrinsic=cfg.dataset.get("noise_extrinsic", False),
+        noise_extrinsic_parameter=list(cfg.dataset.get("noise_extrinsic_parameter", [0.05, 0.2])),
         obs_noise=dict(cfg.dataset.get("obs_noise", {})),
+        hand_dropout_prob=cfg.dataset.get("hand_dropout_prob", 0.0),
     )
 
 
@@ -96,6 +97,7 @@ def main(cfg: DictConfig):
         kernel_size=cfg.policy.kernel_size,
         n_groups=cfg.policy.n_groups,
         cond_predict_scale=cfg.policy.cond_predict_scale,
+        use_action_history=bool(cfg.policy.get("use_action_history", False)),
     )
 
     workspace = TrainCFMWorkspace(cfg=cfg, dataset=dataset, policy=policy)
