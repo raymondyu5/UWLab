@@ -144,6 +144,7 @@ class ZarrDataset(Dataset):
         noise_extrinsic_parameter: Optional[List[float]] = None,
         obs_noise: Optional[Dict[str, float]] = None,
         hand_dropout_prob: float = 0.0,
+        chunk_relative: bool = False,
     ):
         super().__init__()
 
@@ -170,6 +171,7 @@ class ZarrDataset(Dataset):
         self.pcd_noise = pcd_noise
         self.obs_noise = obs_noise
         self.hand_dropout_prob = hand_dropout_prob
+        self.chunk_relative = chunk_relative
         # total window = history frames + action frames
         self._window_size = n_obs_steps - 1 + horizon
 
@@ -286,15 +288,47 @@ class ZarrDataset(Dataset):
         val_set.train_mask = ~self.train_mask
         return val_set
 
+    def _get_chunk_relative_action_samples(self) -> np.ndarray:
+        """Collect representative chunk-relative action samples for normalizer fitting.
+
+        Iterates over all episodes, extracts full H-step windows (no cross-episode
+        boundary), zero-pads partial windows at episode end, applies cumsum, and
+        returns a flat (N, A) array suitable for LinearNormalizer.fit.
+        """
+        raw = self.replay_buffer["action"]  # (total_steps, A)
+        ends = self.replay_buffer.episode_ends
+        chunks = []
+        prev_end = 0
+        for end in ends:
+            ep = raw[prev_end:end]
+            T = len(ep)
+            stride = max(1, (T - self.horizon) // 200)
+            for start in range(0, max(1, T - self.horizon + 1), stride):
+                chunk = ep[start:start + self.horizon].copy().astype(np.float32)
+                if len(chunk) < self.horizon:
+                    pad = np.zeros((self.horizon - len(chunk), chunk.shape[-1]), dtype=np.float32)
+                    chunk = np.concatenate([chunk, pad], axis=0)
+                chunks.append(np.cumsum(chunk, axis=0))
+            prev_end = end
+        if not chunks:
+            return raw
+        return np.concatenate(chunks, axis=0)  # (N*horizon, A)
+
     def get_normalizer(self, mode: str = "limits") -> LinearNormalizer:
         # Concatenate obs_keys to form agent_pos, same as __getitem__
         obs_list = [self.replay_buffer[k] for k in self.obs_keys if k in self.replay_buffer]
         agent_pos = np.concatenate(obs_list, axis=-1) if obs_list else np.zeros((1, 1))
 
+        # action normalizer: chunk-relative samples if in that mode, otherwise raw step-wise.
+        # past_actions are always the executed step-wise deltas regardless of mode.
+        action_for_norm = (
+            self._get_chunk_relative_action_samples()
+            if self.chunk_relative
+            else self.replay_buffer["action"]
+        )
         data = {
-            "action": self.replay_buffer["action"],
+            "action": action_for_norm,
             "agent_pos": agent_pos,
-            # past_actions shares the same distribution as action
             "past_actions": self.replay_buffer["action"],
         }
         normalizer = LinearNormalizer()
@@ -339,9 +373,22 @@ class ZarrDataset(Dataset):
         obs_dict = {"agent_pos": agent_pos[0:self.n_obs_steps]} | image_obs
         if self.n_obs_steps > 1:
             obs_dict["past_actions"] = sample["action"][0:self.n_obs_steps - 1].astype(np.float32)
+
+        action_chunk = sample["action"][self.n_obs_steps - 1:].astype(np.float32)  # (horizon, A)
+        if self.chunk_relative:
+            # Zero out any padded frames (repeated last action) before cumsum so they
+            # contribute zero displacement rather than a growing ramp.
+            # sampler.indices[idx] = [buf_start, buf_end, sample_start, sample_end]
+            # sample_end_idx is where real data ends in the full window.
+            _, _, _, sample_end_idx = self.sampler.indices[idx]
+            real_in_chunk = sample_end_idx - (self.n_obs_steps - 1)
+            if real_in_chunk < self.horizon:
+                action_chunk[real_in_chunk:] = 0.0
+            action_chunk = np.cumsum(action_chunk, axis=0)
+
         data = {
             "obs": obs_dict,
-            "action": sample["action"][self.n_obs_steps - 1:].astype(np.float32),  # (horizon, A)
+            "action": action_chunk,
         }
 
         return {

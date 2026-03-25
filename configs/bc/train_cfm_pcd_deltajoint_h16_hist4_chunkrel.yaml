@@ -1,0 +1,6 @@
+defaults:
+  - train_cfm_pcd_deltajoint_h16_hist4
+  - _self_
+
+dataset:
+  chunk_relative: true

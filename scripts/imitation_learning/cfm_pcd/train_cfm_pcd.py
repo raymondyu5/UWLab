@@ -45,6 +45,7 @@ def _build_zarr_dataset(cfg, data_path, seed):
         noise_extrinsic_parameter=list(cfg.dataset.get("noise_extrinsic_parameter", [0.05, 0.2])),
         obs_noise=dict(cfg.dataset.get("obs_noise", {})),
         hand_dropout_prob=cfg.dataset.get("hand_dropout_prob", 0.0),
+        chunk_relative=bool(cfg.dataset.get("chunk_relative", False)),
     )
 
 

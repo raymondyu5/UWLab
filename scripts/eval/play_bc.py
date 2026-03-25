@@ -280,8 +280,10 @@ def main():
     ckpt_path = _find_checkpoint(checkpoint_dir, eval_cfg.get("checkpoint_name"))
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     train_cfg = ckpt.get("cfg") or _load_train_cfg(checkpoint_dir)
+    chunk_relative = bool((train_cfg.get("dataset") or {}).get("chunk_relative", False))
     policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device, eval_overrides=eval_cfg, ckpt=ckpt)
 
+    print(f"[play_bc] chunk_relative={chunk_relative}, action_horizon={action_horizon}")
     obs_keys = list(eval_cfg.get("obs_keys") or ds_cfg["obs_keys"])
     image_keys = list(ds_cfg["image_keys"])
     downsample_points = int(ds_cfg["downsample_points"])
@@ -389,11 +391,30 @@ def main():
                     obs_dict = formatter.format(policy_obs)
                     result = policy.predict_action(obs_dict)
                     action_seq = result["action"]  # (B, n_action_steps, A)
+                    if chunk_relative:
+                        # Capture joint positions at chunk start (the obs that produced this chunk).
+                        # Shape (B, A) — obs_keys concatenated in action-space order.
+                        chunk_start_obs = torch.cat([
+                            policy_obs[k].float() if isinstance(policy_obs[k], torch.Tensor)
+                            else torch.from_numpy(policy_obs[k]).to(device).float()
+                            for k in obs_keys
+                        ], dim=-1)
 
                 action_idx = step % action_horizon
                 if action_idx >= action_seq.shape[1]:
                     action_idx = action_seq.shape[1] - 1
-                action_step = action_seq[:, action_idx].clone()  # (B, A)
+
+                if chunk_relative:
+                    # True chunk-relative decode: abs_target_k = chunk_start_obs + Δ_k
+                    # delta_for_env = abs_target_k - current_obs (controller adds this to current pos)
+                    current_obs = torch.cat([
+                        policy_obs[k].float() if isinstance(policy_obs[k], torch.Tensor)
+                        else torch.from_numpy(policy_obs[k]).to(device).float()
+                        for k in obs_keys
+                    ], dim=-1)
+                    action_step = (chunk_start_obs + action_seq[:, action_idx] - current_obs).clone()
+                else:
+                    action_step = action_seq[:, action_idx].clone()  # (B, A)
 
                 # Hold position for already-done envs so they don't receive
                 # stale policy actions after their auto-reset.
