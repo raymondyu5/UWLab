@@ -45,13 +45,11 @@ class BCObsFormatter:
         self.action_dim = action_dim
         self._agent_pos_buf: deque | None = None
         self._past_action_buf: deque | None = None
-        self._past_action_first: bool = False
 
     def reset(self):
         """Call at the start of each episode to clear all history buffers."""
         self._agent_pos_buf = None
         self._past_action_buf = None
-        self._past_action_first = self.n_obs_steps > 1 and self.action_dim > 0
 
     def reset_envs(self, reset_mask: torch.Tensor, current_obs: dict):
         """Reinitialize history for specific envs after a mid-episode auto-reset.
@@ -90,15 +88,13 @@ class BCObsFormatter:
         """
         if not (self.n_obs_steps > 1 and self.action_dim > 0):
             return
-        if self._past_action_first:
-            # First real action: fill entire buffer by repeating it to match
-            # training's boundary-frame repetition at episode start.
+        if self._past_action_buf is None:
+            B = action.shape[0]
             self._past_action_buf = deque(
-                [action] * (self.n_obs_steps - 1), maxlen=self.n_obs_steps - 1
+                [torch.zeros(B, self.action_dim, device=self.device)] * (self.n_obs_steps - 1),
+                maxlen=self.n_obs_steps - 1,
             )
-            self._past_action_first = False
-        else:
-            self._past_action_buf.append(action)
+        self._past_action_buf.append(action)
 
     def format(self, raw_obs: dict) -> Dict[str, torch.Tensor]:
         """

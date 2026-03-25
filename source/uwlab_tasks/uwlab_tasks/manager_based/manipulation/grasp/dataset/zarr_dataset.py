@@ -372,7 +372,11 @@ class ZarrDataset(Dataset):
         # action: frames [n_obs_steps-1 .. n_obs_steps-1+horizon] = actions at [t .. t+horizon-1]
         obs_dict = {"agent_pos": agent_pos[0:self.n_obs_steps]} | image_obs
         if self.n_obs_steps > 1:
-            obs_dict["past_actions"] = sample["action"][0:self.n_obs_steps - 1].astype(np.float32)
+            past_act = sample["action"][0:self.n_obs_steps - 1].astype(np.float32)
+            _, _, sample_start_idx, _ = self.sampler.indices[idx]
+            if sample_start_idx > 0:
+                past_act[:sample_start_idx] = 0.0
+            obs_dict["past_actions"] = past_act
 
         action_chunk = sample["action"][self.n_obs_steps - 1:].astype(np.float32)  # (horizon, A)
         if self.chunk_relative:
