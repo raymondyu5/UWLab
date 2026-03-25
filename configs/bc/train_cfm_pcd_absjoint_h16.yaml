@@ -1,0 +1,7 @@
+defaults:
+  - train_cfm_pcd_absjoint
+  - _self_
+
+horizon: 16
+dataset:
+  pad_after: 15
