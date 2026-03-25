@@ -46,54 +46,56 @@ FRANKA_LEAP_ARM_ACTUATOR_CFG = {
     ),
 }
 
-# p and d gains from the real robot
+# Kq and Kqd gains from the real robot
+KQ = [100., 100., 100., 100., 50., 50., 10.]
+KQD = [20., 20., 20., 20., 10., 10., 5.]
 FRANKA_LEAP_REAL_GAINS_ARM_ACTUATOR_CFG = {
     "panda_link1": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[1]"],
-        stiffness=60.0,
-        damping=4.0,
+        stiffness=KQ[0],
+        damping=KQD[0],
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),  
     "panda_link2": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[2]"],
-        stiffness=55.0,
-        damping=6.0,
+        stiffness=KQ[1],
+        damping=KQD[1],
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link3": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[3]"],
-        stiffness=80.0,
-        damping=5.0,
+        stiffness=KQ[2],
+        damping=KQD[2],
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link4": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[4]"],
-        stiffness=40.0,
-        damping=5.0,
+        stiffness=KQ[3],
+        damping=KQD[3],
         effort_limit_sim=86.0,
         velocity_limit_sim=1.575,
     ),
     "panda_link5": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[5]"],
-        stiffness=55.0,
-        damping=3.0,
+        stiffness=KQ[4],
+        damping=KQD[4],
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
     "panda_link6": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[6]"],
-        stiffness=40.0,
-        damping=2.0,
+        stiffness=KQ[5],
+        damping=KQD[5],
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
     "panda_link7": ImplicitActuatorCfg(
         joint_names_expr=["panda_joint[7]"],
-        stiffness=16.0,
-        damping=1.0,
+        stiffness=KQ[6],
+        damping=KQD[6],
         effort_limit_sim=11.5,
         velocity_limit_sim=2.01,
     ),
@@ -175,12 +177,11 @@ ARM_ACTUATOR_NAMES = [f"panda_link{i}" for i in range(1, 8)]
 
 # Example from sysid output (replace with your final_results.pt / printed values)
 FRANKA_LEAP_SYSID_PARAMS = {
-    "armature": [0.4131, 0.5835, 0.8336, 0.6845, 0.3521, 0.2363, 0.1509],
-    "static_friction": [1.2008, 1.5891, 1.1150, 1.2567, 1.0867, 0.9516, 0.5117],
-    "dynamic_ratio": [0.6789, 0.8146, 0.4764, 0.8223, 0.5187, 0.4928, 0.7358],
-    "viscous_friction": [3.3143, 4.1785, 6.4565, 1.1896, 3.3427, 3.0174, 1.1646],
-    "encoder_bias_rad": [-0.0015, -1.0798, -0.2323, -0.0183, 0.2623, 0.1980, -0.1067],
-    "delay_steps": 3,
+    "armature": [9.5697, 0.0042, 0.0315, 9.9855, 9.9779, 9.9851, 6.8317],
+    "static_friction": [1.2177, 2.0540, 0.9722, 1.7547, 1.6413, 1.2591, 0.4176],
+    "dynamic_ratio": [0.9845, 0.9893, 0.9424, 0.5500, 0.9598, 0.8818, 0.7785],
+    "viscous_friction": [1.1988, 2.0322, 0.9162, 0.9652, 1.5752, 1.1103, 0.3251],
+    "encoder_bias_rad": [0.001833, -0.011542, -0.003196, -0.010905, 0.006754, -0.001368, -0.006854],
 }
 
 
