@@ -254,11 +254,11 @@ def _check_success(env) -> np.ndarray:
     return env.unwrapped.cfg.is_success(env.unwrapped).cpu().numpy()
 
 
-def _check_partial_success(env) -> np.ndarray:
-    if hasattr(env.unwrapped.cfg, "is_partial_success"):
-        return env.unwrapped.cfg.is_partial_success(env.unwrapped).cpu().numpy()
-    num_envs = env.unwrapped.num_envs
-    return np.zeros(num_envs, dtype=bool)
+def _check_metric(env, name) -> np.ndarray:
+    cfg = env.unwrapped.cfg
+    if hasattr(cfg, name):
+        return getattr(cfg, name)(env.unwrapped).cpu().numpy()
+    return np.zeros(env.unwrapped.num_envs, dtype=bool)
 
 
 def main():
@@ -383,8 +383,10 @@ def main():
 
             action_seq = None
             per_env_done = torch.zeros(num_envs, dtype=torch.bool, device=device)
-            per_env_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
-            per_env_partial = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            last_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            last_grasped = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            last_lifted = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            last_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
             for step in range(episode_steps):
                 if step % action_horizon == 0 and not per_env_done.all():
@@ -421,12 +423,14 @@ def main():
                 if per_env_done.any():
                     action_step[per_env_done] = warmup_act[per_env_done]
 
-                # Check success on current state BEFORE stepping to avoid
+                # Check metrics on current state BEFORE stepping to avoid
                 # reading the auto-reset state when the episode truncates.
-                pre_step_success = _check_success(env)
+                # Update last-seen values only for envs still active.
                 active = ~per_env_done
-                per_env_success |= torch.from_numpy(pre_step_success).to(device) & active
-                per_env_partial |= torch.from_numpy(_check_partial_success(env)).to(device) & active
+                last_success[active] = torch.from_numpy(_check_success(env)).to(device)[active]
+                last_grasped[active] = torch.from_numpy(_check_metric(env, "is_grasped")).to(device)[active]
+                last_lifted[active] = torch.from_numpy(_check_metric(env, "is_lifted")).to(device)[active]
+                last_near_miss[active] = torch.from_numpy(_check_metric(env, "is_near_miss")).to(device)[active]
 
                 obs_raw, reward, terminated, truncated, info = env.step(action_step)
                 policy_obs = obs_raw["policy"]
@@ -454,18 +458,22 @@ def main():
                 if per_env_done.all():
                     break
 
-            n_success = int(per_env_success.sum())
-            n_partial = int(per_env_partial.sum())
+            n_success = int(last_success.sum())
+            n_grasped = int(last_grasped.sum())
+            n_lifted = int(last_lifted.sum())
+            n_near_miss = int(last_near_miss.sum())
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
-                               partial_success=bool(n_partial > 0))
-            status = "SUCCESS" if n_success > 0 else ("partial" if n_partial > 0 else "fail")
+                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
+            status = "SUCCESS" if n_success > 0 else ("near_miss" if n_near_miss > 0 else ("lifted" if n_lifted > 0 else ("grasped" if n_grasped > 0 else "fail")))
             print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status} "
-                  f"({n_success}/{num_envs} success, {n_partial}/{num_envs} partial)"
+                  f"({n_success}/{num_envs} success, {n_near_miss}/{num_envs} near_miss, {n_lifted}/{num_envs} lifted, {n_grasped}/{num_envs} grasped)"
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
     results = logger.finalize()
     print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_total']})")
-    print(f"[play_bc] Partial success: {results['partial_success_rate']:.1%} ({results['n_partial_success']}/{results['n_episodes']})")
+    print(f"[play_bc] Near miss: {results['near_miss_rate']:.1%} ({results['n_near_miss']}/{results['n_total']})")
+    print(f"[play_bc] Lifted: {results['lifted_rate']:.1%} ({results['n_lifted']}/{results['n_total']})")
+    print(f"[play_bc] Grasped: {results['grasped_rate']:.1%} ({results['n_grasped']}/{results['n_total']})")
     print(f"[play_bc] Results saved to: {output_dir}")
 
     env.close()

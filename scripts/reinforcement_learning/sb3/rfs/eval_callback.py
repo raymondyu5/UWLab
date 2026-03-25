@@ -74,9 +74,13 @@ class RFSEvalCallback(BaseCallback):
         # Rolling buffer of episode successes for training-time success rate.
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
         self._success_buffer = collections.deque(maxlen=400)
-        self._partial_success_buffer = collections.deque(maxlen=400)
+        self._grasped_buffer = collections.deque(maxlen=400)
+        self._lifted_buffer = collections.deque(maxlen=400)
+        self._near_miss_buffer = collections.deque(maxlen=400)
         self._last_success = [False] * rfs_env.num_envs
-        self._last_partial_success = [False] * rfs_env.num_envs
+        self._last_grasped = [False] * rfs_env.num_envs
+        self._last_lifted = [False] * rfs_env.num_envs
+        self._last_near_miss = [False] * rfs_env.num_envs
         self._cache_initialized = [False] * rfs_env.num_envs
         self._rollout_count = 0
 
@@ -100,24 +104,34 @@ class RFSEvalCallback(BaseCallback):
         if dones is not None and wandb.run is not None:
             isaac_env = self.rfs_env.env.unwrapped
             success = isaac_env.cfg.is_success(isaac_env)
-            partial = isaac_env.cfg.is_partial_success(isaac_env)
+            grasped = isaac_env.cfg.is_grasped(isaac_env) if hasattr(isaac_env.cfg, "is_grasped") else None
+            lifted = isaac_env.cfg.is_lifted(isaac_env) if hasattr(isaac_env.cfg, "is_lifted") else None
+            near_miss = isaac_env.cfg.is_near_miss(isaac_env) if hasattr(isaac_env.cfg, "is_near_miss") else None
             for i, done in enumerate(dones):
                 if done:
                     if self._cache_initialized[i]:
                         self._success_buffer.append(float(self._last_success[i]))
-                        self._partial_success_buffer.append(float(self._last_partial_success[i]))
+                        self._grasped_buffer.append(float(self._last_grasped[i]))
+                        self._lifted_buffer.append(float(self._last_lifted[i]))
+                        self._near_miss_buffer.append(float(self._last_near_miss[i]))
                     self._last_success[i] = False
-                    self._last_partial_success[i] = False
+                    self._last_grasped[i] = False
+                    self._last_lifted[i] = False
+                    self._last_near_miss[i] = False
                     self._cache_initialized[i] = False
                 else:
                     self._last_success[i] = float(success[i].item())
-                    self._last_partial_success[i] = float(partial[i].item())
+                    self._last_grasped[i] = float(grasped[i].item()) if grasped is not None else 0.0
+                    self._last_lifted[i] = float(lifted[i].item()) if lifted is not None else 0.0
+                    self._last_near_miss[i] = float(near_miss[i].item()) if near_miss is not None else 0.0
                     self._cache_initialized[i] = True
             if len(self._success_buffer) == self._success_buffer.maxlen:
                 wandb.log(
                     {
                         "train/success_rate": sum(self._success_buffer) / len(self._success_buffer),
-                        "train/partial_success_rate": sum(self._partial_success_buffer) / len(self._partial_success_buffer),
+                        "train/grasped_rate": sum(self._grasped_buffer) / len(self._grasped_buffer),
+                        "train/lifted_rate": sum(self._lifted_buffer) / len(self._lifted_buffer),
+                        "train/near_miss_rate": sum(self._near_miss_buffer) / len(self._near_miss_buffer),
                     },
                     step=self.num_timesteps,
                 )
@@ -162,9 +176,18 @@ class RFSEvalCallback(BaseCallback):
             logger.begin_episode(pose.name, {"x": pose.x, "y": pose.y, "yaw": pose.yaw})
 
             episode_successes = []
+            episode_grasps = []
+            episode_lifted = []
+            episode_near_miss = []
+            _has_grasped = hasattr(isaac_env.cfg, "is_grasped")
+            _has_lifted = hasattr(isaac_env.cfg, "is_lifted")
+            _has_near_miss = hasattr(isaac_env.cfg, "is_near_miss")
             recorded = [False] * num_envs
             for _ in range(self.episode_steps):
                 success_before = isaac_env.cfg.is_success(isaac_env)
+                grasped_before = isaac_env.cfg.is_grasped(isaac_env) if _has_grasped else None
+                lifted_before = isaac_env.cfg.is_lifted(isaac_env) if _has_lifted else None
+                near_miss_before = isaac_env.cfg.is_near_miss(isaac_env) if _has_near_miss else None
                 action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
                 obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
@@ -173,6 +196,12 @@ class RFSEvalCallback(BaseCallback):
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
                         episode_successes.append(success_before[i].item())
+                        if _has_grasped:
+                            episode_grasps.append(grasped_before[i].item())
+                        if _has_lifted:
+                            episode_lifted.append(lifted_before[i].item())
+                        if _has_near_miss:
+                            episode_near_miss.append(near_miss_before[i].item())
                         recorded[i] = True
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
@@ -191,7 +220,11 @@ class RFSEvalCallback(BaseCallback):
 
             n_success = sum(episode_successes)
             n_total = len(episode_successes) if episode_successes else num_envs
-            logger.end_episode(n_success / n_total if n_total > 0 else False, n_success=n_success, n_total=n_total)
+            n_grasped = sum(episode_grasps) if episode_grasps else None
+            n_lifted = sum(episode_lifted) if episode_lifted else None
+            n_near_miss = sum(episode_near_miss) if episode_near_miss else None
+            logger.end_episode(n_success / n_total if n_total > 0 else False, n_success=n_success, n_total=n_total,
+                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
 
     def _run_random_eval(self, logger, isaac_env, device, num_envs, output_dir):
         num_trials = self.spawn_cfg.num_trials if self.spawn_cfg.num_trials > 0 else 1
@@ -209,9 +242,18 @@ class RFSEvalCallback(BaseCallback):
             logger.begin_episode(f"random_trial_{trial_idx}", None)
 
             per_env_success = [False] * num_envs
+            per_env_grasped = [False] * num_envs
+            per_env_lifted = [False] * num_envs
+            per_env_near_miss = [False] * num_envs
+            _has_grasped = hasattr(isaac_env.cfg, "is_grasped")
+            _has_lifted = hasattr(isaac_env.cfg, "is_lifted")
+            _has_near_miss = hasattr(isaac_env.cfg, "is_near_miss")
             recorded = [False] * num_envs
             for _ in range(self.episode_steps):
                 success_before = isaac_env.cfg.is_success(isaac_env)
+                grasped_before = isaac_env.cfg.is_grasped(isaac_env) if _has_grasped else None
+                lifted_before = isaac_env.cfg.is_lifted(isaac_env) if _has_lifted else None
+                near_miss_before = isaac_env.cfg.is_near_miss(isaac_env) if _has_near_miss else None
                 action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
                 obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
@@ -220,6 +262,12 @@ class RFSEvalCallback(BaseCallback):
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
                         per_env_success[i] = bool(success_before[i].item())
+                        if _has_grasped:
+                            per_env_grasped[i] = bool(grasped_before[i].item())
+                        if _has_lifted:
+                            per_env_lifted[i] = bool(lifted_before[i].item())
+                        if _has_near_miss:
+                            per_env_near_miss[i] = bool(near_miss_before[i].item())
                         recorded[i] = True
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
@@ -237,7 +285,11 @@ class RFSEvalCallback(BaseCallback):
                     break
 
             n_success = sum(per_env_success)
-            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs)
+            n_grasped = sum(per_env_grasped) if _has_grasped else None
+            n_lifted = sum(per_env_lifted) if _has_lifted else None
+            n_near_miss = sum(per_env_near_miss) if _has_near_miss else None
+            logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
+                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
             logger.record_scatter_points(
                 xs=init_pos_local[:, 0],
                 ys=init_pos_local[:, 1],
@@ -251,6 +303,9 @@ class RFSEvalCallback(BaseCallback):
         log_dict = {
             "eval/success_rate": results["success_rate"],
             "eval/n_success": results["n_success"],
+            "eval/near_miss_rate": results.get("near_miss_rate", 0.0),
+            "eval/lifted_rate": results.get("lifted_rate", 0.0),
+            "eval/grasped_rate": results.get("grasped_rate", 0.0),
         }
 
         scatter_path = os.path.join(output_dir, "scatter.png")
