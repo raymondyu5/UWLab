@@ -390,7 +390,7 @@ def main():
                 if step % action_horizon == 0 and not per_env_done.all():
                     obs_dict = formatter.format(policy_obs)
                     result = policy.predict_action(obs_dict)
-                    action_seq = result["action"]  # (B, n_action_steps, A)
+                    action_seq = result["action_pred"]  # (B, horizon, A)
                     if chunk_relative:
                         # Capture joint positions at chunk start (the obs that produced this chunk).
                         # Shape (B, A) — obs_keys concatenated in action-space order.
@@ -464,7 +464,7 @@ def main():
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
     results = logger.finalize()
-    print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_episodes']})")
+    print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_total']})")
     print(f"[play_bc] Partial success: {results['partial_success_rate']:.1%} ({results['n_partial_success']}/{results['n_episodes']})")
     print(f"[play_bc] Results saved to: {output_dir}")
 
