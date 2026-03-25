@@ -67,6 +67,12 @@ parser.add_argument(
     help="Y coordinate (m) for cross-section slice.",
 )
 parser.add_argument(
+    "--cross_section_x_center",
+    type=float,
+    default=0.8,
+    help="Nominal camera x (m) for the front YZ plot label; projection uses all points (orthographic onto YZ).",
+)
+parser.add_argument(
     "--sim_pc_downsample",
     type=int,
     default=16384,
@@ -562,48 +568,99 @@ def plot_pc_cross_sections(
     sim_pc: np.ndarray,
     output_path: str,
     y_center: float = 0.005,
+    x_center: float = 0.8,
     slice_thickness: float = 0.02,
 ) -> None:
-    """Plot Y-slice (XZ view) at y_center: one view and one from the opposite side (flipped x)."""
+    """Plot: Y-slice XZ (+ flipped + diagonal); full orthographic YZ from +x (+ flipped + diagonal).
+
+    Bottom row projects the entire point cloud onto the YZ plane (view along −x), not a thin x-slab.
+    x_center is only used in the subplot titles (nominal viewpoint at x=+x_center).
+    """
     if real_pc.size == 0 and sim_pc.size == 0:
         return
     combined = np.vstack([p for p in (real_pc, sim_pc) if p.size > 0])
     y_min, y_max = combined[:, 1].min(), combined[:, 1].max()
     y_use = np.clip(y_center, y_min, y_max)
+    x_label = x_center
 
-    def slice_points(pc: np.ndarray, center: float, half_thick: float) -> np.ndarray:
+    def slice_axis(pc: np.ndarray, axis: int, center: float, half_thick: float) -> np.ndarray:
         if pc.size == 0:
             return np.empty((0, 3))
-        mask = np.abs(pc[:, 1] - center) <= half_thick
+        mask = np.abs(pc[:, axis] - center) <= half_thick
         return pc[mask]
 
     half_thick = slice_thickness / 2
-    r_slice = slice_points(real_pc, y_use, half_thick)
-    s_slice = slice_points(sim_pc, y_use, half_thick)
+    r_y = slice_axis(real_pc, 1, y_use, half_thick)
+    s_y = slice_axis(sim_pc, 1, y_use, half_thick)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    def scatter_r_s(ax, r: np.ndarray, s: np.ndarray, xidx: int, yidx: int) -> None:
+        if r.size > 0:
+            ax.scatter(r[:, xidx], r[:, yidx], c="red", s=4, alpha=0.7, label="Real")
+        if s.size > 0:
+            ax.scatter(s[:, xidx], s[:, yidx], c="blue", s=4, alpha=0.7, label="Sim")
+        ax.axis("equal")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
 
-    if r_slice.size > 0:
-        ax1.scatter(r_slice[:, 0], r_slice[:, 2], c="red", s=4, alpha=0.7, label="Real")
-        ax2.scatter(r_slice[:, 0], r_slice[:, 2], c="red", s=4, alpha=0.7, label="Real")
-    if s_slice.size > 0:
-        ax1.scatter(s_slice[:, 0], s_slice[:, 2], c="blue", s=4, alpha=0.7, label="Sim")
-        ax2.scatter(s_slice[:, 0], s_slice[:, 2], c="blue", s=4, alpha=0.7, label="Sim")
+    inv_sqrt2 = 1.0 / np.sqrt(2.0)
 
-    ax1.set_xlabel("x")
-    ax1.set_ylabel("z")
-    ax1.set_title(f"Y-slice y≈{y_use:.3f}m (XZ view)")
-    ax1.axis("equal")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
-    ax2.invert_xaxis()
-    ax2.set_xlabel("x (flipped)")
-    ax2.set_ylabel("z")
-    ax2.set_title(f"Y-slice y≈{y_use:.3f}m (XZ view, other side)")
-    ax2.axis("equal")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    scatter_r_s(axes[0, 0], r_y, s_y, 0, 2)
+    axes[0, 0].set_xlabel("x")
+    axes[0, 0].set_ylabel("z")
+    axes[0, 0].set_title(f"Y-slice y≈{y_use:.3f} m (XZ)")
+
+    scatter_r_s(axes[0, 1], r_y, s_y, 0, 2)
+    axes[0, 1].invert_xaxis()
+    axes[0, 1].set_xlabel("x (flipped)")
+    axes[0, 1].set_ylabel("z")
+    axes[0, 1].set_title(f"Y-slice (XZ, other side)")
+
+    if r_y.size > 0:
+        u_r = (r_y[:, 0] + r_y[:, 2]) * inv_sqrt2
+        v_r = (r_y[:, 2] - r_y[:, 0]) * inv_sqrt2
+        axes[0, 2].scatter(u_r, v_r, c="red", s=4, alpha=0.7, label="Real")
+    if s_y.size > 0:
+        u_s = (s_y[:, 0] + s_y[:, 2]) * inv_sqrt2
+        v_s = (s_y[:, 2] - s_y[:, 0]) * inv_sqrt2
+        axes[0, 2].scatter(u_s, v_s, c="blue", s=4, alpha=0.7, label="Sim")
+    axes[0, 2].set_xlabel("(x+z)/√2")
+    axes[0, 2].set_ylabel("(z−x)/√2")
+    axes[0, 2].set_title("Y-slice diagonal (45° in XZ)")
+    axes[0, 2].axis("equal")
+    axes[0, 2].legend()
+    axes[0, 2].grid(True, alpha=0.3)
+
+    scatter_r_s(axes[1, 0], real_pc, sim_pc, 1, 2)
+    axes[1, 0].set_xlabel("y")
+    axes[1, 0].set_ylabel("z")
+    axes[1, 0].set_title(
+        f"YZ orthographic (all points)\nview from x≈+{x_label:.2f} m along −x"
+    )
+
+    scatter_r_s(axes[1, 1], real_pc, sim_pc, 1, 2)
+    axes[1, 1].invert_xaxis()
+    axes[1, 1].set_xlabel("y (flipped)")
+    axes[1, 1].set_ylabel("z")
+    axes[1, 1].set_title(
+        f"YZ orthographic (all points)\nother lateral side"
+    )
+
+    if real_pc.size > 0:
+        u_r = (real_pc[:, 1] + real_pc[:, 2]) * inv_sqrt2
+        v_r = (real_pc[:, 2] - real_pc[:, 1]) * inv_sqrt2
+        axes[1, 2].scatter(u_r, v_r, c="red", s=4, alpha=0.7, label="Real")
+    if sim_pc.size > 0:
+        u_s = (sim_pc[:, 1] + sim_pc[:, 2]) * inv_sqrt2
+        v_s = (sim_pc[:, 2] - sim_pc[:, 1]) * inv_sqrt2
+        axes[1, 2].scatter(u_s, v_s, c="blue", s=4, alpha=0.7, label="Sim")
+    axes[1, 2].set_xlabel("(y+z)/√2")
+    axes[1, 2].set_ylabel("(z−y)/√2")
+    axes[1, 2].set_title("YZ diagonal 45° (all points, same view)")
+    axes[1, 2].axis("equal")
+    axes[1, 2].legend()
+    axes[1, 2].grid(True, alpha=0.3)
 
     plt.suptitle("Point cloud cross-sections (Frame 0): Red=Real, Blue=Sim", fontsize=14, fontweight="bold")
     plt.tight_layout(rect=[0, 0, 1, 0.96])
@@ -889,6 +946,7 @@ def main():
                 sim_pc_0,
                 os.path.join(output_dir, "pc_cross_sections_frame0.png"),
                 y_center=args_cli.cross_section_y_center,
+                x_center=args_cli.cross_section_x_center,
                 slice_thickness=0.02,
             )
             print(f"[INFO] Saved point cloud cross-sections to {output_dir}/pc_cross_sections_frame0.png")
