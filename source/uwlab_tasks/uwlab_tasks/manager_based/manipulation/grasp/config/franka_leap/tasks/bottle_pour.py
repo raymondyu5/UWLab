@@ -48,7 +48,7 @@ BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
 # Success: cap tip XY within 4cm of cup center, z in [cup_z+0.20, cup_z+0.30]
 # i.e. 5cm to 15cm above the cup rim (~0.15m tall).
 
-POUR_HORIZON = 180
+POUR_HORIZON = 160
 
 
 @configclass
