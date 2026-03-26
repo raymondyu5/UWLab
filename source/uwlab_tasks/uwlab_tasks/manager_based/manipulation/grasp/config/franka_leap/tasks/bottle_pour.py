@@ -35,21 +35,20 @@ from .bottle import (
 )
 from .pink_cup import PINK_CUP_USD
 from .pink_cup import PINK_CUP_OBJECT_NUM_POINTS
-# Pink cup pour-task spawn values from rl_env_bourbon_pour_pink_cup_synthetic_pc_force_pert.yaml (pour_config):
-# cup_pos: [0.55, 0.10, 0.07], rot: X-axis 90deg = (0.707, 0.707, 0, 0) (w,x,y,z)
-# cup_pose_range: x±5cm, y [0, +5cm]
-PINK_CUP_POUR_POS = (0.55, 0.10, 0.07)
+# Spawn positions centered within real-world workspace bounds:
+# Bottle: x∈[0.42,0.64], y∈[-0.20,-0.01]  →  center (0.53, -0.105), range ±(0.11, 0.095)
+# Cup:    x∈[0.41,0.65], y∈[0.17,0.29]    →  center (0.53,  0.23),  range ±(0.12, 0.06)
+BOTTLE_POUR_SPAWN_POS = (0.53, -0.105, 0.11)
+PINK_CUP_POUR_POS = (0.53, 0.23, 0.07)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
 # Bottle cap offset in local -X frame: 13.22cm (cap is at X=-0.132 in mesh frame)
 BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
 
-# Success: cap tip XY within 8cm of cup center, z at or above target, within POUR_Z_TOLERANCE above
-# Target z = cup_pos[2] + 0.20 (cup base + 20cm, i.e. ~5cm above the cup rim at 0.15m).
-# Tip must be in [target_z, target_z + POUR_Z_TOLERANCE]
-POUR_Z_TOLERANCE = 0.20
+# Success: cap tip XY within 4cm of cup center, z in [cup_z+0.20, cup_z+0.30]
+# i.e. 5cm to 15cm above the cup rim (~0.15m tall).
 
-POUR_HORIZON = 180
+POUR_HORIZON = 160
 
 
 @configclass
@@ -94,19 +93,40 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
         tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
 
-        target_z = cup_pos[:, 2] + 0.26
         xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
         tip_z = tip_pos[:, 2]
-        z_ok = (tip_z >= target_z - 0.05) & (tip_z <= target_z + POUR_Z_TOLERANCE)
-        return (xy_dist < 0.08) & z_ok
+        z_ok = (tip_z >= cup_pos[:, 2] + 0.20) & (tip_z <= cup_pos[:, 2] + 0.30)
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
+        return (bottle_pos[:, 2] > 0.10) & (xy_dist < 0.04) & z_ok
 
-    def is_partial_success(self, env) -> torch.Tensor:
-        # Bottle lifted above 5cm
+    def is_grasped(self, env) -> torch.Tensor:
         bottle = env.scene["grasp_object"]
-        
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins       # (N, 3)
-        lifted = bottle_pos[:, 2] > 0.05
-        return lifted
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
+        return bottle_pos[:, 2] > 0.05
+
+    def is_lifted(self, env) -> torch.Tensor:
+        bottle = env.scene["grasp_object"]
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
+        return bottle_pos[:, 2] > 0.10
+
+    def _tip_pos(self, env):
+        bottle = env.scene["grasp_object"]
+        cup = env.scene["pink_cup"]
+        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
+        bottle_quat = bottle.data.root_quat_w
+        cup_pos = cup.data.root_pos_w - env.scene.env_origins
+        cap_offset = torch.tensor(list(BOTTLE_CAP_OFFSET), device=env.device)
+        w = bottle_quat[:, 0:1]
+        q = bottle_quat[:, 1:]
+        t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
+        tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
+        return bottle_pos, tip_pos, cup_pos
+
+    def is_near_miss(self, env) -> torch.Tensor:
+        bottle_pos, tip_pos, cup_pos = self._tip_pos(env)
+        xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
+        z_ok = (tip_pos[:, 2] >= cup_pos[:, 2] + 0.20) & (tip_pos[:, 2] <= cup_pos[:, 2] + 0.30)
+        return (bottle_pos[:, 2] > 0.10) & (xy_dist < 0.08) & z_ok
 
     def __post_init__(self):
         super().__post_init__()
@@ -114,9 +134,9 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
 
         self.object_spawn_defaults = {
-            "default_pos": list(BOTTLE_SPAWN_POS),
+            "default_pos": list(BOTTLE_POUR_SPAWN_POS),
             "default_rot": list(BOTTLE_SPAWN_ROT),
-            "reset_height": BOTTLE_SPAWN_POS[2],
+            "reset_height": BOTTLE_POUR_SPAWN_POS[2],
         }
 
         self.horizon = POUR_HORIZON
@@ -170,17 +190,17 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "default_pos": BOTTLE_SPAWN_POS,
+                "default_pos": BOTTLE_POUR_SPAWN_POS,
                 "default_rot_quat": BOTTLE_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.05, 0.05),
-                    "y": (-0.05, 0.05),
+                    "x": (-0.11, 0.11),
+                    "y": (-0.095, 0.095),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
-                "reset_height": BOTTLE_SPAWN_POS[2],
+                "reset_height": BOTTLE_POUR_SPAWN_POS[2],
                 "table_block_name": "table_block",
             },
         )
@@ -194,14 +214,14 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "default_pos": PINK_CUP_POUR_POS,
                 "default_rot_quat": PINK_CUP_POUR_ROT,
                 "pose_range": {
-                    "x": (-0.05, 0.05),
-                    "y": (0.0, 0.05),
+                    "x": (-0.12, 0.12),
+                    "y": (-0.06, 0.06),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
-                "reset_height": PINK_CUP_POUR_POS[2],  # 0.07
+                "reset_height": PINK_CUP_POUR_POS[2],
                 "table_block_name": "table_block",
             },
         )

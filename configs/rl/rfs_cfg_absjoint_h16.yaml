@@ -1,0 +1,65 @@
+# RFS config for CFM checkpoint trained with:
+#   action space: absolute joint positions (23D: 7 arm + 16 hand)
+#   horizon: 16   (CFM denoises 16-step chunks)
+#   n_obs_steps: 4  (CFM conditions on 4-frame history)
+#   use_action_history: true
+#
+# Task: UW-FrankaLeap-PourBottle-JointAbs-v0
+# Checkpoint: logs/bc_cfm_pcd_bourbon_0325_absjoint_h16_hist4_extnoise_dropout
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  learning_rate: 0.0003
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+rfs:
+  # Action space: 23D (7 arm joints + 16 hand joints, absolute positions).
+  noise_dims: "0:23"       # full 23D action gets PPO noise
+  residual_dims: "7:23"    # hand dims (7:23, 16D) get PPO residual
+
+  # Execute the full 16-step chunk per PPO step.
+  # With POUR_HORIZON=160 env steps, each episode = 10 PPO steps (160/16).
+  # Rewards are accumulated with γ^k discounting (uses ppo.gamma above).
+  residual_step: 16
+
+  residual_scale: 0.1
+
+  # JointAbs actions are absolute joint angles — no IK delta clipping needed.
+  clip_actions: false
+
+  finger_smooth_alpha: 1.0  # disabled
+
+  # JointAbs: arm is dims 0:7, hand starts at dim 7.
+  finger_start_dim: 7
+
+  # PPO actor sees a flattened n_obs_steps-frame history of joint positions.
+  # agent_pos_history dim = n_obs_steps * per_step_dim = 4 * 23 = 92.
+  # History updates once per chunk (at the PPO decision boundary), matching CFM.
+  ppo_history: true
+
+eval:
+  interval: 50
+  spawn: "bottle_pour_narrow"
+  record_video: true
+  record_plots: true
+
+reg:
+  # Real-state KL regularization: after each PPO train() call, sample a batch
+  # of real robot states and penalize KL(N(actor_mean, actor_std²) || N(0,1)).
+  # This anchors the noise policy toward standard Gaussian on real OOD states —
+  # equivalent to pure CFM base policy (no noise steering) in the worst case.
+  real_dataset_path: /gscratch/weirdlab/will/UWLab_Docker/data_storage/datasets/03_24_bourbon_pour
+  reg_coef: 0.05
+  reg_batch_size: 256

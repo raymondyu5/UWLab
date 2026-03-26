@@ -24,17 +24,35 @@ rfs:
   noise_dims: "0:22"       # full action gets PPO noise
   residual_dims: "6:22"    # hand dims (6:22) get PPO residual
 
-  residual_step: 1         # env substeps per PPO step; rewards accumulate
+  # Number of env steps to execute per PPO step.
+  # Each step plays action[substep] from the CFM-denoised chunk.
+  # Rewards are accumulated with γ^k discounting (using ppo.gamma).
+  # Set to CFM horizon to execute the full chunk per PPO step.
+  residual_step: 1
 
   # Residual scale: PPO residual output in [-1,1] is multiplied by this.
   # From IsaacLab action_range[-1] = 0.1 (the hand residual bound in rad).
   residual_scale: 0.1
 
   # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
-  # ±0.03m xyz, ±0.05rad rpy — matches IsaacLab clip_real_world_actions.
+  # ±0.03m xyz, ±0.05rad rpy. Set false for JointAbs (not a delta action).
   clip_actions: true
 
   finger_smooth_alpha: 1.0  # 1.0 = disabled
+
+  # First action dim index where hand/finger joints start.
+  # IkRel/IkAbs: 6 (3 xyz + 3 rpy). JointAbs/JointRel: 7 (7 arm joints).
+  # Used by finger_smooth_alpha filter — must match the action space layout.
+  finger_start_dim: 6
+
+  # Whether PPO actor obs includes a flattened n_obs_steps-frame history of the
+  # obs_keys that CFM conditions on (e.g. joint positions). When true, each raw
+  # per-step obs key is replaced with a single agent_pos_history tensor.
+  # History updates once per chunk (at the PPO decision boundary), matching the
+  # cadence at which CFM's formatter buffer is updated. PPO and CFM see the same
+  # history: obs at previous chunk-start boundaries.
+  # Requires the CFM checkpoint to have n_obs_steps > 1 to be meaningful.
+  ppo_history: false
 
 eval:
   interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)

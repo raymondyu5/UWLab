@@ -66,12 +66,14 @@ class EvalLogger:
             self._current["frames"].append(frame)
 
     def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
-                    partial_success: bool | None = None):
+                    n_grasped: int = None, n_lifted: int = None, n_near_miss: int = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
         self._current["n_success"] = n_success
         self._current["n_total"] = n_total
-        self._current["partial_success"] = partial_success
+        self._current["n_grasped"] = n_grasped
+        self._current["n_lifted"] = n_lifted
+        self._current["n_near_miss"] = n_near_miss
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
@@ -90,8 +92,13 @@ class EvalLogger:
                 self._write_scatter_plot()
             else:
                 self._write_heatmap()
-            if any(e.get("partial_success") is not None for e in self._episodes):
-                self._write_partial_success_heatmap()
+            for key, title, fname in [
+                ("n_grasped", "Grasped rate by spawn position", "heatmap_grasped.png"),
+                ("n_lifted", "Lifted rate by spawn position", "heatmap_lifted.png"),
+                ("n_near_miss", "Near miss rate by spawn position", "heatmap_near_miss.png"),
+            ]:
+                if any(e.get(key) is not None for e in self._episodes):
+                    self._write_metric_heatmap(key, title, fname)
         return results
 
     def _write_results(self) -> dict:
@@ -117,21 +124,33 @@ class EvalLogger:
             if ep.get("n_success") is not None and ep.get("n_total") is not None:
                 rec["n_success"] = ep["n_success"]
                 rec["n_total"] = ep["n_total"]
-            if ep.get("partial_success") is not None:
-                rec["partial_success"] = ep["partial_success"]
+            for key in ("n_grasped", "n_lifted", "n_near_miss"):
+                if ep.get(key) is not None:
+                    rec[key] = ep[key]
             records.append(rec)
 
-        partial_eps = [e for e in self._episodes if e.get("partial_success") is not None]
-        n_partial_success = sum(1 for e in partial_eps if e["partial_success"])
-        partial_success_rate = n_partial_success / len(partial_eps) if partial_eps else 0.0
+        def _sum_metric(key):
+            eps = [e for e in self._episodes if e.get(key) is not None]
+            n_sum = sum(e[key] for e in eps)
+            n_trials = sum(e["n_total"] for e in eps if e.get("n_total") is not None)
+            rate = n_sum / n_trials if n_trials > 0 else 0.0
+            return n_sum, n_trials, rate
+
+        n_grasped, _, grasped_rate = _sum_metric("n_grasped")
+        n_lifted, _, lifted_rate = _sum_metric("n_lifted")
+        n_near_miss, n_near_miss_trials, near_miss_rate = _sum_metric("n_near_miss")
 
         summary = {
             "n_episodes": n_episodes,
             "n_success": n_success,
             "n_total": n_total,
             "success_rate": success_rate,
-            "n_partial_success": n_partial_success,
-            "partial_success_rate": partial_success_rate,
+            "n_near_miss": n_near_miss,
+            "near_miss_rate": near_miss_rate,
+            "n_lifted": n_lifted,
+            "lifted_rate": lifted_rate,
+            "n_grasped": n_grasped,
+            "grasped_rate": grasped_rate,
             "episodes": records,
         }
 
@@ -140,8 +159,9 @@ class EvalLogger:
             json.dump(summary, f, indent=2)
 
         msg = f"[EvalLogger] {n_success}/{n_total} success ({100*success_rate:.1f}%)"
-        if n_partial_success > 0:
-            msg += f", {n_partial_success} partial success ({100*partial_success_rate:.1f}%)"
+        msg += f", {n_near_miss}/{n_total} near_miss ({100*near_miss_rate:.1f}%)"
+        msg += f", {n_lifted}/{n_total} lifted ({100*lifted_rate:.1f}%)"
+        msg += f", {n_grasped}/{n_total} grasped ({100*grasped_rate:.1f}%)"
         print(f"{msg} -> {out_path}")
         return summary
 
@@ -226,16 +246,16 @@ class EvalLogger:
         plt.close()
         print(f"[EvalLogger] heatmap -> {out_path}")
 
-    def _write_partial_success_heatmap(self):
-        """Grid plot of partial success rate by spawn position."""
+    def _write_metric_heatmap(self, n_key: str, title: str, filename: str):
+        """Grid plot of a count-based metric rate (n_key / n_total) by spawn position."""
         named_episodes = [
             e for e in self._episodes
-            if e["spawn_name"] is not None and e.get("partial_success") is not None
+            if e["spawn_name"] is not None and e.get(n_key) is not None and e.get("n_total") is not None
         ]
         if not named_episodes:
             return
 
-        spawn_results: Dict[str, List[bool]] = {}
+        spawn_results: Dict[str, List[Tuple[int, int]]] = {}
         spawn_xy: Dict[str, Tuple[float, float]] = {}
         for ep in named_episodes:
             name = ep["spawn_name"]
@@ -243,7 +263,7 @@ class EvalLogger:
                 spawn_results[name] = []
                 pose = ep["spawn_pose"] or {}
                 spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
-            spawn_results[name].append(ep["partial_success"])
+            spawn_results[name].append((ep[n_key], ep["n_total"]))
 
         xs = sorted(set(v[0] for v in spawn_xy.values()))
         ys = sorted(set(v[1] for v in spawn_xy.values()))
@@ -253,10 +273,10 @@ class EvalLogger:
         for name, results in spawn_results.items():
             x, y = spawn_xy[name]
             i, j = xs.index(x), ys.index(y)
-            n_partial = sum(results)
-            n_tot = len(results)
-            r = n_partial / n_tot if n_tot > 0 else 0.0
-            labels[i][j] = f"{r:.0%}\n({n_partial}/{n_tot})"
+            n_met = sum(r[0] for r in results)
+            n_tot = sum(r[1] for r in results)
+            r = n_met / n_tot if n_tot > 0 else 0.0
+            labels[i][j] = f"{r:.0%}\n({n_met}/{n_tot})"
             grid[i, j] = r
 
         fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
@@ -272,14 +292,14 @@ class EvalLogger:
         ax.set_xticklabels([f"y={v:.3f}" for v in ys])
         ax.set_yticks(range(len(xs)))
         ax.set_yticklabels([f"x={v:.3f}" for v in xs])
-        ax.set_title("Partial success rate by spawn position")
-        plt.colorbar(im, ax=ax, label="partial success rate")
+        ax.set_title(title)
+        plt.colorbar(im, ax=ax)
 
         plt.tight_layout()
-        out_path = os.path.join(self.output_dir, "heatmap_partial_success.png")
+        out_path = os.path.join(self.output_dir, filename)
         plt.savefig(out_path, dpi=100, bbox_inches="tight")
         plt.close()
-        print(f"[EvalLogger] partial success heatmap -> {out_path}")
+        print(f"[EvalLogger] {filename} -> {out_path}")
 
     def _write_scatter_plot(self):
         points = self._scatter_points

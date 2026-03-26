@@ -118,6 +118,8 @@ from wrapper import RFSWrapper
 from eval_callback import RFSEvalCallback
 from callbacks import WandbNoisePredCallback, WandbRewardTermCallback, WandbOutputFormat
 from asymmetric_policy import AsymmetricActorCriticPolicy
+from regularized_ppo import RegularizedPPO
+from real_dataset import RealDatasetLoader
 from uwlab.eval.spawn import load_spawn_cfg
 
 
@@ -154,6 +156,7 @@ def main():
     ppo_cfg = cfg["ppo"]
     rfs_cfg = cfg["rfs"]
     eval_cfg = cfg["eval"]
+    reg_cfg = cfg.get("reg", None)
 
     # CLI overrides
     noise_dims = _parse_dims(args_cli.noise_dims or rfs_cfg["noise_dims"])
@@ -209,8 +212,11 @@ def main():
         residual_scale=rfs_cfg["residual_scale"],
         clip_actions=rfs_cfg["clip_actions"],
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
+        finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=args_cli.asymmetric_ac,
+        gamma=ppo_cfg["gamma"],
+        ppo_history=rfs_cfg.get("ppo_history", False),
     )
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)
@@ -249,9 +255,27 @@ def main():
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_kwargs)
 
     policy_cls = AsymmetricActorCriticPolicy if args_cli.asymmetric_ac else "MultiInputPolicy"
-    agent = PPO(policy_cls, sb3_env, **agent_kwargs)
+    agent = RegularizedPPO(policy_cls, sb3_env, **agent_kwargs)
     if args_cli.checkpoint is not None:
-        agent = PPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
+        agent = RegularizedPPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
+
+    if reg_cfg is not None:
+        real_loader = RealDatasetLoader(
+            dataset_path=reg_cfg["real_dataset_path"],
+            n_obs_steps=rfs_env._ppo_n_obs_steps,
+            action_dim=rfs_env.cfm_action_dim,
+            downsample_points=rfs_env.formatter.downsample_points,
+            device=rfs_env.device,
+        )
+        agent.set_real_regularization(
+            loader=real_loader,
+            rfs_env=rfs_env,
+            reg_coef=reg_cfg["reg_coef"],
+            reg_batch_size=reg_cfg.get("reg_batch_size", 256),
+        )
+        print(f"[INFO] Real-state KL regularization: coef={reg_cfg['reg_coef']}, "
+              f"batch={reg_cfg.get('reg_batch_size', 256)}, "
+              f"dataset={reg_cfg['real_dataset_path']}")
 
     sb3_logger = sb3_configure(folder=None, format_strings=[])
     sb3_logger.output_formats.append(WandbOutputFormat())

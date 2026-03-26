@@ -145,7 +145,7 @@ class GraspReward:
     def liftobject_rewards(self, env):
         init_height = self._get_init_height_tensor(env.num_envs, env.device)
         lift_reward = torch.clip(self.object_pose[:, 2] - init_height, -0.1, 0.5)
-        lift_reward = torch.clip(torch.clip(lift_reward / 0.4, -0.1, 1.0) * 80, -2, 60)
+        lift_reward = torch.clip(torch.clip(lift_reward / 0.2, -0.1, 1.0) * 80, -2, 60)
 
         self.lift_reward_scale = (self.object_pose[:, 2] - init_height >= 0.02).int()
 
@@ -399,6 +399,7 @@ class PourReward:
         r_orientation = self.pour_orientation_rewards(env)
         r_link6 = self.penalty_contact(env)
         r_cup_topple = self.cup_topple_penalty(env)
+        r_cap_proximity = self.cap_proximity_penalty(env)
 
         joint_vel_penalty = self._joint_vel_l2(env)
         joint_limit_penalty = self._joint_pos_limits(env)
@@ -411,6 +412,7 @@ class PourReward:
                  + r_orientation * 2.0
                  + r_link6
                  + r_cup_topple
+                 - r_cap_proximity * 0.2
                  - joint_vel_penalty * 1.0e-3
                  - joint_limit_penalty * 6.0e-1
                  - action_rate_penalty * 5e-3)
@@ -423,6 +425,7 @@ class PourReward:
             "orientation": r_orientation.mean().item(),
             "link6_penalty": r_link6.mean().item(),
             "cup_topple_penalty": r_cup_topple.mean().item(),
+            "cap_proximity_penalty": r_cap_proximity.mean().item(),
             "joint_vel_penalty": joint_vel_penalty.mean().item(),
             "joint_limit_penalty": joint_limit_penalty.mean().item(),
             "action_rate_penalty": action_rate_penalty.mean().item(),
@@ -460,16 +463,15 @@ class PourReward:
         return reward * gate
 
     def cap_to_target_rewards(self, env):
-        """Reward cap tip in XY circle (8cm) and Z band [target-5cm, target+20cm]. Matches is_success."""
+        """Reward cap tip in XY circle (4cm) and Z band [cup_z+20cm, cup_z+30cm]. Matches is_success."""
         self._compute_tip_pos()
 
-        target_z = self.cup_top_z + 0.11
-        z_band_low = target_z - 0.05
-        z_band_high = target_z + 0.20
+        z_band_low = self.cup_pose[:, 2] + 0.20
+        z_band_high = self.cup_pose[:, 2] + 0.30
 
         xy_dist = torch.linalg.norm(self.tip_pos[:, :2] - self.cup_center_xy, dim=1)
         xy_dist = torch.nan_to_num(xy_dist, nan=10.0, posinf=10.0, neginf=10.0)
-        xy_reward = torch.clip(1.0 - xy_dist / 0.08, 0.0, 1.0)
+        xy_reward = torch.clip(1.0 - xy_dist / 0.04, 0.0, 1.0)
 
         tip_z = self.tip_pos[:, 2]
         z_below = tip_z < z_band_low
@@ -490,6 +492,13 @@ class PourReward:
         rotation_magnitude = torch.linalg.norm(axis_angle, dim=1)
         rotation_magnitude = torch.nan_to_num(rotation_magnitude, nan=1.0, posinf=1.0, neginf=0.0)
         return torch.clip(1 - rotation_magnitude / 0.5, 0.0, 1.0) * 5
+
+    def cap_proximity_penalty(self, env):
+        self._compute_tip_pos()
+        cap_pos = self.tip_pos.unsqueeze(1)
+        dist = torch.linalg.norm(self.finger_pose[..., :3] - cap_pos, dim=2)
+        proximity = torch.clip(1.0 - dist / 0.04, 0.0, 1.0)
+        return proximity.sum(dim=1)
 
     def cup_topple_penalty(self, env):
         """Penalize knocking over the cup. Uses fixed spawn quat (matches cup_toppled termination)."""
@@ -536,7 +545,9 @@ class PourReward:
             self.finger_pose.append(finger_pose.unsqueeze(1))
         self.finger_pose = torch.cat(self.finger_pose, dim=1)
 
-        grasp_target_pos = self.object_pose[:, :3]
+        body_offset = torch.tensor([0.06, 0.0, 0.0], device=self.object_pose.device).unsqueeze(0).expand(self.object_pose.shape[0], -1)
+        body_offset_world = math_utils.quat_apply(self.object_pose[:, 3:7], body_offset)
+        grasp_target_pos = self.object_pose[:, :3] + body_offset_world
 
         grasp_target_expanded = grasp_target_pos.unsqueeze(1).repeat_interleave(
             len(self.fingers_name_list), dim=1)
@@ -564,7 +575,7 @@ class PourReward:
 
         desired_cap_pos = torch.zeros(env.num_envs, 3, device=env.device)
         desired_cap_pos[:, :2] = cup_center_xy
-        desired_cap_pos[:, 2] = cup_top_z + 0.11
+        desired_cap_pos[:, 2] = cup_top_z + 0.10
 
         target_pos = desired_cap_pos - cap_offset_world
 
