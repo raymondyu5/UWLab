@@ -167,6 +167,13 @@ class RFSEvalCallback(BaseCallback):
 
         self._log_to_wandb(results, output_dir)
 
+        # Eval modified env state, formatter buffers, and PPO history.
+        # Reset everything and sync SB3's cached obs so the next training
+        # rollout doesn't start from a stale observation.
+        sb3_obs, _ = self.model.env.reset()
+        self.model._last_obs = sb3_obs
+        self.model._last_episode_starts = np.ones((num_envs,), dtype=bool)
+
     def _run_fixed_pose_eval(self, logger, isaac_env, device, num_envs):
         poses = self.spawn_cfg.poses
         for pose_idx, pose in enumerate(poses):
