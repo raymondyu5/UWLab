@@ -1,0 +1,10 @@
+defaults:
+  - train_cfm_pcd_base
+  - policy/maniflow_dit
+
+policy:
+  fuse_past_actions_in_state: true
+  single_frame_point_cloud: true
+
+dataloader:
+  batch_size: 256

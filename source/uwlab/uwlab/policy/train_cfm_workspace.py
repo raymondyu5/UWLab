@@ -10,11 +10,8 @@ from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 
-from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
-
-
 class TrainCFMWorkspace:
-    def __init__(self, cfg, dataset, policy: CFMPCDPolicy):
+    def __init__(self, cfg, dataset, policy, normalizer=None):
         # seed
         seed = cfg.training.seed
         torch.manual_seed(seed)
@@ -24,14 +21,28 @@ class TrainCFMWorkspace:
         self.cfg = cfg
         self.dataset = dataset
         self.model = policy
+        self._normalizer_override = normalizer
 
         self.ema_model = copy.deepcopy(policy)
-        self.optimizer = torch.optim.AdamW(
-            policy.parameters(),
-            lr=cfg.training.lr,
-            betas=tuple(cfg.training.get("betas", [0.9, 0.999])),
-            weight_decay=cfg.training.weight_decay,
-        )
+        if cfg.training.get("obs_encoder_lr") is not None and hasattr(
+            policy, "get_optimizer"
+        ):
+            self.optimizer = policy.get_optimizer(
+                lr=cfg.training.lr,
+                weight_decay=cfg.training.weight_decay,
+                obs_encoder_lr=cfg.training.obs_encoder_lr,
+                obs_encoder_weight_decay=cfg.training.get(
+                    "obs_encoder_weight_decay", cfg.training.weight_decay
+                ),
+                betas=tuple(cfg.training.get("betas", (0.9, 0.95))),
+            )
+        else:
+            self.optimizer = torch.optim.AdamW(
+                policy.parameters(),
+                lr=cfg.training.lr,
+                betas=tuple(cfg.training.get("betas", [0.9, 0.999])),
+                weight_decay=cfg.training.weight_decay,
+            )
 
         self.global_step = 0
         self.epoch = 0
@@ -55,7 +66,11 @@ class TrainCFMWorkspace:
         optimizer_to(self.optimizer, device)
 
         # normalizer
-        normalizer = self.dataset.get_normalizer()
+        normalizer = (
+            self._normalizer_override
+            if self._normalizer_override is not None
+            else self.dataset.get_normalizer()
+        )
         self.model.set_normalizer(normalizer)
         self.ema_model.set_normalizer(normalizer)
         self.model.to(device)
@@ -114,14 +129,14 @@ class TrainCFMWorkspace:
             with tqdm.tqdm(train_dataloader, desc=f"Epoch {self.epoch}", leave=False) as pbar:
                 for batch in pbar:
                     batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                    loss = self.model.compute_loss(batch)
+                    loss = self._forward_loss(batch)
                     loss.backward()
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     lr_scheduler.step()
                     ema.step(self.model)
 
-                    loss_val = loss.item()
+                    loss_val = float(loss.item())
                     train_losses.append(loss_val)
                     pbar.set_postfix(loss=loss_val)
                     self.global_step += 1
@@ -137,7 +152,7 @@ class TrainCFMWorkspace:
                 with torch.no_grad():
                     for batch in val_dataloader:
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                        loss = self.model.compute_loss(batch)
+                        loss = self._val_loss(batch)
                         val_losses.append(loss.item())
 
                         result = self.ema_model.predict_action(batch["obs"])
@@ -169,6 +184,18 @@ class TrainCFMWorkspace:
 
         if self.use_wandb:
             wandb.finish()
+
+    def _forward_loss(self, batch):
+        out = self.model.compute_loss(batch, ema_model=self.ema_model)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
+
+    def _val_loss(self, batch):
+        out = self.model.compute_loss(batch, ema_model=self.ema_model)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
 
     def _save_checkpoint(self, path: str):
         from omegaconf import OmegaConf

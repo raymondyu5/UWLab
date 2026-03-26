@@ -7,11 +7,11 @@ Usage:
         --config-name train_cfm_pcd \
         dataset.data_path=/path/to/zarr/episodes \
         training.device=cuda:0
-"""
-import os
-import sys
 
+ManiFlow (DP3 + DiTX): ``--config-name train_cfm_pcd_maniflow`` or see ``train_cfm_pcd_maniflow.py``.
+"""
 from uwlab.utils.paths import setup_third_party_paths
+
 setup_third_party_paths()
 
 import hydra
@@ -21,60 +21,20 @@ from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 from uwlab.policy.backbone.pcd.pointnet import PointNet
 from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
+from uwlab.policy.cfm_pcd_traindata import (
+    build_zarr_dataset,
+    shape_meta_for_unet,
+)
 from uwlab.policy.train_cfm_workspace import TrainCFMWorkspace
-from uwlab_tasks.manager_based.manipulation.grasp.dataset.zarr_dataset import ZarrDataset
-from uwlab_tasks.manager_based.manipulation.grasp.dataset.cotrain_zarr_dataset import CotrainZarrDataset
-
-
-def _build_zarr_dataset(cfg, data_path, seed):
-    return ZarrDataset(
-        data_path=data_path,
-        load_list=list(cfg.dataset.load_list),
-        obs_keys=list(cfg.dataset.obs_keys),
-        action_key=cfg.dataset.action_key,
-        action_base_keys=list(cfg.dataset.action_base_keys) if cfg.dataset.get("action_base_keys") else None,
-        image_keys=list(cfg.dataset.image_keys),
-        horizon=cfg.horizon,
-        n_obs_steps=cfg.n_obs_steps,
-        pad_after=cfg.dataset.pad_after,
-        val_ratio=cfg.dataset.val_ratio,
-        seed=seed,
-        downsample_points=cfg.dataset.downsample_points,
-        pcd_noise=cfg.dataset.pcd_noise,
-        noise_extrinsic=cfg.dataset.get("noise_extrinsic", False),
-        noise_extrinsic_parameter=list(cfg.dataset.get("noise_extrinsic_parameter", [0.05, 0.2])),
-        obs_noise=dict(cfg.dataset.get("obs_noise", {})),
-        hand_dropout_prob=cfg.dataset.get("hand_dropout_prob", 0.0),
-        chunk_relative=bool(cfg.dataset.get("chunk_relative", False)),
-    )
 
 
 @hydra.main(config_path="../../../configs/bc", config_name="train_cfm_pcd", version_base=None)
 def main(cfg: DictConfig):
-    # dataset
-    real_data_path = cfg.dataset.get("real_data_path", None)
-    if real_data_path:
-        sim_dataset = _build_zarr_dataset(cfg, cfg.dataset.data_path, cfg.training.seed)
-        real_dataset = _build_zarr_dataset(cfg, real_data_path, cfg.training.seed)
-        sim_ratio = cfg.dataset.get("sim_ratio", 0.95)
-        dataset = CotrainZarrDataset(sim_dataset=sim_dataset, real_dataset=real_dataset, sim_ratio=sim_ratio)
-    else:
-        dataset = _build_zarr_dataset(cfg, cfg.dataset.data_path, cfg.training.seed)
+    dataset = build_zarr_dataset(cfg)
+    shape_meta = shape_meta_for_unet(
+        dataset, list(cfg.dataset.image_keys), cfg.dataset.downsample_points
+    )
 
-    # shape_meta: infer action/obs dims from dataset
-    shape_meta = {
-        "action": {"shape": [dataset.action_dim]},
-        "obs": {
-            "agent_pos": {"shape": [dataset.low_obs_dim], "type": "low_dim"},
-        },
-    }
-    for key in cfg.dataset.image_keys:
-        shape_meta["obs"][key] = {
-            "shape": [3, cfg.dataset.downsample_points],
-            "type": "pcd",
-        }
-
-    # obs encoder
     pcd_model = PointNet(
         in_channels=cfg.pointnet.in_channels,
         local_channels=tuple(cfg.pointnet.local_channels),
@@ -83,7 +43,6 @@ def main(cfg: DictConfig):
     )
     obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
 
-    # policy
     noise_scheduler = ConditionalFlowMatcher(sigma=cfg.policy.sigma)
     policy = CFMPCDPolicy(
         shape_meta=shape_meta,

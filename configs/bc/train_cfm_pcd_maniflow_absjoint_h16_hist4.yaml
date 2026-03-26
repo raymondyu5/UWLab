@@ -1,0 +1,24 @@
+# ManiFlow counterpart to train_cfm_pcd_absjoint_h16_hist4: same zarr keys, horizon,
+# observation history, and pad_after. Single-frame PCD encode + optional fused past actions.
+defaults:
+  - train_cfm_pcd_maniflow
+  - policy/maniflow_dit
+  - _self_
+
+horizon: 16
+n_obs_steps: 4
+n_action_steps: 16
+
+dataset:
+  obs_keys: [arm_joint_pos, hand_joint_pos]
+  action_key: [arm_joint_pos_target, hand_action]
+  action_base_keys: null
+  pad_after: 15
+  pcd_noise: 0.00
+  obs_noise:
+    arm_joint_pos: 0.05
+    hand_joint_pos: 0.05
+
+  downsample_points: 1024
+
+

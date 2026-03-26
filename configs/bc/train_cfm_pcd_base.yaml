@@ -1,0 +1,56 @@
+# Shared settings for CFM PCD training (Unet + ManiFlow backends).
+horizon: 4
+n_obs_steps: 1
+n_action_steps: 256
+
+dataset:
+  data_path: ???        # required: path to directory containing episode_*.zarr
+  load_list: ["episode_0", "episode_1", "episode_2", "episode_3", "episode_4", "episode_5", "episode_6", "episode_7", "episode_8", "episode_9"] #[all] 
+  obs_keys: [ee_pose, hand_joint_pos]
+  action_key: actions
+  image_keys: [seg_pc]
+  pad_after: 3
+  val_ratio: 0.05
+  downsample_points: 2048
+  pcd_noise: 0.02
+  obs_noise:
+    ee_pose: 0.05
+    hand_joint_pos: 0.05
+  real_data_path: null
+  sim_ratio: 0.95
+
+ema:
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 256
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: false
+
+training:
+  device: cuda:0
+  seed: 42
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  weight_decay: 1.0e-6
+  obs_encoder_lr: null
+  obs_encoder_weight_decay: null
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 1000
+  val_every: 10
+  checkpoint_every: 100
+  checkpoint_dir: ${hydra:run.dir}/checkpoints
+  resume: false
+  use_wandb: false
+  wandb_project: uwlab_bc
+  wandb_run_name: null
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}

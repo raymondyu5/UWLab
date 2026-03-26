@@ -130,7 +130,8 @@ class CFMPCDPolicy(BaseImagePolicy):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch: dict) -> torch.Tensor:
+    def compute_loss(self, batch: dict, ema_model=None, **kwargs) -> torch.Tensor:
+        del ema_model, kwargs  # CFM+Unet does not use EMA in the loss
         nobs = self.normalizer.normalize(batch["obs"])
         nactions = self.normalizer["action"].normalize(batch["action"])
 

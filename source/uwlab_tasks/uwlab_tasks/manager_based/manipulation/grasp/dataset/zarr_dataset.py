@@ -31,6 +31,21 @@ def _get_pcd_range_normalizer() -> SingleFieldLinearNormalizer:
     )
 
 
+def _get_maniflow_pcd_range_normalizer(SingleFieldLinearNormalizerCls):
+    """Fixed [-10, 10] -> [-1, 1] for point clouds (ManiFlow SingleFieldLinearNormalizer)."""
+    scale = np.array([1], dtype=np.float32)
+    offset = np.array([0.0], dtype=np.float32)
+    stat = {
+        "min": np.array([-10], dtype=np.float32),
+        "max": np.array([10], dtype=np.float32),
+        "mean": np.array([0.0], dtype=np.float32),
+        "std": np.array([1], dtype=np.float32),
+    }
+    return SingleFieldLinearNormalizerCls.create_manual(
+        scale=scale, offset=offset, input_stats_dict=stat
+    )
+
+
 class _ReplayBuffer:
     """
     Simple in-memory buffer that holds all episodes concatenated along the time axis.
@@ -314,29 +329,50 @@ class ZarrDataset(Dataset):
             return raw
         return np.concatenate(chunks, axis=0)  # (N*horizon, A)
 
-    def get_normalizer(self, mode: str = "limits") -> LinearNormalizer:
-        # Concatenate obs_keys to form agent_pos, same as __getitem__
+    def _normalizer_fit_data_dict(self):
+        """Raw replay-buffer arrays used to fit action / proprio / past_actions (diffusion_policy or ManiFlow)."""
         obs_list = [self.replay_buffer[k] for k in self.obs_keys if k in self.replay_buffer]
         agent_pos = np.concatenate(obs_list, axis=-1) if obs_list else np.zeros((1, 1))
-
-        # action normalizer: chunk-relative samples if in that mode, otherwise raw step-wise.
-        # past_actions are always the executed step-wise deltas regardless of mode.
         action_for_norm = (
             self._get_chunk_relative_action_samples()
             if self.chunk_relative
             else self.replay_buffer["action"]
         )
-        data = {
+        return {
             "action": action_for_norm,
             "agent_pos": agent_pos,
             "past_actions": self.replay_buffer["action"],
         }
+
+    def get_normalizer(self, mode: str = "limits") -> LinearNormalizer:
+        data = self._normalizer_fit_data_dict()
         normalizer = LinearNormalizer()
         normalizer.fit(data=data, last_n_dims=1, mode=mode)
-
         for key in self.image_keys:
             normalizer[key] = _get_pcd_range_normalizer()
+        return normalizer
 
+    def get_maniflow_normalizer(self, mode: str = "limits"):
+        """Fit ``maniflow.model.common.normalizer.LinearNormalizer`` on the same raw arrays as :meth:`get_normalizer`.
+
+        Uses keys ``action``, ``agent_pos``, ``past_actions`` from the zarr replay buffer, then registers a
+        fixed-range normalizer for ``point_cloud`` (same [-10, 10] -> [-1, 1] rule as :func:`_get_pcd_range_normalizer`).
+        This avoids bridging diffusion_policy normalizers into ManiFlow policies.
+
+        Lazy-imports ManiFlow so ``uwlab_tasks`` does not require ManiFlow unless this method is called.
+        """
+        from maniflow.model.common.normalizer import LinearNormalizer as ManiFlowLinearNormalizer
+        from maniflow.model.common.normalizer import (
+            SingleFieldLinearNormalizer as ManiFlowSingleFieldLinearNormalizer,
+        )
+
+        data = self._normalizer_fit_data_dict()
+        normalizer = ManiFlowLinearNormalizer()
+        normalizer.fit(data=data, last_n_dims=1, mode=mode)
+        for _ in self.image_keys:
+            normalizer["point_cloud"] = _get_maniflow_pcd_range_normalizer(
+                ManiFlowSingleFieldLinearNormalizer
+            )
         return normalizer
 
     def __len__(self) -> int:

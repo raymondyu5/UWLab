@@ -153,3 +153,24 @@ class BCObsFormatter:
             result[key] = pcd.unsqueeze(1)  # (B, 1, 3, downsample_points)
 
         return result
+
+
+def format_bc_obs_for_maniflow(
+    formatted: Dict[str, torch.Tensor],
+    *,
+    pcd_key: str = "seg_pc",
+) -> Dict[str, torch.Tensor]:
+    """Map :class:`BCObsFormatter` output to ManiFlow policy obs (unnormalized).
+
+    ``agent_pos`` is unchanged. PCD is ``(B, 1, 3, N)`` from the formatter → ``point_cloud``
+    ``(B, 1, N, 3)``. ``past_actions`` is forwarded when present.
+    """
+    out: Dict[str, torch.Tensor] = {"agent_pos": formatted["agent_pos"]}
+    if "past_actions" in formatted:
+        out["past_actions"] = formatted["past_actions"]
+    pcd = formatted[pcd_key]
+    if pcd.dim() == 4 and pcd.shape[2] == 3:
+        out["point_cloud"] = pcd.permute(0, 1, 3, 2).contiguous()
+    else:
+        out["point_cloud"] = pcd
+    return out

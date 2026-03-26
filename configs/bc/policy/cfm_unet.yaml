@@ -1,0 +1,18 @@
+# @package _global_
+# Conditional FM + Diffusion Policy ConditionalUnet1D + UWLab PointNet encoder
+
+pointnet:
+  in_channels: 3
+  local_channels: [64, 64, 64, 128, 1024]
+  global_channels: [512, 256]
+  use_bn: false
+
+policy:
+  sigma: 0.0
+  num_inference_steps: 5
+  diffusion_step_embed_dim: 256
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: true
+  use_action_history: false

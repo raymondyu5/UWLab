@@ -54,6 +54,9 @@ class CotrainZarrDataset(Dataset):
     def get_normalizer(self):
         return self.sim_dataset.get_normalizer()
 
+    def get_maniflow_normalizer(self, mode: str = "limits"):
+        return self.sim_dataset.get_maniflow_normalizer(mode=mode)
+
     def get_validation_dataset(self) -> "CotrainZarrDataset":
         return CotrainZarrDataset(
             sim_dataset=self.sim_dataset.get_validation_dataset(),
