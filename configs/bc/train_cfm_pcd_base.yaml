@@ -5,7 +5,7 @@ n_action_steps: 256
 
 dataset:
   data_path: ???        # required: path to directory containing episode_*.zarr
-  load_list: ["episode_0", "episode_1", "episode_2", "episode_3", "episode_4", "episode_5", "episode_6", "episode_7", "episode_8", "episode_9"] #[all] 
+  load_list: [all] 
   obs_keys: [ee_pose, hand_joint_pos]
   action_key: actions
   image_keys: [seg_pc]
