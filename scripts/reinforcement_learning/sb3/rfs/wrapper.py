@@ -104,6 +104,7 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False, pickle_module=dill)
 
     if "state_dicts" in ckpt and "ema_model" in ckpt["state_dicts"]:
+        # Format A: state_dicts wrapper with OmegaConf cfg (older training code).
         state_dict = ckpt["state_dicts"]["ema_model"]
         cfg = ckpt["cfg"]
         shape_meta = {
@@ -122,18 +123,23 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         image_keys = list(getattr(cfg.dataset, "image_keys", ["seg_pc"]))
         downsample_points = int(getattr(cfg.dataset, "downsample_points", 2048))
     else:
+        # Format B: flat checkpoint — cfg embedded in checkpoint or from config.yaml.
         state_dict = ckpt["ema_model"]
-        config_path = os.path.join(diffusion_path, "config.yaml")
-        if not os.path.isfile(config_path):
-            raise FileNotFoundError(
-                f"BC checkpoint format detected but config.yaml not found at {config_path}"
-            )
-        with open(config_path) as f:
-            train_cfg = _resolve_hydra_refs(yaml.safe_load(f))
+        if "cfg" in ckpt and isinstance(ckpt["cfg"], dict):
+            train_cfg = ckpt["cfg"]
+        else:
+            config_path = os.path.join(diffusion_path, "config.yaml")
+            if not os.path.isfile(config_path):
+                raise FileNotFoundError(
+                    f"BC checkpoint format detected but config.yaml not found at {config_path}"
+                )
+            with open(config_path) as f:
+                train_cfg = _resolve_hydra_refs(yaml.safe_load(f))
         agent_pos_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
         action_dim = int(state_dict["normalizer.params_dict.action.scale"].shape[0])
         ds = train_cfg["dataset"]
-        downsample_points = int(ds["downsample_points"])
+        pol = train_cfg["policy"]
+        downsample_points = int(ds.get("downsample_points", 2048))
         obs_keys = ds.get("obs_keys", ds.get("obs_key", []))
         image_keys = ds.get("image_keys", ["seg_pc"])
         shape_meta = {
@@ -143,7 +149,6 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
                 "seg_pc": {"shape": [3, downsample_points], "type": "pcd"},
             },
         }
-        pol = train_cfg["policy"]
         sigma = float(pol.get("sigma", 0.0))
         horizon = int(train_cfg.get("horizon", 4))
         n_action_steps = int(train_cfg.get("n_action_steps", 8))
@@ -180,8 +185,8 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
     policy.to(device)
     policy.eval()
 
-    # agent_pos_flat_dim = n_obs_steps * per_step_dim (total flat size seen by CFM normalizer)
-    agent_pos_flat_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
+    # agent_pos_flat_dim = n_obs_steps * per_step_dim (total flat size of history tensor)
+    agent_pos_flat_dim = n_obs_steps * int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
 
     metadata = {
         "obs_keys": obs_keys,

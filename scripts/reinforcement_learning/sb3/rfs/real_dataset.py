@@ -19,19 +19,20 @@ import sys
 import numpy as np
 import torch
 
-# Bypass the diffusion_policy zarr stub (third_party/diffusion_policy/zarr/__init__.py)
-# which shadows the real zarr package on sys.path.
+# Bypass the diffusion_policy zarr stub (third_party/diffusion_policy/zarr/__init__.py).
+# The stub may already be cached in sys.modules (loaded when diffusion_policy was imported),
+# so we must evict it before importing the real zarr.
 _dp_paths = [p for p in sys.path if "diffusion_policy" in p]
 for _p in _dp_paths:
     sys.path.remove(_p)
+_cached_zarr = sys.modules.pop("zarr", None)
 try:
     import zarr as _zarr
 except ImportError as e:
-    raise ImportError(
-        "zarr not importable in container. "
-        "Preprocess real episodes with precompute_real_obs.py first."
-    ) from e
+    raise ImportError("zarr not importable in container.") from e
 finally:
+    if _cached_zarr is not None:
+        sys.modules["zarr"] = _cached_zarr
     for _p in reversed(_dp_paths):
         sys.path.insert(0, _p)
 
