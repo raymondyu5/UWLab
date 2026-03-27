@@ -29,10 +29,10 @@ rfs:
   noise_dims: "0:23"       # full 23D action gets PPO noise
   residual_dims: "7:23"    # hand dims (7:23, 16D) get PPO residual
 
-  # Execute the full 16-step chunk per PPO step.
-  # With POUR_HORIZON=160 env steps, each episode = 10 PPO steps (160/16).
+  # Execute 4 steps of the 16-step CFM chunk per PPO step (receding horizon).
+  # With POUR_HORIZON=160 env steps, each episode = 40 PPO steps (160/4).
   # Rewards are accumulated with γ^k discounting (uses ppo.gamma above).
-  residual_step: 16
+  residual_step: 4
 
   residual_scale: 0.1
 
@@ -56,10 +56,20 @@ eval:
   record_plots: true
 
 reg:
-  # Real-state KL regularization: after each PPO train() call, sample a batch
-  # of real robot states and penalize KL(N(actor_mean, actor_std²) || N(0,1)).
+  # Real-state KL regularization: each PPO minibatch includes a KL term
+  # penalizing KL(N(actor_mean, actor_std²) || N(0,1)) on real robot states.
   # This anchors the noise policy toward standard Gaussian on real OOD states —
   # equivalent to pure CFM base policy (no noise steering) in the worst case.
+  #
+  # PCD augmentations match BC training (ZarrDataset + PCDSequenceSampler):
+  #   - random point downsampling
+  #   - extrinsic noise (rotation + translation)
+  #   - uniform XYZ noise
+  # Each window is replicated n_augmentations times with independent randomization.
   real_dataset_path: /gscratch/weirdlab/will/UWLab_Docker/data_storage/datasets/03_24_bourbon_pour
   reg_coef: 0.05
   reg_batch_size: 256
+  n_augmentations: 10
+  pcd_noise: 0.02
+  noise_extrinsic: true
+  noise_extrinsic_parameter: [0.05, 0.2]

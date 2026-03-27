@@ -310,7 +310,6 @@ class RFSEvalCallback(BaseCallback):
         self.rfs_env = rfs_env
         self.spawn_cfg = spawn_cfg
 
-        self.episode_steps = self.rfs_env.unwrapped.cfg.horizon // self.rfs_env.residual_step
         self.log_dir = log_dir
         self.eval_interval = eval_interval
         self.record_video = record_video
@@ -327,6 +326,18 @@ class RFSEvalCallback(BaseCallback):
         self._last_near_miss = [False] * rfs_env.num_envs
         self._cache_initialized = [False] * rfs_env.num_envs
         self._rollout_count = 0
+
+    def _episode_steps_after_reset(self) -> int:
+        """Steps remaining in the episode after all warmups have run.
+
+        Reads directly from the env's live episode counter so this is correct
+        regardless of how episode_length_s is extended in train.py or the wrapper.
+        Using cfg.horizon is wrong because it doesn't account for warmup steps
+        that have already been consumed from the episode budget.
+        """
+        ep_buf = int(self.rfs_env.unwrapped.episode_length_buf[0].item())
+        max_ep = int(self.rfs_env.unwrapped.max_episode_length)
+        return max(1, (max_ep - ep_buf) // self.rfs_env.residual_step)
 
     def _on_training_start(self) -> None:
         self._run_eval()
@@ -406,6 +417,7 @@ class RFSEvalCallback(BaseCallback):
         finally:
             if hasattr(self.rfs_env, "enable_metrics_cache"):
                 self.rfs_env.enable_metrics_cache = prev_cache
+            self.rfs_env._collect_substep_frames = False
 
         results = logger.finalize()
 
@@ -427,7 +439,6 @@ class RFSEvalCallback(BaseCallback):
 
     def _run_fixed_pose_eval(self, logger, isaac_env, device, num_envs):
         poses = self.spawn_cfg.poses
-        progress_every = max(1, self.episode_steps // 10)  # ~10 updates per pose
         for pose_idx, pose in enumerate(poses):
             if self.verbose:
                 print(
@@ -436,8 +447,13 @@ class RFSEvalCallback(BaseCallback):
                     flush=True,
                 )
             record_this = self.record_video and pose_idx == 0
+            self.rfs_env._collect_substep_frames = record_this
             obs_dict, _ = self.rfs_env.reset_to_spawn(pose)
             obs_np = _sb3_process_obs(obs_dict)
+
+            episode_steps = self._episode_steps_after_reset()
+            progress_every = max(1, episode_steps // 10)
+
             logger.begin_episode(pose.name, {"x": pose.x, "y": pose.y, "yaw": pose.yaw})
 
             episode_successes = []
@@ -445,41 +461,47 @@ class RFSEvalCallback(BaseCallback):
             episode_lifted = []
             episode_near_miss = []
             recorded = [False] * num_envs
-            for step_idx in range(self.episode_steps):
+
+            ever_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_grasped   = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
+            for step_idx in range(episode_steps):
+                # Pre-step: read metrics before env.step() so we never read the
+                # post-auto-reset state for envs whose episode just ended.
+                # OR-accumulate so the result is "was this ever true this episode".
+                active = torch.tensor([not recorded[i] for i in range(num_envs)], dtype=torch.bool, device=device)
+                if active.any():
+                    metrics_np = isaac_env.metrics.get_metrics()
+                    ever_success[active]   |= torch.from_numpy(metrics_np["is_success"]).to(device).bool()[active]
+                    ever_grasped[active]   |= torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()[active]
+                    ever_lifted[active]    |= torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()[active]
+                    ever_near_miss[active] |= torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()[active]
+
                 action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
                 obs_dict, _, terminated, truncated, _ = self.rfs_env.step(action_t)
                 obs_np = _sb3_process_obs(obs_dict)
-                metrics_seen = getattr(self.rfs_env, "_metrics_seen", None)
-                if metrics_seen is None:
-                    raise RuntimeError(
-                        "RFSWrapper did not populate `_metrics_seen`. "
-                        "Ensure metric caching is enabled in RFSWrapper.step()."
-                    )
 
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
-                        episode_successes.append(float(metrics_seen["is_success"][i]))
-                        episode_grasps.append(float(metrics_seen["is_grasped"][i]))
-                        episode_lifted.append(float(metrics_seen["is_healthy_z"][i]))
-                        episode_near_miss.append(float(metrics_seen["is_near_miss"][i]))
+                        episode_successes.append(float(ever_success[i]))
+                        episode_grasps.append(float(ever_grasped[i]))
+                        episode_lifted.append(float(ever_lifted[i]))
+                        episode_near_miss.append(float(ever_near_miss[i]))
                         recorded[i] = True
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
                 obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
-                frame = self.rfs_env.render() if record_this else None
+                ee_pose_np = ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7)
+                for frame in (self.rfs_env.last_substep_frames or [None]):
+                    logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action[0], frame=frame)
 
-                logger.record_step(
-                    ee_pose=ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7),
-                    object_pose=obj_pos,
-                    action=action[0],
-                    frame=frame,
-                )
-
-                if self.verbose and (step_idx % progress_every == 0 or step_idx == self.episode_steps - 1):
+                if self.verbose and (step_idx % progress_every == 0 or step_idx == episode_steps - 1):
                     print(
                         f"[RFSEvalCallback] eval pose {pose_idx+1}/{len(poses)} "
-                        f"step {step_idx+1}/{self.episode_steps}",
+                        f"step {step_idx+1}/{episode_steps}",
                         flush=True,
                     )
 
@@ -497,7 +519,6 @@ class RFSEvalCallback(BaseCallback):
     def _run_random_eval(self, logger, isaac_env, device, num_envs, output_dir):
         num_trials = self.spawn_cfg.num_trials if self.spawn_cfg.num_trials > 0 else 1
         record_first = self.record_video
-        progress_every = max(1, self.episode_steps // 10)  # ~10 updates per trial
 
         for trial_idx in range(num_trials):
             if self.verbose:
@@ -507,8 +528,12 @@ class RFSEvalCallback(BaseCallback):
                     flush=True,
                 )
             record_this = record_first and trial_idx == 0
+            self.rfs_env._collect_substep_frames = record_this
             obs_dict, _ = self.rfs_env.reset()
             obs_np = _sb3_process_obs(obs_dict)
+
+            episode_steps = self._episode_steps_after_reset()
+            progress_every = max(1, episode_steps // 10)
 
             # Capture per-env initial object positions (local, relative to env origins).
             init_pos_w = isaac_env.scene["grasp_object"].data.root_pos_w.clone()  # (N, 3)
@@ -523,14 +548,32 @@ class RFSEvalCallback(BaseCallback):
             recorded = [False] * num_envs
             done_steps: list[int | None] = [None] * num_envs
 
+            # OR-accumulators: True if the metric was ever satisfied during the episode.
+            # This avoids the post-auto-reset false positive (reading metrics after
+            # Isaac Lab has already reset the env within env.step()).
+            ever_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_grasped   = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ever_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
             ee_pos_traj = [] if self.record_plots else None
             bottle_pos_traj = [] if self.record_plots else None
             tip_pos_traj = [] if self.record_plots else None
             cup_pos_traj = [] if self.record_plots else None
             reward_traj = [] if self.record_plots else None
-            for step_idx in range(self.episode_steps):
+
+            for step_idx in range(episode_steps):
+                # Pre-step: read metrics before env.step() for all still-active envs.
+                # Active = not yet terminated. Frozen envs keep their last OR-accumulated value.
+                active = torch.tensor([not recorded[i] for i in range(num_envs)], dtype=torch.bool, device=device)
+                if active.any():
+                    metrics_np = isaac_env.metrics.get_metrics()
+                    ever_success[active]   |= torch.from_numpy(metrics_np["is_success"]).to(device).bool()[active]
+                    ever_grasped[active]   |= torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()[active]
+                    ever_lifted[active]    |= torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()[active]
+                    ever_near_miss[active] |= torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()[active]
+
                 if self.record_plots:
-                    # Record pre-step state in local coords to avoid post-reset snapshots.
                     ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
                     if ee_pose is None:
                         ee_pos_local_pre = np.zeros((num_envs, 3), dtype=np.float32)
@@ -554,46 +597,34 @@ class RFSEvalCallback(BaseCallback):
                     )
                     reward_traj.append(np.asarray(reward_np, dtype=np.float32))
 
-                metrics_seen = getattr(self.rfs_env, "_metrics_seen", None)
-                if metrics_seen is None:
-                    raise RuntimeError(
-                        "RFSWrapper did not populate `_metrics_seen`. "
-                        "Ensure metric caching is enabled in RFSWrapper.step()."
-                    )
-
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
-                        per_env_success[i] = bool(metrics_seen["is_success"][i])
-                        per_env_grasped[i] = bool(metrics_seen["is_grasped"][i])
-                        per_env_lifted[i] = bool(metrics_seen["is_healthy_z"][i])
-                        per_env_near_miss[i] = bool(metrics_seen["is_near_miss"][i])
+                        per_env_success[i]   = bool(ever_success[i])
+                        per_env_grasped[i]   = bool(ever_grasped[i])
+                        per_env_lifted[i]    = bool(ever_lifted[i])
+                        per_env_near_miss[i] = bool(ever_near_miss[i])
                         recorded[i] = True
                         done_steps[i] = step_idx
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
                 obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
-                frame = self.rfs_env.render() if record_this else None
+                ee_pose_np = ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7)
+                for frame in (self.rfs_env.last_substep_frames or [None]):
+                    logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action[0], frame=frame)
 
-                logger.record_step(
-                    ee_pose=ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7),
-                    object_pose=obj_pos,
-                    action=action[0],
-                    frame=frame,
-                )
-
-                if self.verbose and (step_idx % progress_every == 0 or step_idx == self.episode_steps - 1):
+                if self.verbose and (step_idx % progress_every == 0 or step_idx == episode_steps - 1):
                     print(
                         f"[RFSEvalCallback] eval random trial {trial_idx+1}/{num_trials} "
-                        f"step {step_idx+1}/{self.episode_steps}",
+                        f"step {step_idx+1}/{episode_steps}",
                         flush=True,
                     )
 
                 if all(recorded):
                     break
-            
-            n_success = sum(per_env_success)
-            n_grasped = sum(per_env_grasped)
-            n_lifted = sum(per_env_lifted)
+
+            n_success   = sum(per_env_success)
+            n_grasped   = sum(per_env_grasped)
+            n_lifted    = sum(per_env_lifted)
             n_near_miss = sum(per_env_near_miss)
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
                                n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)

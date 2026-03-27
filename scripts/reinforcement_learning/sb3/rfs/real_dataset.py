@@ -1,16 +1,23 @@
 """
-RealDatasetLoader: loads real robot zarr episodes and samples actor obs
-batches for KL regularization of the PPO noise policy.
+RealDatasetLoader: loads real robot zarr episodes and precomputes a GPU pool
+of actor obs for KL regularization of the PPO noise policy.
 
 Matches absjoint BC training data format exactly:
   obs_keys:   [arm_joint_pos (7), hand_joint_pos (16)]  -> agent_pos (23D)
   action_key: [arm_joint_pos_target (7), hand_action (16)] -> action (23D, absolute)
   image_keys: [seg_pc]
 
-Actor obs built matches AsymmetricActorCriticPolicy actor input:
-  actor_agent_pos_history:    (B, n_obs_steps * 23)
-  actor_past_actions_history: (B, (n_obs_steps-1) * 23)  [when n_obs_steps > 1]
-  actor_pcd_emb:        (B, pcd_feat_dim)  [frozen CFM PointNet, no_grad]
+Precomputed pool (built once at setup via precompute_pool()):
+  Each valid (episode, timestep) window is replicated n_augmentations times
+  with the same PCD augmentations used during BC training:
+    1. Random point downsampling (N -> downsample_points)
+    2. Extrinsic noise: random rotation + translation on XYZ
+    3. PCD XYZ noise: uniform [-pcd_noise, pcd_noise]
+
+  actor_agent_pos_history:    (P, n_obs_steps * 23)
+  actor_past_actions_history: (P, (n_obs_steps-1) * 23)
+  actor_pcd_emb:              (P, 256)
+  Sampling is pure GPU indexing — zero overhead.
 """
 
 import os
@@ -18,6 +25,7 @@ import sys
 
 import numpy as np
 import torch
+from scipy.spatial.transform import Rotation as R
 
 # Bypass the diffusion_policy zarr stub (third_party/diffusion_policy/zarr/__init__.py).
 # The stub may already be cached in sys.modules (loaded when diffusion_policy was imported),
@@ -40,9 +48,10 @@ finally:
 class RealDatasetLoader:
     """Loads real robot episodes from zarr for noise-policy KL regularization.
 
-    At init time all episodes are loaded into CPU memory. During training,
-    sample_actor_obs() draws random windows and returns tensors ready for the
-    PPO actor forward pass.
+    At init time all episodes are loaded into CPU memory.  Call
+    precompute_pool(rfs_env) once before training to encode all PCDs through
+    the frozen PointNet and build GPU tensors.  After that, sample_from_pool()
+    returns random subsets with zero PointNet overhead.
 
     Args:
         dataset_path:      Directory containing episode_N/episode_N.zarr subdirs.
@@ -66,6 +75,11 @@ class RealDatasetLoader:
         self.device = device
         self.episodes: list[dict] = []
         self._load_episodes(dataset_path)
+
+        self._pool_agent_pos: torch.Tensor | None = None
+        self._pool_past_actions: torch.Tensor | None = None
+        self._pool_pcd_emb: torch.Tensor | None = None
+        self._pool_size: int = 0
 
     def _load_episodes(self, dataset_path: str) -> None:
         ep_dirs = sorted(
@@ -109,65 +123,129 @@ class RealDatasetLoader:
         if len(self.episodes) == 0:
             raise RuntimeError(f"No valid episodes found in {dataset_path}")
 
-    def sample_actor_obs(self, batch_size: int, rfs_env) -> dict:
-        """Sample a batch of actor obs from real data.
+    def precompute_pool(
+        self,
+        rfs_env,
+        n_augmentations: int = 10,
+        pcd_noise: float = 0.02,
+        noise_extrinsic: bool = False,
+        noise_extrinsic_parameter: list | None = None,
+        encode_batch_size: int = 256,
+    ) -> None:
+        """Enumerate all valid windows, apply BC-matching PCD augmentations,
+        encode through frozen PointNet, and store as GPU tensors.
 
-        Returns a dict of tensors matching the AsymmetricActorCriticPolicy
-        actor input keys (actor_pcd_emb, actor_agent_pos_history, actor_past_actions_history).
-
-        Args:
-            batch_size: Number of samples to draw.
-            rfs_env:    RFSWrapper instance (provides frozen CFM policy for PCD encoding).
+        Each window is replicated n_augmentations times with independent:
+          1. Random point downsampling  (matches PCDSequenceSampler._load_pcd)
+          2. Extrinsic noise: rotation + translation  (matches _load_pcd)
+          3. PCD XYZ noise: uniform [-pcd_noise, pcd_noise]  (matches ZarrDataset.__getitem__)
         """
-        ep_indices = np.random.randint(0, len(self.episodes), size=batch_size)
+        import time
+        t_start = time.time()
+        n_episodes = len(self.episodes)
 
-        agent_pos_windows = []
-        past_action_windows = []
-        seg_pc_frames = []
+        all_agent_pos = []
+        all_past_actions = []
+        all_pcd_embs = []
 
-        for ep_idx in ep_indices:
-            ep = self.episodes[ep_idx]
+        for ep_idx, ep in enumerate(self.episodes):
+            print(f"\r[RealDatasetLoader] Encoding episode {ep_idx + 1}/{n_episodes} "
+                  f"(T={ep['T']}, {n_augmentations} augs)...", end="", flush=True)
             T = ep["T"]
-            # t must give a full n_obs_steps history without going before episode start.
-            t = np.random.randint(self.n_obs_steps - 1, T)
+            valid_start = self.n_obs_steps - 1
 
-            # agent_pos history: frames [t-(n-1), ..., t], shape (n_obs_steps, 23)
-            agent_pos_windows.append(ep["agent_pos"][t - self.n_obs_steps + 1 : t + 1])
+            ep_agent_pos = []
+            ep_past_actions = []
+            for t in range(valid_start, T):
+                window = ep["agent_pos"][t - self.n_obs_steps + 1 : t + 1]
+                ep_agent_pos.append(window.reshape(-1))
+                if self.n_obs_steps > 1:
+                    pa = ep["action"][t - self.n_obs_steps + 1 : t]
+                    ep_past_actions.append(pa.reshape(-1))
 
-            # past actions: frames [t-(n-1), ..., t-1], shape (n_obs_steps-1, 23)
-            if self.n_obs_steps > 1:
-                past_action_windows.append(ep["action"][t - self.n_obs_steps + 1 : t])
+            seg_pc_raw = ep["seg_pc"][valid_start:]  # (valid_T, N, 3)
+            N_raw = seg_pc_raw.shape[1]
+            valid_T = len(seg_pc_raw)
 
-            # PCD at current frame t, shape (N, 3)
-            seg_pc_frames.append(ep["seg_pc"][t])
+            for aug in range(n_augmentations):
+                all_agent_pos.extend(ep_agent_pos)
+                if ep_past_actions:
+                    all_past_actions.extend(ep_past_actions)
 
-        # --- actor_agent_pos_history ---
-        agent_pos = torch.from_numpy(
-            np.stack(agent_pos_windows)     # (B, n_obs_steps, 23)
+                aug_frames = np.empty(
+                    (valid_T, self.downsample_points, 3), dtype=np.float32
+                )
+                for j in range(valid_T):
+                    frame = seg_pc_raw[j]  # (N, 3)
+                    perm = np.random.permutation(N_raw)[:self.downsample_points]
+                    frame = frame[perm, :]  # (K, 3)
+
+                    if noise_extrinsic and noise_extrinsic_parameter is not None:
+                        trans_scale, rot_scale = noise_extrinsic_parameter
+                        euler = (np.random.rand(3) * 2 - 1) * rot_scale
+                        rot_mat = R.from_euler("xyz", euler).as_matrix().astype(np.float32)
+                        trans = ((np.random.rand(3) * 2 - 1) * trans_scale).astype(np.float32)
+                        frame[:, :3] = frame[:, :3] @ rot_mat + trans
+
+                    if pcd_noise > 0:
+                        noise = (np.random.rand(*frame.shape).astype(np.float32) * 2 - 1) * pcd_noise
+                        frame[:, :3] += noise[:, :3]
+
+                    aug_frames[j] = frame
+
+                seg_pc_t = torch.from_numpy(aug_frames).to(self.device).float()
+                seg_pc_t = seg_pc_t.permute(0, 2, 1)  # (valid_T, 3, K)
+
+                for i in range(0, len(seg_pc_t), encode_batch_size):
+                    batch = seg_pc_t[i : i + encode_batch_size]
+                    nobs = rfs_env.policy.normalizer["seg_pc"].normalize(batch.unsqueeze(1))
+                    with torch.no_grad():
+                        emb = rfs_env.policy.obs_encoder.encode_pcd_only(
+                            {"seg_pc": nobs[:, 0]}
+                        ).detach()
+                    all_pcd_embs.append(emb)
+
+                del seg_pc_t
+
+        pool_size = len(all_agent_pos)
+        self._pool_agent_pos = torch.from_numpy(
+            np.stack(all_agent_pos)
         ).to(self.device)
-        obs_dict = {"actor_agent_pos_history": agent_pos.flatten(1)}   # (B, n_obs_steps*23)
-
-        # --- actor_past_actions_history ---
-        if self.n_obs_steps > 1:
-            past_actions = torch.from_numpy(
-                np.stack(past_action_windows)   # (B, n_obs_steps-1, 23)
+        if all_past_actions:
+            self._pool_past_actions = torch.from_numpy(
+                np.stack(all_past_actions)
             ).to(self.device)
-            obs_dict["actor_past_actions_history"] = past_actions.flatten(1)
+        else:
+            self._pool_past_actions = None
+        self._pool_pcd_emb = torch.cat(all_pcd_embs, dim=0)
+        self._pool_size = pool_size
 
-        # --- actor_pcd_emb (frozen CFM PointNet, no_grad) ---
-        # Dataset stores seg_pc as (N, 3); CFM expects (B, 3, N).
-        seg_pc = torch.from_numpy(
-            np.stack(seg_pc_frames)     # (B, N, 3)
-        ).to(self.device)
-        seg_pc_t = seg_pc.permute(0, 2, 1)    # (B, 3, N)
-        N = seg_pc_t.shape[-1]
-        if N > self.downsample_points:
-            perm = torch.randperm(N, device=self.device)[:self.downsample_points]
-            seg_pc_t = seg_pc_t[:, :, perm]
-        nobs_pcd = rfs_env.policy.normalizer["seg_pc"].normalize(seg_pc_t.unsqueeze(1))
-        pcd_input = {"seg_pc": nobs_pcd[:, 0]}
-        with torch.no_grad():
-            pcd_emb = rfs_env.policy.obs_encoder.encode_pcd_only(pcd_input).detach()
-        obs_dict["actor_pcd_emb"] = pcd_emb    # (B, 256)
+        assert self._pool_pcd_emb.shape[0] == pool_size, (
+            f"PCD pool size {self._pool_pcd_emb.shape[0]} != window count {pool_size}"
+        )
 
-        return obs_dict
+        elapsed = time.time() - t_start
+        n_base = pool_size // n_augmentations
+        mem_bytes = (
+            self._pool_agent_pos.nelement() * self._pool_agent_pos.element_size()
+            + (self._pool_past_actions.nelement() * self._pool_past_actions.element_size()
+               if self._pool_past_actions is not None else 0)
+            + self._pool_pcd_emb.nelement() * self._pool_pcd_emb.element_size()
+        )
+        print(f"\n[RealDatasetLoader] Precomputed pool in {elapsed:.1f}s: "
+              f"{n_base} windows × {n_augmentations} augmentations = {pool_size} entries, "
+              f"{mem_bytes / 1e6:.1f} MB on GPU"
+              f" (pcd_noise={pcd_noise}, extrinsic={noise_extrinsic})")
+
+        self.episodes.clear()
+
+    def sample_from_pool(self, batch_size: int) -> dict:
+        """Random-index into the precomputed pool. Pure GPU op, zero overhead."""
+        idx = torch.randint(0, self._pool_size, (batch_size,), device=self.device)
+        obs = {
+            "actor_agent_pos_history": self._pool_agent_pos[idx],
+            "actor_pcd_emb": self._pool_pcd_emb[idx],
+        }
+        if self._pool_past_actions is not None:
+            obs["actor_past_actions_history"] = self._pool_past_actions[idx]
+        return obs

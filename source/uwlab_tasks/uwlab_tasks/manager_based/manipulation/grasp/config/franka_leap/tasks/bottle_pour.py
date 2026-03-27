@@ -20,7 +20,6 @@ from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
-from termcolor import cprint
 
 from .rewards.pour_rewards import BOTTLE_CAP_OFFSET, is_grasped, is_healthy_z, is_near_miss, is_success
 from .rewards.pour_rewards import PourReward, SimplePourReward

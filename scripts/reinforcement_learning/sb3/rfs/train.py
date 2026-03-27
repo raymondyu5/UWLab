@@ -185,7 +185,8 @@ def main():
 
     internal_warmup = int(getattr(env_cfg, "num_warmup_steps", 0))
     external_warmup = rfs_cfg.get("num_warmup_steps", 0)
-    env_cfg.episode_length_s += (internal_warmup + external_warmup) * env_cfg.decimation * env_cfg.sim.dt
+    # setup_horizon() already adds internal_warmup to episode_length_s, so only extend by external.
+    env_cfg.episode_length_s += external_warmup * env_cfg.decimation * env_cfg.sim.dt
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
 
@@ -272,9 +273,14 @@ def main():
             rfs_env=rfs_env,
             reg_coef=reg_cfg["reg_coef"],
             reg_batch_size=reg_cfg.get("reg_batch_size", 256),
+            n_augmentations=reg_cfg.get("n_augmentations", 10),
+            pcd_noise=reg_cfg.get("pcd_noise", 0.02),
+            noise_extrinsic=reg_cfg.get("noise_extrinsic", False),
+            noise_extrinsic_parameter=reg_cfg.get("noise_extrinsic_parameter", None),
         )
         print(f"[INFO] Real-state KL regularization: coef={reg_cfg['reg_coef']}, "
               f"batch={reg_cfg.get('reg_batch_size', 256)}, "
+              f"n_aug={reg_cfg.get('n_augmentations', 10)}, "
               f"dataset={reg_cfg['real_dataset_path']}")
 
     sb3_logger = sb3_configure(folder=None, format_strings=[])

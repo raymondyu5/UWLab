@@ -282,6 +282,11 @@ class RFSWrapper:
         self.last_residual: torch.Tensor | None = None
         self.last_pcd_embedding: torch.Tensor | None = None
 
+        # Per-substep rendered frames from the most recent step() call.
+        # Populated only when _collect_substep_frames is True; None otherwise.
+        self.last_substep_frames: list | None = None
+        self._collect_substep_frames: bool = False
+
         self.policy, metadata = _load_cfm_checkpoint(diffusion_path, self.device)
         self.policy_horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
@@ -554,6 +559,11 @@ class RFSWrapper:
         # correct multi-step discounted return, not an undiscounted sum.
         discount = 1.0
 
+        if self._collect_substep_frames:
+            self.last_substep_frames = []
+        else:
+            self.last_substep_frames = None
+
         for substep in range(self.residual_step):
             action = base_actions[:, substep].clone()
 
@@ -569,6 +579,8 @@ class RFSWrapper:
 
             self.last_action = action.detach()
             obs, step_rewards, terminated, truncated, info = self.env.step(action)
+            if self._collect_substep_frames:
+                self.last_substep_frames.append(self.env.render())
             rewards += discount * step_rewards
             discount *= self.gamma
             self.last_obs = obs
