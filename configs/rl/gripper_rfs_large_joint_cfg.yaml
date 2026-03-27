@@ -22,7 +22,7 @@ ppo:
 
 rfs:
   noise_dims: "0:23"
-  residual_dims: "0:23"  # full residual
+  residual_dims: "7:23"  # full residual
 
   residual_step: 1
 

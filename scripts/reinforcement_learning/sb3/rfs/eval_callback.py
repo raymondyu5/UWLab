@@ -2,7 +2,7 @@
 RFS evaluation callback for SB3 PPO training.
 
 Runs deterministic rollouts at fixed intervals with specific spawn poses,
-logs success rate, heatmap, and video to wandb.
+logs success rate, and video to wandb.
 """
 
 import collections
@@ -292,7 +292,8 @@ class RFSEvalCallback(BaseCallback):
         log_dir: Root log dir; eval output goes to log_dir/eval/step_XXXXXXXX/.
         eval_interval: Fire every this many rollouts.
         record_video: Save per-episode MP4s via EvalLogger.
-        record_plots: Save heatmap.png and trajectories.png via EvalLogger.
+        record_scatter: Save scatter_success/scatter_lifted via EvalLogger.
+        record_debug_plots: Save per-step debug pose/reward plots.
         verbose: SB3 verbosity.
     """
 
@@ -303,7 +304,8 @@ class RFSEvalCallback(BaseCallback):
         log_dir: str,
         eval_interval: int = 200,
         record_video: bool = True,
-        record_plots: bool = True,
+        record_scatter: bool = True,
+        record_debug_plots: bool = False,
         verbose: int = 0,
     ):
         super().__init__(verbose=verbose)
@@ -313,7 +315,8 @@ class RFSEvalCallback(BaseCallback):
         self.log_dir = log_dir
         self.eval_interval = eval_interval
         self.record_video = record_video
-        self.record_plots = record_plots
+        self.record_scatter = record_scatter
+        self.record_debug_plots = record_debug_plots
         # Rolling buffer of episode successes for training-time success rate.
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
         self._success_buffer = collections.deque(maxlen=400)
@@ -400,7 +403,7 @@ class RFSEvalCallback(BaseCallback):
         logger = EvalLogger(
             output_dir,
             record_video=self.record_video,
-            record_plots=self.record_plots,
+            record_plots=self.record_scatter,
             video_fps=video_fps,
         )
         device = self.rfs_env.device
@@ -556,11 +559,11 @@ class RFSEvalCallback(BaseCallback):
             ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
-            ee_pos_traj = [] if self.record_plots else None
-            bottle_pos_traj = [] if self.record_plots else None
-            tip_pos_traj = [] if self.record_plots else None
-            cup_pos_traj = [] if self.record_plots else None
-            reward_traj = [] if self.record_plots else None
+            ee_pos_traj = [] if self.record_debug_plots else None
+            bottle_pos_traj = [] if self.record_debug_plots else None
+            tip_pos_traj = [] if self.record_debug_plots else None
+            cup_pos_traj = [] if self.record_debug_plots else None
+            reward_traj = [] if self.record_debug_plots else None
 
             for step_idx in range(episode_steps):
                 # Pre-step: read metrics before env.step() for all still-active envs.
@@ -573,7 +576,7 @@ class RFSEvalCallback(BaseCallback):
                     ever_lifted[active]    |= torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()[active]
                     ever_near_miss[active] |= torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()[active]
 
-                if self.record_plots:
+                if self.record_debug_plots:
                     ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
                     if ee_pose is None:
                         ee_pos_local_pre = np.zeros((num_envs, 3), dtype=np.float32)
@@ -591,7 +594,7 @@ class RFSEvalCallback(BaseCallback):
                 obs_dict, reward, terminated, truncated, _ = self.rfs_env.step(action_t)
                 obs_np = _sb3_process_obs(obs_dict)
 
-                if self.record_plots:
+                if self.record_debug_plots:
                     reward_np = (
                         reward.detach().cpu().numpy() if isinstance(reward, torch.Tensor) else reward
                     )
@@ -632,9 +635,10 @@ class RFSEvalCallback(BaseCallback):
                 xs=init_pos_local[:, 0],
                 ys=init_pos_local[:, 1],
                 successes=per_env_success,
+                lifted=per_env_lifted,
             )
 
-            if self.record_plots and bottle_pos_traj:
+            if self.record_debug_plots and bottle_pos_traj:
                 _plot_debug_poses(
                     ee_traj=np.stack(ee_pos_traj, axis=0),
                     bottle_traj=np.stack(bottle_pos_traj, axis=0),
@@ -644,7 +648,7 @@ class RFSEvalCallback(BaseCallback):
                     episode_idx=trial_idx,
                     done_steps=done_steps,
                 )
-            if self.record_plots and reward_traj:
+            if self.record_debug_plots and reward_traj:
                 _plot_debug_rewards(
                     reward_traj=np.stack(reward_traj, axis=0),
                     output_dir=output_dir,
@@ -664,13 +668,13 @@ class RFSEvalCallback(BaseCallback):
             "eval/grasped_rate": results.get("grasped_rate", 0.0),
         }
 
-        scatter_path = os.path.join(output_dir, "scatter.png")
-        if os.path.isfile(scatter_path):
-            log_dict["eval/scatter"] = wandb.Image(scatter_path)
+        scatter_success_path = os.path.join(output_dir, "scatter_success.png")
+        if os.path.isfile(scatter_success_path):
+            log_dict["eval/scatter_success"] = wandb.Image(scatter_success_path)
 
-        heatmap_path = os.path.join(output_dir, "heatmap.png")
-        if os.path.isfile(heatmap_path):
-            log_dict["eval/heatmap"] = wandb.Image(heatmap_path)
+        scatter_lifted_path = os.path.join(output_dir, "scatter_lifted.png")
+        if os.path.isfile(scatter_lifted_path):
+            log_dict["eval/scatter_lifted"] = wandb.Image(scatter_lifted_path)
 
         video_dir = os.path.join(output_dir, "videos")
         if os.path.isdir(video_dir):

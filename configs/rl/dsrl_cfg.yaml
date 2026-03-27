@@ -40,4 +40,4 @@ eval:
   interval: 50             # fire every N rollouts (1 rollout = n_steps * num_envs timesteps)
   spawn: "random"          # spawn config name in configs/eval/spawns/
   record_video: true
-  record_plots: true
+  record_plots: false

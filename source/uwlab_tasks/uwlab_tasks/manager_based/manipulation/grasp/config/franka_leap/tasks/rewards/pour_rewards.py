@@ -83,6 +83,49 @@ def _joint_pos_limits(env, asset_name: str, soft_ratio: float = 0.9) -> torch.Te
 def _action_rate_l2(env) -> torch.Tensor:
     return torch.sum((env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
 
+
+def _xy_reward(env) -> torch.Tensor:
+    _, tip_position, cup_pos = compute_tip_pos(env)
+    xy_dist = torch.norm(tip_position[:, :2] - cup_pos[:, :2], dim=1)
+    return torch.clamp(1.0 - xy_dist / MAX_XY_DIST, min=0.0, max=1.0)
+
+
+def nan_to_num(val) -> torch.Tensor:
+    return torch.nan_to_num(val, nan=0.0, posinf=0.0, neginf=0.0)
+
+def pour_grasped(env) -> torch.Tensor:
+    return nan_to_num(is_grasped(env).float())
+
+
+def pour_xy_healthy(env) -> torch.Tensor:
+    val = _xy_reward(env) * is_healthy_z(env).float()
+    return nan_to_num(val)
+
+
+def pour_xy_near_miss(env) -> torch.Tensor:
+    val = _xy_reward(env) * is_near_miss(env).float()
+    return nan_to_num(val)
+
+
+def pour_success(env) -> torch.Tensor:
+    return nan_to_num(is_success(env).float())
+
+
+def pour_cup_topple(env, cup_name: str = "pink_cup") -> torch.Tensor:
+    return nan_to_num(_cup_toppled(env, cup_name=cup_name).float())
+
+
+def pour_joint_vel_l2(env, asset_name: str = "robot") -> torch.Tensor:
+    return nan_to_num(_joint_vel_l2(env, asset_name=asset_name))
+
+
+def pour_joint_pos_limits(env, asset_name: str = "robot") -> torch.Tensor:
+    return nan_to_num(_joint_pos_limits(env, asset_name=asset_name))
+
+
+def pour_action_rate_l2(env) -> torch.Tensor:
+    return nan_to_num(_action_rate_l2(env))
+
 class SimplePourReward:
     """
     Simple reward class for bourbon pouring task. 
@@ -132,7 +175,7 @@ class SimplePourReward:
             - action_rate_penalty * 5e-3
         )
 
-        return torch.nan_to_num(final, nan=0.0, posinf=0.0, neginf=0.0)
+        return nan_to_num(final)
 
 class PourReward:
     """Reward class for bourbon pouring task.
@@ -319,7 +362,7 @@ class PourReward:
             self._component_sums[k] = self._component_sums.get(k, 0.0) + v
         self._component_count += 1
 
-        return torch.nan_to_num(final, nan=0.0, posinf=0.0, neginf=0.0)
+        return nan_to_num(final)
 
     # ------------------------------------------------------------------
     # Reward components
@@ -355,7 +398,7 @@ class PourReward:
         z_band_high = self.cup_pose[:, 2] + 0.30
 
         xy_dist = torch.linalg.norm(self.tip_pos[:, :2] - self.cup_center_xy, dim=1)
-        xy_dist = torch.nan_to_num(xy_dist, nan=10.0, posinf=10.0, neginf=10.0)
+        xy_dist = nan_to_num(xy_dist)
         xy_reward = torch.clip(1.0 - xy_dist / 0.04, 0.0, 1.0)
 
         tip_z = self.tip_pos[:, 2]

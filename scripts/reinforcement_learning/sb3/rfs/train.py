@@ -28,6 +28,7 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from isaaclab.app import AppLauncher
 
@@ -54,8 +55,11 @@ parser.add_argument("--eval_interval", type=int, default=None,
                     help="Override eval.interval.")
 parser.add_argument("--eval_spawn", type=str, default=None,
                     help="Override eval.spawn config name.")
-parser.add_argument("--no_eval_video", action="store_true", default=False)
-parser.add_argument("--no_eval_plots", action="store_true", default=False)
+parser.add_argument("--no_eval_video", action="store_true", default=False) # default to including video
+parser.add_argument("--eval_plots", action="store_true", default=False,
+                    help="Legacy alias for --eval_debug_plots.")
+parser.add_argument("--eval_debug_plots", action="store_true", default=False,
+                    help="Enable heavy per-step debug plots (pose/reward).")
 parser.add_argument("--asymmetric_ac", action="store_true", default=False,
                     help="Asymmetric AC: actor sees CFM embedding only; critic sees privileged sim state.")
 
@@ -165,7 +169,7 @@ def main():
     eval_spawn = args_cli.eval_spawn or eval_cfg["spawn"]
 
     timestamp = datetime.now().strftime("%m%d_%H%M")
-    run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}"
+    run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}_{uuid4().hex[:6]}"
     log_dir = os.path.abspath(os.path.join("logs", "rfs", run_name))
     print(f"[INFO] Run: {run_name}")
     print(f"[INFO] Logging to: {log_dir}")
@@ -298,7 +302,8 @@ def main():
         log_dir=log_dir,
         eval_interval=eval_interval,
         record_video=not args_cli.no_eval_video and eval_cfg["record_video"],
-        record_plots=not args_cli.no_eval_plots and eval_cfg["record_plots"],
+        record_scatter=True,
+        record_debug_plots=(args_cli.eval_debug_plots or args_cli.eval_plots),
         verbose=1,
     )
     reward_term_cb = WandbRewardTermCallback(env)

@@ -22,7 +22,17 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from .rewards.pour_rewards import BOTTLE_CAP_OFFSET, is_grasped, is_healthy_z, is_near_miss, is_success
-from .rewards.pour_rewards import PourReward, SimplePourReward
+from .rewards.pour_rewards import (
+    PourReward,
+    pour_action_rate_l2,
+    pour_cup_topple,
+    pour_grasped,
+    pour_joint_pos_limits,
+    pour_joint_vel_l2,
+    pour_success,
+    pour_xy_healthy,
+    pour_xy_near_miss,
+)
 
 from ....mdp import (
     CachedSamplePC,
@@ -128,24 +138,22 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
         
         self.setup_horizon(horizon=POUR_HORIZON)
-        # pour_rew = PourReward(
-        #     asset_name="robot",
-        #     object_name="grasp_object",
-        #     cup_name="pink_cup",
-        #     fingers_name_list=FINGERS_NAME_LIST,
-        #     init_height=BOTTLE_SPAWN_POS[2],
-        #     bottle_cap_offset=BOTTLE_CAP_OFFSET,
-        # )
-        # pour_rew.setup_wrist_sensor(self.scene)
-        # pour_rew.setup_finger_entities(self.scene)
-        # pour_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
-
-        pour_rew = SimplePourReward(
-            asset_name="robot",
-            cup_name="pink_cup",
+        self.rewards.grasped = RewTerm(func=pour_grasped, weight=1.0)
+        self.rewards.xy_healthy = RewTerm(func=pour_xy_healthy, weight=2.0)
+        self.rewards.xy_near_miss = RewTerm(func=pour_xy_near_miss, weight=5.0)
+        self.rewards.success = RewTerm(func=pour_success, weight=10.0)
+        self.rewards.cup_topple = RewTerm(func=pour_cup_topple, weight=-10.0)
+        self.rewards.joint_vel = RewTerm(
+            func=pour_joint_vel_l2,
+            weight=-1.0e-3,
+            params={"asset_name": "robot"},
         )
-
-        self.rewards.pour_rewards = RewTerm(func=pour_rew.pour_rewards, weight=4.0)
+        self.rewards.joint_limit = RewTerm(
+            func=pour_joint_pos_limits,
+            weight=-6.0e-1,
+            params={"asset_name": "robot"},
+        )
+        self.rewards.action_rate = RewTerm(func=pour_action_rate_l2, weight=-5.0e-3)
 
         # Task-defined boolean-ish metrics used by eval scripts.
         self.metrics_spec = {

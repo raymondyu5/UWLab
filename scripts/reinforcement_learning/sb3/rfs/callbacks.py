@@ -52,10 +52,12 @@ class WandbRewardTermCallback(BaseCallback):
         if wandb.run is None:
             return
         mgr = self._isaac_env.unwrapped.reward_manager
-        log_dict = {
-            f"rewards/{name}": val.mean().item()
+        term_means = {
+            name: val.mean().item()
             for name, val in mgr._episode_sums.items()
         }
+        log_dict = {f"rewards/{name}": mean_val for name, mean_val in term_means.items()}
+        log_dict["rewards/total"] = sum(term_means.values())
         for name, term_cfg in zip(mgr._term_names, mgr._term_cfgs):
             func = getattr(term_cfg, "func", None)
             obj = getattr(func, "__self__", None)

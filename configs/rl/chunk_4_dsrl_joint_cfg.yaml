@@ -22,9 +22,9 @@ ppo:
 
 rfs:
   noise_dims: "0:23"
-  residual_dims: "0:23"  # full residual
+  residual_dims: ""        # DSRL: no residual
 
-  residual_step: 1
+  residual_step: 4
 
   residual_scale: 0.1      # unused when residual_dims is empty
 
@@ -40,3 +40,5 @@ eval:
   spawn: "bottle_pour_narrow"
   record_video: true
   record_plots: false
+
+# isaacpy scripts/reinforcement_learning/sb3/rfs/train.py --task UW-FrankaLeap-PourBottle-JointAbs-v0 --num_envs 1024 --diffusion_path logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise --cfg configs/rl/chunk_dsrl_joint_cfg.yaml --eval_spawn random --wandb_project rfs_uwlab --asymmetric_ac --enable_cameras --headless
