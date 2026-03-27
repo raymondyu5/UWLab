@@ -119,11 +119,13 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 import uwlab_tasks  # noqa: F401
 
 from wrapper import RFSWrapper
+from gpu_vec_env import GpuSb3VecEnvWrapper
 from eval_callback import RFSEvalCallback
 from callbacks import WandbNoisePredCallback, WandbRewardTermCallback, WandbOutputFormat
 from asymmetric_policy import AsymmetricActorCriticPolicy
 from regularized_ppo import RegularizedPPO
 from real_dataset import RealDatasetLoader
+from buffers import GpuDictRolloutBuffer
 from uwlab.eval.spawn import load_spawn_cfg
 
 
@@ -155,12 +157,27 @@ def _short_task(task: str) -> str:
     return name
 
 
+def _format_ckpt_meta(meta: dict | None) -> str:
+    if not meta:
+        return "unavailable"
+    parts = []
+    for key in ("epoch", "global_step", "best_val_mse", "best_model_score"):
+        if key in meta:
+            value = meta[key]
+            if isinstance(value, float):
+                parts.append(f"{key}={value:.6g}")
+            else:
+                parts.append(f"{key}={value}")
+    return ", ".join(parts) if parts else "unavailable"
+
+
 def main():
     cfg = _load_cfg(args_cli.cfg)
     ppo_cfg = cfg["ppo"]
     rfs_cfg = cfg["rfs"]
     eval_cfg = cfg["eval"]
     reg_cfg = cfg.get("reg", None)
+    use_gpu_buffer = cfg.get("gpu_buffer", True)
 
     # CLI overrides
     noise_dims = _parse_dims(args_cli.noise_dims or rfs_cfg["noise_dims"])
@@ -223,18 +240,37 @@ def main():
         gamma=ppo_cfg["gamma"],
         ppo_history=rfs_cfg.get("ppo_history", False),
     )
+    ckpt_path = getattr(rfs_env, "diffusion_ckpt_path", None)
+    ckpt_resolved_path = getattr(rfs_env, "diffusion_ckpt_resolved_path", None)
+    ckpt_meta = getattr(rfs_env, "diffusion_ckpt_meta", {})
+    ckpt_meta_str = _format_ckpt_meta(ckpt_meta)
+    print(f"[INFO] Diffusion checkpoint: {ckpt_path}")
+    if ckpt_resolved_path and ckpt_resolved_path != ckpt_path:
+        print(f"[INFO] Diffusion checkpoint resolved path: {ckpt_resolved_path}")
+    print(f"[INFO] Diffusion checkpoint metadata: {ckpt_meta_str}")
 
-    sb3_env = Sb3VecEnvWrapper(rfs_env)
+    sb3_env = GpuSb3VecEnvWrapper(rfs_env) if use_gpu_buffer else Sb3VecEnvWrapper(rfs_env)
 
     print(f"[INFO] PPO observation space: {sb3_env.observation_space}")
     print(f"[INFO] PPO action space: {sb3_env.action_space}")
 
     if args_cli.wandb_project:
+        ckpt_note_lines = [
+            f"diffusion_ckpt={ckpt_path}",
+            f"diffusion_ckpt_resolved={ckpt_resolved_path or ckpt_path}",
+            f"diffusion_ckpt_meta={ckpt_meta_str}",
+        ]
         wandb.init(
             project=args_cli.wandb_project,
             name=run_name,
-            notes=command,
-            config={**vars(args_cli), **cfg},
+            notes=f"{command}\n" + "\n".join(ckpt_note_lines),
+            config={
+                **vars(args_cli),
+                **cfg,
+                "diffusion_checkpoint_path": ckpt_path,
+                "diffusion_checkpoint_resolved_path": ckpt_resolved_path or ckpt_path,
+                "diffusion_checkpoint_meta": ckpt_meta,
+            },
         )
 
     act_fn = _ACT_FNS[ppo_cfg.get("activation_fn", "elu")]
@@ -260,7 +296,13 @@ def main():
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_kwargs)
 
     policy_cls = AsymmetricActorCriticPolicy if args_cli.asymmetric_ac else "MultiInputPolicy"
-    agent = RegularizedPPO(policy_cls, sb3_env, **agent_kwargs)
+    agent = RegularizedPPO(
+        policy_cls,
+        sb3_env,
+        **agent_kwargs,
+        rollout_buffer_class=GpuDictRolloutBuffer,
+        rollout_buffer_kwargs={"gpu_buffer": use_gpu_buffer},
+    )
     if args_cli.checkpoint is not None:
         agent = RegularizedPPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
 

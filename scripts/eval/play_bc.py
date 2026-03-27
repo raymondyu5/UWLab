@@ -74,6 +74,7 @@ from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 from uwlab.policy.backbone.pcd.pointnet import PointNet
 from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
 from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
+from uwlab.utils.checkpoint import extract_ckpt_metadata, format_ckpt_metadata
 from uwlab.eval.bc_obs_formatter import BCObsFormatter
 from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
@@ -429,7 +430,13 @@ def main():
     # Load training config and build policy.
     # Prefer cfg embedded in checkpoint; fall back to .hydra/config.yaml for old checkpoints.
     ckpt_path = _find_checkpoint(checkpoint_dir, eval_cfg.get("checkpoint_name"))
+    print(f"[play_bc] Loading checkpoint: {ckpt_path}")
+    resolved_ckpt_path = os.path.realpath(ckpt_path)
+    if resolved_ckpt_path != ckpt_path:
+        print(f"[play_bc] Resolved checkpoint path: {resolved_ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ckpt_meta = extract_ckpt_metadata(ckpt)
+    print(f"[play_bc] Checkpoint metadata: {format_ckpt_metadata(ckpt_meta)}")
     train_cfg = ckpt.get("cfg") or _load_train_cfg(checkpoint_dir)
     chunk_relative = bool((train_cfg.get("dataset") or {}).get("chunk_relative", False))
     policy, ds_cfg = _build_policy(train_cfg, checkpoint_dir, device, eval_overrides=eval_cfg, ckpt=ckpt)

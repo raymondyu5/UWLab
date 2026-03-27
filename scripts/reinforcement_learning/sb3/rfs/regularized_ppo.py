@@ -18,6 +18,7 @@ policy_net, action_net, log_std). The CFM PointNet used to encode PCD inputs is
 called under torch.no_grad() inside RealDatasetLoader.sample_actor_obs().
 """
 
+import time
 import numpy as np
 import torch as th
 from gymnasium import spaces
@@ -26,6 +27,8 @@ from torch.nn import functional as F
 import wandb
 from stable_baselines3 import PPO
 from stable_baselines3.common.utils import explained_variance
+
+from buffers import GpuDictRolloutBuffer
 
 
 class RegularizedPPO(PPO):
@@ -36,6 +39,10 @@ class RegularizedPPO(PPO):
         self._rfs_env = None
         self._reg_coef: float = 0.0
         self._reg_batch_size: int = 256
+
+    def _excluded_save_params(self) -> list[str]:
+        """Exclude non-picklable regularization helpers from SB3 checkpoints."""
+        return super()._excluded_save_params() + ["_real_loader", "_rfs_env"]
 
     def set_real_regularization(
         self,
@@ -76,6 +83,118 @@ class RegularizedPPO(PPO):
             noise_extrinsic=noise_extrinsic,
             noise_extrinsic_parameter=noise_extrinsic_parameter,
         )
+
+    def collect_rollouts(self, env, callback, rollout_buffer, n_rollout_steps) -> bool:
+        """GPU-resident rollout collection.
+
+        Overrides OnPolicyAlgorithm.collect_rollouts() when the rollout buffer is
+        a GpuDictRolloutBuffer with gpu_buffer=True. Observations, rewards, and
+        done flags stay on GPU throughout — no CPU<->GPU transfers per step.
+
+        Falls back to the standard SB3 implementation for any other buffer type.
+        """
+        if not (isinstance(rollout_buffer, GpuDictRolloutBuffer) and rollout_buffer.gpu_buffer):
+            _t = time.perf_counter()
+            result = super().collect_rollouts(env, callback, rollout_buffer, n_rollout_steps)
+            _secs = time.perf_counter() - _t
+            _sps = int(n_rollout_steps * env.num_envs / _secs)
+            print(f"[collect_rollouts] {_sps} steps/sec  "
+                  f"({n_rollout_steps} steps × {env.num_envs} envs in {_secs:.2f}s)  "
+                  f"gpu_buffer=False")
+            return result
+
+        assert self._last_obs is not None, "No previous observation was provided"
+        self.policy.set_training_mode(False)
+
+        n_steps = 0
+        rollout_buffer.reset()
+        if self.use_sde:
+            self.policy.reset_noise(env.num_envs)
+
+        callback.on_rollout_start()
+
+        _t_rollout_start = time.perf_counter()
+        while n_steps < n_rollout_steps:
+            if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
+                self.policy.reset_noise(env.num_envs)
+
+            with th.no_grad():
+                # _last_obs is already a dict of GPU tensors from GpuSb3VecEnvWrapper.
+                actions, values, log_probs = self.policy(self._last_obs)
+
+            clipped_actions = actions
+            if isinstance(self.action_space, spaces.Box):
+                if self.policy.squash_output:
+                    clipped_actions = self.policy.unscale_action(clipped_actions)
+                else:
+                    clipped_actions = th.clamp(
+                        actions,
+                        th.as_tensor(self.action_space.low, device=self.device),
+                        th.as_tensor(self.action_space.high, device=self.device),
+                    )
+
+            new_obs, rewards, dones, infos = env.step(clipped_actions)
+            self.num_timesteps += env.num_envs
+
+            callback.update_locals(locals())
+            if not callback.on_step():
+                return False
+
+            # Populate ep_info_buffer for done envs so SB3's _dump_logs works correctly.
+            ep_info = infos["episode"]
+            reset_mask = ep_info["mask"]
+            if reset_mask.any():
+                for idx in reset_mask.nonzero(as_tuple=True)[0]:
+                    self.ep_info_buffer.extend([{
+                        "r": ep_info["r"][idx].item(),
+                        "l": int(ep_info["l"][idx].item()),
+                    }])
+
+            n_steps += 1
+
+            if isinstance(self.action_space, spaces.Discrete):
+                actions = actions.reshape(-1, 1)
+
+            # Vectorized bootstrap for time-limit truncations.
+            # In practice RFSWrapper always sets truncated=zeros so this never fires,
+            # but it's kept correct for generality.
+            bootstrap_mask = infos["terminal_mask"] & infos["TimeLimit.truncated"]
+            bootstrap_indices = bootstrap_mask.nonzero(as_tuple=True)[0]
+            if bootstrap_indices.numel() > 0:
+                terminal_obs = {
+                    k: v[bootstrap_indices]
+                    for k, v in infos["terminal_observation"].items()
+                }
+                with th.no_grad():
+                    terminal_values = self.policy.predict_values(terminal_obs).squeeze(-1)
+                rewards[bootstrap_indices] += self.gamma * terminal_values
+
+            rollout_buffer.add(
+                self._last_obs,
+                actions,
+                rewards,
+                self._last_episode_starts,
+                values,
+                log_probs,
+            )
+            self._last_obs = new_obs
+            self._last_episode_starts = dones
+
+        _rollout_secs = time.perf_counter() - _t_rollout_start
+        _steps_per_sec = int(n_rollout_steps * env.num_envs / _rollout_secs)
+        print(f"[collect_rollouts] {_steps_per_sec} steps/sec  "
+              f"({n_rollout_steps} steps × {env.num_envs} envs in {_rollout_secs:.2f}s)  "
+              f"gpu_buffer={rollout_buffer.gpu_buffer}")
+
+        with th.no_grad():
+            values = self.policy.predict_values(new_obs)
+
+        rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+
+        callback.update_locals(locals())
+        callback.on_rollout_end()
+
+        return True
 
     def _compute_kl_reg(self) -> th.Tensor:
         """Sample fresh real obs from the precomputed pool and compute
@@ -186,10 +305,12 @@ class RegularizedPPO(PPO):
             if not continue_training:
                 break
 
-        explained_var = explained_variance(
-            self.rollout_buffer.values.flatten(),
-            self.rollout_buffer.returns.flatten(),
-        )
+        vals = self.rollout_buffer.values.flatten()
+        rets = self.rollout_buffer.returns.flatten()
+        if isinstance(vals, th.Tensor):
+            vals = vals.cpu().numpy()
+            rets = rets.cpu().numpy()
+        explained_var = explained_variance(vals, rets)
 
         # --- Logging (matches SB3 PPO exactly) ---
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
