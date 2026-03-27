@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 import os
 import json
 import numpy as np
@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 class EvalLogger:
     """
     Collects per-step and per-episode data during BC policy evaluation,
-    then writes results, trajectory plots, and optional success heatmaps.
+    then writes results, scatter plots, and optional videos.
 
     Usage:
         logger = EvalLogger(output_dir, record_video=False, record_plots=True, video_fps=10.0)
@@ -95,15 +95,6 @@ class EvalLogger:
         if self.record_plots:
             if self._scatter_points:
                 self._write_scatter_plots()
-            else:
-                self._write_heatmap()
-            for key, title, fname in [
-                ("n_grasped", "Grasped rate by spawn position", "heatmap_grasped.png"),
-                ("n_lifted", "Lifted rate by spawn position", "heatmap_lifted.png"),
-                ("n_near_miss", "Near miss rate by spawn position", "heatmap_near_miss.png"),
-            ]:
-                if any(e.get(key) is not None for e in self._episodes):
-                    self._write_metric_heatmap(key, title, fname)
         return results
 
     def _write_results(self) -> dict:
@@ -189,122 +180,6 @@ class EvalLogger:
         plt.savefig(out_path, dpi=100)
         plt.close()
         print(f"[EvalLogger] trajectory plot -> {out_path}")
-
-    def _write_heatmap(self):
-        named_episodes = [e for e in self._episodes if e["spawn_name"] is not None]
-        if not named_episodes:
-            return
-
-        # Group by spawn name, collect n_success/n_total or legacy bool successes.
-        spawn_results: Dict[str, List[Tuple[int, int] | bool]] = {}
-        spawn_xy: Dict[str, Tuple[float, float]] = {}
-        for ep in named_episodes:
-            name = ep["spawn_name"]
-            if name not in spawn_results:
-                spawn_results[name] = []
-                pose = ep["spawn_pose"] or {}
-                spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
-            if ep.get("n_success") is not None and ep.get("n_total") is not None:
-                spawn_results[name].append((ep["n_success"], ep["n_total"]))
-            else:
-                spawn_results[name].append(1 if ep["success"] else 0)
-
-        # Build sorted unique axes so grid is aligned.
-        xs = sorted(set(v[0] for v in spawn_xy.values()))
-        ys = sorted(set(v[1] for v in spawn_xy.values()))
-        grid = np.full((len(xs), len(ys)), np.nan)
-        labels = [["" for _ in ys] for _ in xs]
-
-        for name, results in spawn_results.items():
-            x, y = spawn_xy[name]
-            i, j = xs.index(x), ys.index(y)
-            if results and isinstance(results[0], tuple):
-                n_succ = sum(r[0] for r in results)
-                n_tot = sum(r[1] for r in results)
-                r = n_succ / n_tot if n_tot > 0 else 0.0
-                labels[i][j] = f"{r:.0%}\n({n_succ}/{n_tot})"
-            else:
-                successes = [int(r) for r in results]
-                r = np.mean(successes)
-                labels[i][j] = f"{r:.0%}\n({sum(successes)}/{len(successes)})"
-            grid[i, j] = r
-
-        fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
-        im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
-
-        for i in range(len(xs)):
-            for j in range(len(ys)):
-                if labels[i][j]:
-                    ax.text(j, i, labels[i][j], ha="center", va="center",
-                            fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(ys)))
-        ax.set_xticklabels([f"y={v:.3f}" for v in ys])
-        ax.set_yticks(range(len(xs)))
-        ax.set_yticklabels([f"x={v:.3f}" for v in xs])
-        ax.set_title("Success rate by spawn position")
-        plt.colorbar(im, ax=ax, label="success rate")
-
-        plt.tight_layout()
-        out_path = os.path.join(self.output_dir, "heatmap.png")
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
-        print(f"[EvalLogger] heatmap -> {out_path}")
-
-    def _write_metric_heatmap(self, n_key: str, title: str, filename: str):
-        """Grid plot of a count-based metric rate (n_key / n_total) by spawn position."""
-        named_episodes = [
-            e for e in self._episodes
-            if e["spawn_name"] is not None and e.get(n_key) is not None and e.get("n_total") is not None
-        ]
-        if not named_episodes:
-            return
-
-        spawn_results: Dict[str, List[Tuple[int, int]]] = {}
-        spawn_xy: Dict[str, Tuple[float, float]] = {}
-        for ep in named_episodes:
-            name = ep["spawn_name"]
-            if name not in spawn_results:
-                spawn_results[name] = []
-                pose = ep["spawn_pose"] or {}
-                spawn_xy[name] = (pose.get("x", 0.0), pose.get("y", 0.0))
-            spawn_results[name].append((ep[n_key], ep["n_total"]))
-
-        xs = sorted(set(v[0] for v in spawn_xy.values()))
-        ys = sorted(set(v[1] for v in spawn_xy.values()))
-        grid = np.full((len(xs), len(ys)), np.nan)
-        labels = [["" for _ in ys] for _ in xs]
-
-        for name, results in spawn_results.items():
-            x, y = spawn_xy[name]
-            i, j = xs.index(x), ys.index(y)
-            n_met = sum(r[0] for r in results)
-            n_tot = sum(r[1] for r in results)
-            r = n_met / n_tot if n_tot > 0 else 0.0
-            labels[i][j] = f"{r:.0%}\n({n_met}/{n_tot})"
-            grid[i, j] = r
-
-        fig, ax = plt.subplots(figsize=(max(4, len(ys) * 1.5), max(3, len(xs) * 1.2)))
-        im = ax.imshow(grid, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
-
-        for i in range(len(xs)):
-            for j in range(len(ys)):
-                if labels[i][j]:
-                    ax.text(j, i, labels[i][j], ha="center", va="center",
-                            fontsize=10, fontweight="bold")
-
-        ax.set_xticks(range(len(ys)))
-        ax.set_xticklabels([f"y={v:.3f}" for v in ys])
-        ax.set_yticks(range(len(xs)))
-        ax.set_yticklabels([f"x={v:.3f}" for v in xs])
-        ax.set_title(title)
-        plt.colorbar(im, ax=ax)
-
-        plt.tight_layout()
-        out_path = os.path.join(self.output_dir, filename)
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
-        print(f"[EvalLogger] {filename} -> {out_path}")
 
     def _write_scatter_plot(
         self,
