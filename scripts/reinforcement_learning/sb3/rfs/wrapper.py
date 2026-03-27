@@ -46,6 +46,7 @@ import torch.nn as nn
 from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 
 from uwlab.eval.bc_obs_formatter import BCObsFormatter
+from uwlab.utils.checkpoint import extract_ckpt_metadata, format_ckpt_metadata
 
 
 class LPFilter(nn.Module):
@@ -101,7 +102,12 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         )
 
     print(f"[RFSWrapper] Loading CFM checkpoint from {ckpt_path}")
+    resolved_ckpt_path = os.path.realpath(ckpt_path)
+    if resolved_ckpt_path != ckpt_path:
+        print(f"[RFSWrapper] Resolved checkpoint path: {resolved_ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False, pickle_module=dill)
+    ckpt_meta = extract_ckpt_metadata(ckpt)
+    print(f"[RFSWrapper] Checkpoint metadata: {format_ckpt_metadata(ckpt_meta)}")
 
     if "state_dicts" in ckpt and "ema_model" in ckpt["state_dicts"]:
         # Format A: state_dicts wrapper with OmegaConf cfg (older training code).
@@ -195,6 +201,9 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         "n_obs_steps": n_obs_steps,
         "use_action_history": use_action_history,
         "agent_pos_flat_dim": agent_pos_flat_dim,
+        "ckpt_path": ckpt_path,
+        "resolved_ckpt_path": resolved_ckpt_path,
+        "ckpt_meta": ckpt_meta,
     }
 
     print(f"[RFSWrapper] CFM policy loaded: horizon={policy.horizon}, "
@@ -296,6 +305,9 @@ class RFSWrapper:
         self._ppo_n_obs_steps: int = metadata["n_obs_steps"]
         self._agent_pos_flat_dim: int = metadata["agent_pos_flat_dim"]
         self._use_action_history: bool = metadata["use_action_history"]
+        self.diffusion_ckpt_path: str | None = metadata.get("ckpt_path")
+        self.diffusion_ckpt_resolved_path: str | None = metadata.get("resolved_ckpt_path")
+        self.diffusion_ckpt_meta: dict = metadata.get("ckpt_meta", {})
 
         self.formatter = BCObsFormatter(
             obs_keys=metadata["obs_keys"],
