@@ -35,7 +35,7 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 # pose_range: x±10cm, y±10cm
 # target_pos: same as pink cup (0.60, 0.10, 0.40)
 
-BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object_com.usd"
+BOTTLE_USD = "/workspace/uwlab/assets/bourbon/rigid_object.usd"
 BOTTLE_OBJECT_NUM_POINTS = 128
 
 BOTTLE_SPAWN_POS = (0.55, -0.10, 0.11)
