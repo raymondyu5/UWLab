@@ -24,7 +24,8 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from .... import mdp
-from ....mdp import GraspReward, reset_object_pose, reset_table_block
+from ....mdp import reset_object_pose, reset_table_block
+from .rewards.grasp_rewards import GraspReward
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
@@ -115,8 +116,7 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             "reset_height": BOTTLE_SPAWN_POS[2],
         }
 
-        self.horizon = BOTTLE_HORIZON
-        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
+        self.setup_horizon(horizon=BOTTLE_HORIZON)
 
         grasp_rew = GraspReward(
             asset_name="robot",

@@ -31,7 +31,7 @@ parser.add_argument("--eval_cfg", type=str, required=True,
                     help="Path to eval config YAML (configs/eval/*.yaml)")
 parser.add_argument("--num_envs", type=int, default=None,
                     help="Override num_envs from eval config")
-parser.add_argument("--sim_type", type=str, choices=["eval", "distill"], default="eval",
+parser.add_argument("--sim_type", type=str, choices=["eval", "distill", "rl"], default="eval",
                     help="eval: use eval mode. distill: use distill mode.")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--output_dir", type=str, default=None,
@@ -66,6 +66,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
+import matplotlib.pyplot as plt
 import isaaclab.utils.math as math_utils
 
 from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
@@ -77,8 +78,11 @@ from uwlab.eval.bc_obs_formatter import BCObsFormatter
 from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
 
+from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.tasks.rewards.pour_rewards import compute_tip_pos
+
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import (
     EVAL_MODE,
+    RL_MODE,
     DISTILL_MODE,
     parse_franka_leap_env_cfg,
 )
@@ -250,15 +254,162 @@ def _set_object_pose(env, x_offset: float, y_offset: float, yaw_offset: float,
     obj.write_root_velocity_to_sim(torch.zeros(num_envs, 6, device=device), env_ids=env_ids)
 
 
-def _check_success(env) -> np.ndarray:
-    return env.unwrapped.cfg.is_success(env.unwrapped).cpu().numpy()
+
+def _plot_debug_poses(
+    ee_traj: np.ndarray,
+    bottle_traj: np.ndarray,
+    tip_traj: np.ndarray,
+    cup_traj: np.ndarray,
+    output_dir: str,
+    episode_idx: int,
+):
+    """Save per-env debug plots for XY trajectories and Z-over-time."""
+    num_envs = bottle_traj.shape[1]
+    n_cols = min(4, num_envs)
+    n_rows = int(np.ceil(num_envs / n_cols))
+
+    bottle_color = "#8B4513"  # saddle brown
+    tip_color = "#000000"   # black
+    cup_color = "#FFC0CB"     # pink
+    ee_color = "#2E8B57"      # sea green
+
+    # XY trajectories
+    fig_xy, axes_xy = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4.2 * n_rows), squeeze=False)
+    for env_id in range(num_envs):
+        r, c = divmod(env_id, n_cols)
+        ax = axes_xy[r][c]
+
+        b_xy = bottle_traj[:, env_id, :2]
+        t_xy = tip_traj[:, env_id, :2]
+        c_xy = cup_traj[:, env_id, :2]
+        ee_xy = ee_traj[:, env_id, :2]
+
+        ax.plot(ee_xy[:, 0], ee_xy[:, 1], color=ee_color, linewidth=1.6, alpha=0.9)
+        ax.scatter(ee_xy[0, 0], ee_xy[0, 1], color=ee_color, s=30, marker="o")
+        ax.scatter(ee_xy[-1, 0], ee_xy[-1, 1], color=ee_color, s=40, marker="x")
+
+        ax.plot(b_xy[:, 0], b_xy[:, 1], color=bottle_color, linewidth=1.6, alpha=0.9)
+        ax.scatter(b_xy[0, 0], b_xy[0, 1], color=bottle_color, s=30, marker="o")
+        ax.scatter(b_xy[-1, 0], b_xy[-1, 1], color=bottle_color, s=40, marker="x")
+
+        ax.plot(t_xy[:, 0], t_xy[:, 1], color=tip_color, linewidth=1.6, alpha=0.9)
+        ax.scatter(t_xy[0, 0], t_xy[0, 1], color=tip_color, s=30, marker="o")
+        ax.scatter(t_xy[-1, 0], t_xy[-1, 1], color=tip_color, s=40, marker="x")
+
+        ax.scatter(c_xy[:, 0], c_xy[:, 1], color=cup_color, s=12, alpha=0.45)
+        ax.scatter(c_xy[0, 0], c_xy[0, 1], color=cup_color, s=30, marker="o")
+        ax.scatter(c_xy[-1, 0], c_xy[-1, 1], color=cup_color, s=40, marker="x")
+
+        ax.set_title(f"env {env_id}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.grid(alpha=0.25)
+        ax.axis("equal")
+
+    for env_id in range(num_envs, n_rows * n_cols):
+        r, c = divmod(env_id, n_cols)
+        axes_xy[r][c].axis("off")
+
+    fig_xy.tight_layout()
+    xy_path = os.path.join(output_dir, f"debug_pose_xy_ep{episode_idx + 1:03d}.png")
+    fig_xy.savefig(xy_path, dpi=180)
+    plt.close(fig_xy)
+
+    # Z over time
+    fig_z, axes_z = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 3.6 * n_rows), squeeze=False)
+    for env_id in range(num_envs):
+        r, c = divmod(env_id, n_cols)
+        ax = axes_z[r][c]
+
+        b_z = bottle_traj[:, env_id, 2]
+        c_z = cup_traj[:, env_id, 2]
+        step_idx = np.arange(b_z.shape[0])
+
+        ax.plot(step_idx, b_z, color=bottle_color, linewidth=1.8, label="bottle z")
+        ax.plot(step_idx, c_z, color=cup_color, linewidth=1.8, label="cup z")
+
+        ax.set_title(f"env {env_id}")
+        ax.set_xlabel("step")
+        ax.set_ylabel("z")
+        ax.grid(alpha=0.25)
+        ax.legend(loc="best", fontsize=8)
+
+    for env_id in range(num_envs, n_rows * n_cols):
+        r, c = divmod(env_id, n_cols)
+        axes_z[r][c].axis("off")
+
+    fig_z.tight_layout()
+    z_path = os.path.join(output_dir, f"debug_pose_z_ep{episode_idx + 1:03d}.png")
+    fig_z.savefig(z_path, dpi=180)
+    plt.close(fig_z)
+
+    # XY distance between tip and cup over time
+    fig_dist, axes_dist = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 3.6 * n_rows), squeeze=False)
+    for env_id in range(num_envs):
+        r, c = divmod(env_id, n_cols)
+        ax = axes_dist[r][c]
+
+        tip_xy = tip_traj[:, env_id, :2]
+        cup_xy = cup_traj[:, env_id, :2]
+        xy_dist = np.linalg.norm(tip_xy - cup_xy, axis=1)
+        step_idx = np.arange(xy_dist.shape[0])
+
+        ax.plot(step_idx, xy_dist, color="#7D3C98", linewidth=1.8, label="||tip_xy - cup_xy||")
+        ax.set_title(f"env {env_id}")
+        ax.set_xlabel("step")
+        ax.set_ylabel("xy dist")
+        ax.grid(alpha=0.25)
+        ax.legend(loc="best", fontsize=8)
+
+    for env_id in range(num_envs, n_rows * n_cols):
+        r, c = divmod(env_id, n_cols)
+        axes_dist[r][c].axis("off")
+
+    fig_dist.tight_layout()
+    dist_path = os.path.join(output_dir, f"debug_pose_xy_dist_ep{episode_idx + 1:03d}.png")
+    fig_dist.savefig(dist_path, dpi=180)
+    plt.close(fig_dist)
 
 
-def _check_metric(env, name) -> np.ndarray:
-    cfg = env.unwrapped.cfg
-    if hasattr(cfg, name):
-        return getattr(cfg, name)(env.unwrapped).cpu().numpy()
-    return np.zeros(env.unwrapped.num_envs, dtype=bool)
+def _plot_debug_rewards(
+    reward_traj: np.ndarray,
+    output_dir: str,
+    episode_idx: int,
+):
+    """Save per-env reward-over-time debug plots."""
+    num_envs = reward_traj.shape[1]
+    n_cols = min(4, num_envs)
+    n_rows = int(np.ceil(num_envs / n_cols))
+
+    fig_rew, axes_rew = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 3.6 * n_rows), squeeze=False)
+    for env_id in range(num_envs):
+        r, c = divmod(env_id, n_cols)
+        ax = axes_rew[r][c]
+
+        rew = reward_traj[:, env_id]
+        step_idx = np.arange(rew.shape[0])
+        ax.plot(step_idx, rew, color="#1F77B4", linewidth=1.8)
+        ax.set_title(f"env {env_id}")
+        ax.set_xlabel("step")
+        ax.set_ylabel("reward")
+        ax.grid(alpha=0.25)
+
+    for env_id in range(num_envs, n_rows * n_cols):
+        r, c = divmod(env_id, n_cols)
+        axes_rew[r][c].axis("off")
+
+    fig_rew.tight_layout()
+    rew_path = os.path.join(output_dir, f"debug_reward_ep{episode_idx + 1:03d}.png")
+    fig_rew.savefig(rew_path, dpi=180)
+    plt.close(fig_rew)
+
+
+def _rgb_frame_from_camera(camera, env_id: int = 0) -> np.ndarray:
+    """Read one RGB frame from an Isaac camera sensor for a given env."""
+    rgb = camera.data.output["rgb"][env_id]
+    if rgb.shape[-1] == 4:
+        rgb = rgb[..., :3]
+    return rgb.detach().cpu().numpy().astype(np.uint8)
 
 
 def main():
@@ -294,9 +445,11 @@ def main():
 
     # Create env
     task_id = eval_cfg["task_id"]
+
+    run_mode = EVAL_MODE if args_cli.sim_type == "eval" else RL_MODE if args_cli.sim_type == "rl" else DISTILL_MODE
     env_cfg = parse_franka_leap_env_cfg(
         task_id,
-        run_mode=EVAL_MODE if args_cli.sim_type == "eval" else DISTILL_MODE,
+        run_mode=run_mode,
         device=str(device),
         num_envs=num_envs,
     )
@@ -307,9 +460,10 @@ def main():
         env_cfg.scene.train_camera = None
         if hasattr(env_cfg.events, "reset_camera"):
             env_cfg.events.reset_camera = None
-    env_cfg.scene.fixed_camera = None
-    if hasattr(env_cfg.events, "reset_fixed_camera"):
-        env_cfg.events.reset_fixed_camera = None
+    if not record_video:
+        env_cfg.scene.fixed_camera = None
+        if hasattr(env_cfg.events, "reset_fixed_camera"):
+            env_cfg.events.reset_fixed_camera = None
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
     # Load spawn config
@@ -352,9 +506,7 @@ def main():
         episodes = [(None, None)] * spawn_cfg.num_trials
 
     isaac_env = env.unwrapped
-    internal_warmup = int(getattr(isaac_env.cfg, "num_warmup_steps", 0))
-    num_warmup_steps = int(eval_cfg.get("num_warmup_steps", 5))
-    episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length)) - internal_warmup - num_warmup_steps
+    episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length))
 
     with torch.inference_mode():
         for ep_idx, (spawn_name_ep, spawn_pose) in enumerate(episodes):
@@ -371,8 +523,7 @@ def main():
             warmup_act = isaac_env.cfg.warmup_action(isaac_env)
             assert warmup_act.shape == (num_envs, isaac_env.action_manager.total_action_dim), \
                 f"warmup_action shape {warmup_act.shape} doesn't match action dim {isaac_env.action_manager.total_action_dim}"
-            for _ in range(num_warmup_steps):
-                obs_raw, _, _, _, _ = env.step(warmup_act)
+            
             policy_obs = obs_raw["policy"]
 
             spawn_pose_dict = (
@@ -387,6 +538,11 @@ def main():
             last_grasped = torch.zeros(num_envs, dtype=torch.bool, device=device)
             last_lifted = torch.zeros(num_envs, dtype=torch.bool, device=device)
             last_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
+            ee_pos_traj = []
+            bottle_pos_traj = []
+            tip_pos_traj = []
+            cup_pos_traj = []
+            reward_traj = []
 
             for step in range(episode_steps):
                 if step % action_horizon == 0 and not per_env_done.all():
@@ -427,12 +583,48 @@ def main():
                 # reading the auto-reset state when the episode truncates.
                 # Update last-seen values only for envs still active.
                 active = ~per_env_done
-                last_success[active] = torch.from_numpy(_check_success(env)).to(device)[active]
-                last_grasped[active] = torch.from_numpy(_check_metric(env, "is_grasped")).to(device)[active]
-                last_lifted[active] = torch.from_numpy(_check_metric(env, "is_lifted")).to(device)[active]
-                last_near_miss[active] = torch.from_numpy(_check_metric(env, "is_near_miss")).to(device)[active]
+
+                metrics = isaac_env.metrics.get_metrics()
+                last_success[active] = torch.from_numpy(metrics["is_success"]).to(device)[active]
+                last_grasped[active] = torch.from_numpy(metrics["is_grasped"]).to(device)[active]
+                last_lifted[active] = torch.from_numpy(metrics["is_healthy_z"]).to(device)[active]
+                last_near_miss[active] = torch.from_numpy(metrics["is_near_miss"]).to(device)[active]
+
+                # Record pre-step state so post-reset snapshots are never logged.
+                ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
+                    isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
+                obj = _get_object_asset(env)
+                obj_pose = obj.data.root_pos_w - isaac_env.scene.env_origins  # (B, 3)
+                bottle_pos, tip_pos, cup_pos = compute_tip_pos(isaac_env)
+                ee_pos_traj.append(ee_pose[:, :3].detach().cpu().numpy())
+                bottle_pos_traj.append(bottle_pos.detach().cpu().numpy())
+                tip_pos_traj.append(tip_pos.detach().cpu().numpy())
+                cup_pos_traj.append(cup_pos.detach().cpu().numpy())
+
+                frame = env.render() if record_video else None
+                fixed_frame = None
+                if record_video:
+                    # if hasattr(isaac_env, "sim") and hasattr(isaac_env.sim, "render"):
+                    #     isaac_env.sim.render()
+                    try:
+                        fixed_camera = isaac_env.scene["fixed_camera"]
+                        fixed_frame = _rgb_frame_from_camera(fixed_camera, env_id=0)
+                    except KeyError as exc:
+                        print('no fixed camera, only using global viewer')
+                
+                if step % action_horizon != 0:
+                    frame = None
+                    fixed_frame = None
+                logger.record_step(
+                    ee_pose.cpu().numpy()[0],
+                    obj_pose.cpu().numpy()[0],
+                    action_step.cpu().numpy()[0],
+                    frame=frame,
+                    fixed_frame=fixed_frame,
+                )
 
                 obs_raw, reward, terminated, truncated, info = env.step(action_step)
+                reward_traj.append(reward.detach().cpu().numpy())
                 policy_obs = obs_raw["policy"]
 
                 reset_mask = terminated | truncated
@@ -441,19 +633,6 @@ def main():
                     formatter.reset_envs(reset_mask, policy_obs)
 
                 per_env_done |= reset_mask
-
-                ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
-                    isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
-                obj = _get_object_asset(env)
-                obj_pose = obj.data.root_pos_w - isaac_env.scene.env_origins  # (B, 3)
-
-                frame = env.render() if record_video else None
-                logger.record_step(
-                    ee_pose.cpu().numpy()[0],
-                    obj_pose.cpu().numpy()[0],
-                    action_step.cpu().numpy()[0],
-                    frame=frame,
-                )
 
                 if per_env_done.all():
                     break
@@ -464,6 +643,21 @@ def main():
             n_near_miss = int(last_near_miss.sum())
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
                                n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
+            if len(bottle_pos_traj) > 0 and args_cli.sim_type == "eval":
+                _plot_debug_poses(
+                    ee_traj=np.stack(ee_pos_traj, axis=0),
+                    bottle_traj=np.stack(bottle_pos_traj, axis=0),
+                    tip_traj=np.stack(tip_pos_traj, axis=0),
+                    cup_traj=np.stack(cup_pos_traj, axis=0),
+                    output_dir=output_dir,
+                    episode_idx=ep_idx,
+                )
+            if len(reward_traj) > 0 and args_cli.sim_type == "eval":
+                _plot_debug_rewards(
+                    reward_traj=np.stack(reward_traj, axis=0),
+                    output_dir=output_dir,
+                    episode_idx=ep_idx,
+                )
             status = "SUCCESS" if n_success > 0 else ("near_miss" if n_near_miss > 0 else ("lifted" if n_lifted > 0 else ("grasped" if n_grasped > 0 else "fail")))
             print(f"[play_bc] Episode {ep_idx+1}/{len(episodes)}: {status} "
                   f"({n_success}/{num_envs} success, {n_near_miss}/{num_envs} near_miss, {n_lifted}/{num_envs} lifted, {n_grasped}/{num_envs} grasped)"

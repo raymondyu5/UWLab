@@ -11,7 +11,7 @@ from .observations import (
     CachedSamplePC,
     RenderedSegPC,
 )
-from .rewards import GraspReward, PourReward
+
 from .events import (
     apply_sysid_params_on_reset,
     reset_robot_joints,
@@ -20,4 +20,4 @@ from .events import (
     reset_camera_pose,
     set_fixed_camera_view,
 )
-from .terminations import bottle_dropped, bottle_too_far, cup_toppled
+from .terminations import capture_bottle_reset_height, bottle_dropped, bottle_too_far, cup_toppled

@@ -127,6 +127,8 @@ def main():
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=args_cli.asymmetric_ac,
     )
+    # Enable expensive metric caching only for evaluation success counting.
+    rfs_env.enable_metrics_cache = True
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)
 
@@ -184,16 +186,20 @@ def main():
             recorded = [False] * args_cli.num_envs
 
             for _ in range(horizon):
-                success_before = isaac_env.cfg.is_success(isaac_env)
-
                 action, _ = agent.predict(obs_np, deterministic=True)
                 action_t = torch.tensor(action, dtype=torch.float32, device=rfs_env.device)
                 obs_dict, _, terminated, truncated, _ = rfs_env.step(action_t)
                 obs_np = _to_numpy(obs_dict)
+                metrics_seen = getattr(rfs_env, "_metrics_seen", None)
+                if metrics_seen is None:
+                    raise RuntimeError(
+                        "RFSWrapper did not populate `_metrics_seen`. "
+                        "Ensure metric caching is enabled in RFSWrapper.step()."
+                    )
 
                 for i in range(args_cli.num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
-                        per_env_success[i] = bool(success_before[i].item())
+                        per_env_success[i] = bool(metrics_seen["is_success"][i])
                         recorded[i] = True
 
                 frame = rfs_env.render() if args_cli.record_video else None

@@ -283,10 +283,12 @@ def main():
 
     spawn_cfg = load_spawn_cfg(eval_spawn, "configs/eval/spawns")
     horizon = getattr(env_cfg, "horizon", 200)
+    
+    residual_step = rfs_cfg["residual_step"]
+
     eval_cb = RFSEvalCallback(
         rfs_env=rfs_env,
         spawn_cfg=spawn_cfg,
-        episode_steps=horizon,
         log_dir=log_dir,
         eval_interval=eval_interval,
         record_video=not args_cli.no_eval_video and eval_cfg["record_video"],

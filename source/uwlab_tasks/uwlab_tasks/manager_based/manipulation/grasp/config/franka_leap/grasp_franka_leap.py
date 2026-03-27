@@ -25,6 +25,7 @@ from ...mdp import (
     set_fixed_camera_view,
     RenderedSegPC,
 )
+from ...mdp.metrics import EnvMetrics
 from isaaclab.sensors import CameraCfg
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -75,7 +76,7 @@ class FrankaLeapGraspSceneCfg(grasp_env.GraspSceneCfg):
 class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     scene: FrankaLeapGraspSceneCfg = FrankaLeapGraspSceneCfg(
         num_envs=1, env_spacing=2.5)
-    num_warmup_steps: int = 10
+    num_warmup_steps: int = 15
     # Runtime mode: "rl_mode" | "distill_mode" | "eval_mode". "rl_mode" disables scene cameras and their reset events.
     run_mode: str = "eval_mode"
     pcd_crop_region: list[float] = PCD_CROP_REGION_CL8384200N1
@@ -311,6 +312,15 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
         run_mode = cfg.run_mode
         self._apply_run_mode(cfg, run_mode) 
         super().__init__(cfg, **kwargs)
+
+        # Task-defined runtime metrics used by eval scripts.
+        metrics_spec = getattr(cfg, "metrics_spec", None)
+        if metrics_spec:
+            self.metrics = EnvMetrics(metrics_spec, env=self)
+        else:
+            # Always attach for a stable interface; eval scripts can decide
+            # whether metrics_spec is required for the task.
+            self.metrics = EnvMetrics({}, env=self)
 
     def _apply_run_mode(self, cfg: FrankaLeapGraspEnvCfg, run_mode: str) -> None:
         """Apply run_mode to env config. rl_mode disables scene cameras. distill_mode uses depth-rendered seg_pc."""

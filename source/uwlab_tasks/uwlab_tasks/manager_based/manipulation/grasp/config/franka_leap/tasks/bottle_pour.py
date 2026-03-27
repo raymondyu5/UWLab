@@ -20,9 +20,20 @@ from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
+from termcolor import cprint
 
-from ....mdp import PourReward, CachedSamplePC, reset_object_pose, reset_table_block
-from ....mdp import bottle_dropped, bottle_too_far, cup_toppled
+from .rewards.pour_rewards import BOTTLE_CAP_OFFSET, is_grasped, is_healthy_z, is_near_miss, is_success
+from .rewards.pour_rewards import PourReward, SimplePourReward
+
+from ....mdp import (
+    CachedSamplePC,
+    reset_object_pose,
+    reset_table_block,
+    capture_bottle_reset_height,
+    bottle_dropped,
+    bottle_too_far,
+    cup_toppled,
+)
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
@@ -42,13 +53,42 @@ BOTTLE_POUR_SPAWN_POS = (0.53, -0.105, 0.11)
 PINK_CUP_POUR_POS = (0.53, 0.23, 0.07)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
-# Bottle cap offset in local -X frame: 13.22cm (cap is at X=-0.132 in mesh frame)
-BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
+POUR_HORIZON = 176
 
-# Success: cap tip XY within 4cm of cup center, z in [cup_z+0.20, cup_z+0.30]
-# i.e. 5cm to 15cm above the cup rim (~0.15m tall).
 
-POUR_HORIZON = 160
+def obs_cup_pose(env) -> torch.Tensor:
+    """Cup position (3D) in env-relative frame."""
+    cup_pose = env.scene["pink_cup"]._data.root_state_w[:, :7].clone()
+    cup_pose[:, :3] -= env.scene.env_origins
+    return cup_pose[:, :3]
+
+
+def obs_manipulated_object_pose(env) -> torch.Tensor:
+    """Bottle pose (7D) in env-relative frame."""
+    bottle_pose = env.scene["grasp_object"]._data.root_state_w[:, :7].clone()
+    bottle_pose[:, :3] -= env.scene.env_origins
+    return bottle_pose
+
+
+def obs_target_object_pose(env) -> torch.Tensor:
+    """Target bottle pose with cap centered over cup at a pouring-friendly height."""
+    cup_pose = env.scene["pink_cup"]._data.root_state_w[:, :7].clone()
+    cup_pose[:, :3] -= env.scene.env_origins
+    cup_top_z = cup_pose[:, 2] + 0.15
+    cup_center_xy = cup_pose[:, :2]
+
+    target_quat = env.scene["grasp_object"].data.default_root_state[:, 3:7].clone()
+    cap_offset = torch.tensor(list(BOTTLE_CAP_OFFSET), device=env.device, dtype=torch.float32).unsqueeze(0).expand(env.num_envs, -1)
+    cap_offset_world = math_utils.quat_apply(target_quat, cap_offset)
+
+    desired_cap_pos = torch.zeros(env.num_envs, 3, device=env.device, dtype=torch.float32)
+    desired_cap_pos[:, :2] = cup_center_xy
+    desired_cap_pos[:, 2] = cup_top_z + 0.10
+
+    target_pose = torch.zeros(env.num_envs, 7, device=env.device, dtype=torch.float32)
+    target_pose[:, :3] = desired_cap_pos - cap_offset_world
+    target_pose[:, 3:7] = target_quat
+    return target_pose
 
 
 @configclass
@@ -78,60 +118,8 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     table_z_range: tuple = (0.0, 0.0)  # set to (0.0, 0.05) to enable table height randomization
     distill_include_entity_names: tuple[str, ...] = ("robot", "grasp_object", "pink_cup")
 
-    def is_success(self, env) -> torch.Tensor:
-        # Cap tip XY within 5cm of cup center, z within POUR_Z_TOLERANCE of target
-        bottle = env.scene["grasp_object"]
-        cup = env.scene["pink_cup"]
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins       # (N, 3)
-        bottle_quat = bottle.data.root_quat_w                              # (N, 4) w,x,y,z
-        cup_pos = cup.data.root_pos_w - env.scene.env_origins             # (N, 3)
-
-        cap_offset = torch.tensor(list(BOTTLE_CAP_OFFSET), device=env.device)  # (3,)
-        # Rotate cap offset by bottle quaternion: v' = v + 2w*(q×v) + 2*(q×(q×v))
-        w = bottle_quat[:, 0:1]
-        q = bottle_quat[:, 1:]   # xyz
-        t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
-        tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
-
-        xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
-        tip_z = tip_pos[:, 2]
-        z_ok = (tip_z >= cup_pos[:, 2] + 0.20) & (tip_z <= cup_pos[:, 2] + 0.30)
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
-        return (bottle_pos[:, 2] > 0.10) & (xy_dist < 0.04) & z_ok
-
-    def is_grasped(self, env) -> torch.Tensor:
-        bottle = env.scene["grasp_object"]
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
-        return bottle_pos[:, 2] > 0.05
-
-    def is_lifted(self, env) -> torch.Tensor:
-        bottle = env.scene["grasp_object"]
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
-        return bottle_pos[:, 2] > 0.10
-
-    def _tip_pos(self, env):
-        bottle = env.scene["grasp_object"]
-        cup = env.scene["pink_cup"]
-        bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
-        bottle_quat = bottle.data.root_quat_w
-        cup_pos = cup.data.root_pos_w - env.scene.env_origins
-        cap_offset = torch.tensor(list(BOTTLE_CAP_OFFSET), device=env.device)
-        w = bottle_quat[:, 0:1]
-        q = bottle_quat[:, 1:]
-        t = 2.0 * torch.linalg.cross(q, cap_offset.unsqueeze(0).expand_as(q))
-        tip_pos = bottle_pos + cap_offset.unsqueeze(0) + w * t + torch.linalg.cross(q, t)
-        return bottle_pos, tip_pos, cup_pos
-
-    def is_near_miss(self, env) -> torch.Tensor:
-        bottle_pos, tip_pos, cup_pos = self._tip_pos(env)
-        xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
-        z_ok = (tip_pos[:, 2] >= cup_pos[:, 2] + 0.20) & (tip_pos[:, 2] <= cup_pos[:, 2] + 0.30)
-        return (bottle_pos[:, 2] > 0.10) & (xy_dist < 0.08) & z_ok
-
     def __post_init__(self):
         super().__post_init__()
-
-
 
         self.object_spawn_defaults = {
             "default_pos": list(BOTTLE_POUR_SPAWN_POS),
@@ -139,28 +127,38 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             "reset_height": BOTTLE_POUR_SPAWN_POS[2],
         }
 
-        self.horizon = POUR_HORIZON
-        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
+        
+        self.setup_horizon(horizon=POUR_HORIZON)
+        # pour_rew = PourReward(
+        #     asset_name="robot",
+        #     object_name="grasp_object",
+        #     cup_name="pink_cup",
+        #     fingers_name_list=FINGERS_NAME_LIST,
+        #     init_height=BOTTLE_SPAWN_POS[2],
+        #     bottle_cap_offset=BOTTLE_CAP_OFFSET,
+        # )
+        # pour_rew.setup_wrist_sensor(self.scene)
+        # pour_rew.setup_finger_entities(self.scene)
+        # pour_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
 
-        pour_rew = PourReward(
+        pour_rew = SimplePourReward(
             asset_name="robot",
-            object_name="grasp_object",
             cup_name="pink_cup",
-            fingers_name_list=FINGERS_NAME_LIST,
-            init_height=BOTTLE_SPAWN_POS[2],
-            bottle_cap_offset=BOTTLE_CAP_OFFSET,
         )
-        pour_rew.setup_wrist_sensor(self.scene)
-        pour_rew.setup_finger_entities(self.scene)
-        pour_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
 
         self.rewards.pour_rewards = RewTerm(func=pour_rew.pour_rewards, weight=4.0)
 
-        self.observations.policy.cup_pose = ObsTerm(func=pour_rew.obs_cup_pose)
-        self.observations.policy.target_object_pose = ObsTerm(func=pour_rew.obs_target_object_pose)
-        self.observations.policy.manipulated_object_pose = ObsTerm(func=pour_rew.obs_manipulated_object_pose)
-        self.observations.policy.contact_obs = ObsTerm(func=pour_rew.obs_contact)
-        self.observations.policy.object_in_tip = ObsTerm(func=pour_rew.obs_object_in_tip)
+        # Task-defined boolean-ish metrics used by eval scripts.
+        self.metrics_spec = {
+            "is_success": is_success,
+            "is_grasped": is_grasped,
+            "is_healthy_z": is_healthy_z,
+            "is_near_miss": is_near_miss,
+        }
+
+        self.observations.policy.cup_pose = ObsTerm(func=obs_cup_pose)
+        self.observations.policy.target_object_pose = ObsTerm(func=obs_target_object_pose)
+        self.observations.policy.manipulated_object_pose = ObsTerm(func=obs_manipulated_object_pose)
 
         synth_pc = CachedSamplePC(
             asset_name="robot",
@@ -228,25 +226,35 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
         # Capture reset references AFTER both objects have been reset
         self.events.capture_reset_references = EventTerm(
-            func=pour_rew.capture_reset_references,
+            func=capture_bottle_reset_height,
             mode="reset",
-            params={},
+            params={"object_name": "grasp_object"},
         )
 
         # Terminations
-        self.terminations.bottle_dropped = DoneTerm(
-            func=bottle_dropped,
-            params={"pour_rew": pour_rew},
-            time_out=False,
-        )
+        # self.terminations.bottle_dropped = DoneTerm(
+        #     func=bottle_dropped,
+        #     params={
+        #         "object_name": "grasp_object",
+        #         "z_margin": 0.05,
+        #     },
+        #     time_out=False,
+        # )
         self.terminations.bottle_too_far = DoneTerm(
             func=bottle_too_far,
-            params={"pour_rew": pour_rew},
+            params={
+                "object_name": "grasp_object",
+                "max_xy_dist": 1.0,
+            },
             time_out=False,
         )
         self.terminations.cup_toppled = DoneTerm(
             func=cup_toppled,
-            params={"pour_rew": pour_rew},
+            params={
+                "cup_name": "pink_cup",
+                "spawn_quat": PINK_CUP_POUR_ROT,
+                "angle_thresh_rad": 0.524,
+            },
             time_out=False,
         )
 

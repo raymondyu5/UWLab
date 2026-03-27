@@ -268,6 +268,14 @@ class RFSWrapper:
         # Episode reward tracking for SB3 ep_rew_mean logging.
         self._ep_rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
+        # Cached per-env "seen" metrics over the internal residual/substeps.
+        # Populated in `step()` and read by eval/logging code.
+        self._metrics_seen: dict[str, torch.Tensor] | None = None
+
+        # Expensive: computing metrics for all envs at every internal substep.
+        # Keep disabled by default; eval code enables it temporarily.
+        self.enable_metrics_cache: bool = False
+
         # Last composite action (base + residual) sent to env. Set in step().
         self.last_action: torch.Tensor | None = None
         self.last_noise_flat: torch.Tensor | None = None
@@ -275,7 +283,7 @@ class RFSWrapper:
         self.last_pcd_embedding: torch.Tensor | None = None
 
         self.policy, metadata = _load_cfm_checkpoint(diffusion_path, self.device)
-        self.horizon = self.policy.horizon
+        self.policy_horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
 
         # Keys that CFM conditions on (used as PPO history when _use_ppo_history=True).
@@ -299,9 +307,9 @@ class RFSWrapper:
               f"ppo_history={ppo_history}, residual_step={residual_step}")
         print(f"[RFSWrapper] noise_dims={noise_dims}, residual_dims={residual_dims}")
 
-        total_ppo_dim = self.n_residual + self.n_noise * self.horizon
+        total_ppo_dim = self.n_residual + self.n_noise * self.policy_horizon
         print(f"[RFSWrapper] PPO action dim: {self.n_residual} residual + "
-              f"{self.n_noise}*{self.horizon} noise = {total_ppo_dim}")
+              f"{self.n_noise}*{self.policy_horizon} noise = {total_ppo_dim}")
 
         # Override env action/observation spaces for SB3 compatibility.
         # Sb3VecEnvWrapper reads single_action_space at __init__ time.
@@ -515,17 +523,20 @@ class RFSWrapper:
         return {"policy": result}
 
     def step(self, ppo_actions: torch.Tensor):
-        ppo_out = ppo_actions.clamp(-1.0, 1.0)
+        #ppo_out = ppo_actions.clamp(-1.0, 1.0) 
+        ppo_out = ppo_actions.clamp(-3.0, 3.0)
 
         residual = ppo_out[:, :self.n_residual]
         noise_flat = ppo_out[:, self.n_residual:]
 
+        breakpoint()
+
         self.last_noise_flat = noise_flat.detach()
         self.last_residual = residual.detach() if self.n_residual > 0 else None
 
-        noise = torch.zeros(self.num_envs, self.horizon, self.cfm_action_dim, device=self.device)
+        noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
         if self.noise_slice is not None and self.n_noise > 0:
-            noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.horizon, self.n_noise)
+            noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.policy_horizon, self.n_noise)
 
         diffusion_obs = self.formatter.format(self.last_obs["policy"])
         with torch.no_grad():
@@ -534,6 +545,13 @@ class RFSWrapper:
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         any_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        metric_keys = ("is_success", "is_grasped", "is_healthy_z", "is_near_miss")
+        metrics_seen: dict[str, torch.Tensor] | None = None
+        if self.enable_metrics_cache:
+            metrics_seen = {
+                k: torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+                for k in metric_keys
+            }
         # Apply γ^k discounting within the chunk so the accumulated reward is the
         # correct multi-step discounted return, not an undiscounted sum.
         discount = 1.0
@@ -557,6 +575,17 @@ class RFSWrapper:
             discount *= self.gamma
             self.last_obs = obs
             any_reset |= terminated | truncated
+
+            # Cache metrics at residual/substep granularity.
+            # Metrics are used for eval and are typically boolean-ish ("is_*").
+            if metrics_seen is not None:
+                metrics_np = self.unwrapped.metrics.get_metrics()
+                for k in metric_keys:
+                    # OR across residual steps so "seen during chunk" is never missed.
+                    metrics_seen[k] |= torch.from_numpy(metrics_np[k]).to(self.device).bool()
+
+        # Publish cached metrics for downstream logging/eval.
+        self._metrics_seen = metrics_seen
 
         # Reset formatter history for envs that auto-reset during this PPO step.
         # Use zeros for their past_actions update to match episode-start behavior.
@@ -602,6 +631,10 @@ class RFSWrapper:
                     info[i]["episode"] = {"r": self._ep_rewards[i].item(), "l": 0}
                     self._ep_rewards[i] = 0.0
 
+        # Ensure termination flags align with any mid-chunk resets.
+        terminated = any_reset
+        truncated = torch.zeros_like(any_reset)
+
         return self._strip_ppo_obs(self.last_obs), rewards, terminated, truncated, info
 
     def _do_warmup(self):
@@ -616,6 +649,7 @@ class RFSWrapper:
         obs, info = self.env.reset(**kwargs)
         self.last_obs = obs
         self._ep_rewards.zero_()
+        self._metrics_seen = None
         self.formatter.reset()
         self._ppo_history_buf = None      # clear so _update_ppo_history re-initializes below
         self._ppo_past_action_buf = None  # clear so _update_ppo_past_actions re-initializes below

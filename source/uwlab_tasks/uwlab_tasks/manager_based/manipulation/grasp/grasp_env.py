@@ -184,11 +184,12 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
+    
+    num_warmup_steps: int = 15 # 15 warmup steps by default
 
     def __post_init__(self):
         self.decimation = DEFAULT_GRASP_DECIMATION
-        self.physics_hz = DEFAULT_GRASP_PHYSICS_HZ  
-        self.horizon = DEFAULT_GRASP_HORIZON
+        self.physics_hz = DEFAULT_GRASP_PHYSICS_HZ 
         
         self.sim = SimulationCfg(
             physics_material=RigidBodyMaterialCfg(
@@ -205,5 +206,11 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 1.0 / self.physics_hz
         self.sim.render_interval = self.decimation
         self.control_hz = 1 / (self.sim.dt * self.decimation) # control update frequency (number of control updates per second)
-        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
+        self.setup_horizon(horizon=DEFAULT_GRASP_HORIZON)
         self.scene.replicate_physics = False
+
+    def setup_horizon(self, horizon: int) -> float:
+        self.horizon = horizon
+        total_horizon = self.horizon + self.num_warmup_steps
+        self.episode_length_s = total_horizon * self.decimation * self.sim.dt
+        return self.episode_length_s

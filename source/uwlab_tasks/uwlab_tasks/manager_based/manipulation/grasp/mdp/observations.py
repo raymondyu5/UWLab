@@ -73,7 +73,6 @@ def hand_joint_pos_w(env, asset_cfg: SceneEntityCfg, num_arm_joints: int = 7):
     return robot.data.joint_pos[:, num_arm_joints:]
 
 
-
 class CachedSamplePC:
     """Point cloud from USD geometry, sampled once and cached for fast subsequent transforms.
 

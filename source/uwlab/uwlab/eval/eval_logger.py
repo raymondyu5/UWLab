@@ -48,6 +48,7 @@ class EvalLogger:
             "object_poses": [],
             "actions": [],
             "frames": [],
+            "fixed_frames": [],
             "success": False,
         }
 
@@ -57,6 +58,7 @@ class EvalLogger:
         object_pose: np.ndarray,
         action: np.ndarray,
         frame: Optional[np.ndarray] = None,
+        fixed_frame: Optional[np.ndarray] = None,
     ):
         assert self._current is not None, "Call begin_episode first"
         self._current["ee_poses"].append(ee_pose.copy() if isinstance(ee_pose, np.ndarray) else np.array(ee_pose))
@@ -64,6 +66,8 @@ class EvalLogger:
         self._current["actions"].append(action.copy() if isinstance(action, np.ndarray) else np.array(action))
         if frame is not None and self.record_video:
             self._current["frames"].append(frame)
+        if fixed_frame is not None and self.record_video:
+            self._current["fixed_frames"].append(fixed_frame)
 
     def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
                     n_grasped: int = None, n_lifted: int = None, n_near_miss: int = None):
@@ -77,6 +81,7 @@ class EvalLogger:
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
+            self._current["fixed_frames"] = []  # free memory
         self._episodes.append(self._current)
         self._current = None
 
@@ -334,10 +339,15 @@ class EvalLogger:
     def _write_episode_video(self, episode_idx: int, ep: dict):
         import imageio
         frames = ep.get("frames", [])
-        if not frames:
-            return
         success_val = ep["success"]
         tag = "success" if (success_val if isinstance(success_val, bool) else success_val >= 0.5) else "fail"
-        out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
-        imageio.mimsave(out_path, frames, fps=self.video_fps)
-        print(f"[EvalLogger] video -> {out_path}")
+        if frames:
+            out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}.mp4")
+            imageio.mimsave(out_path, frames, fps=self.video_fps)
+            print(f"[EvalLogger] video -> {out_path}")
+
+        fixed_frames = ep.get("fixed_frames", [])
+        if fixed_frames:
+            fixed_out_path = os.path.join(self.output_dir, "videos", f"episode_{episode_idx:03d}_{tag}_fixed.mp4")
+            imageio.mimsave(fixed_out_path, fixed_frames, fps=self.video_fps)
+            print(f"[EvalLogger] fixed video -> {fixed_out_path}")
