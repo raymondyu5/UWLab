@@ -3,7 +3,7 @@ RFS (Residual Flow-matching RL) environment wrapper.
 
 Wraps a ManagerBasedRLEnv (IkRel-v0) with a frozen CFMPCDPolicy as base policy.
 PPO acts in a compound space:
-  [residual (n_residual_dims) | noise (n_noise_dims * horizon)]
+  [residual (n_residual_dims * residual_step) | noise (n_noise_dims * horizon)]
 
 The noise is injected as the starting trajectory for CFM denoising (noise-space RL / DSRL style).
 The residual is added on top of the denoised base action for specified action dims.
@@ -92,12 +92,12 @@ def _resolve_hydra_refs(cfg: dict) -> dict:
 def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
     ckpt_path = os.path.join(diffusion_path, "checkpoints", "best.ckpt")
     if not os.path.isfile(ckpt_path):
+        ckpt_path = os.path.join(diffusion_path, "best.ckpt")
+    if not os.path.isfile(ckpt_path):
         ckpt_path = os.path.join(diffusion_path, "checkpoints", "latest.ckpt")
     if not os.path.isfile(ckpt_path):
-        ckpt_path = os.path.join(diffusion_path, "latest.ckpt")
-    if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"Checkpoint not found. Looked for best.ckpt, checkpoints/latest.ckpt, latest.ckpt in {diffusion_path}"
+            f"Checkpoint not found. Looked for best.ckpt, checkpoints/best.ckpt, latest.ckpt in {diffusion_path}"
         )
 
     print(f"[RFSWrapper] Loading CFM checkpoint from {ckpt_path}")
@@ -208,12 +208,13 @@ class RFSWrapper:
     Wraps a ManagerBasedRLEnv for noise-space RL with a frozen CFMPCDPolicy base.
 
     PPO action space layout (flat, per-env):
-        [residual (n_residual_dims) | noise (n_noise_dims * horizon)]
+        [residual (n_residual_dims * residual_step) | noise (n_noise_dims * horizon)]
 
     Args:
         env: Isaac Lab gymnasium env (IkRel-v0 recommended).
         diffusion_path: Directory containing checkpoints/latest.ckpt.
-        residual_step: Number of env substeps per PPO step. Rewards accumulate.
+        residual_step: Env substeps per PPO step; also the number of per-dim residual
+            vectors (must be <= CFM policy horizon). Rewards accumulate across substeps.
         noise_dims: (start, end) slice of cfm_action_dim that receives PPO noise.
         residual_dims: (start, end) slice of cfm_action_dim that receives PPO residual.
         residual_scale: Scale applied to PPO residual output (in [-1,1]) before adding.
@@ -291,6 +292,14 @@ class RFSWrapper:
         self.policy_horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
 
+        if self.residual_step > self.policy_horizon:
+            raise ValueError(
+                f"residual_step ({self.residual_step}) must be <= CFM policy horizon "
+                f"({self.policy_horizon}) so base_actions[:, substep] is valid for each substep."
+            )
+
+        self.n_residual_flat = self.n_residual * self.residual_step
+
         # Keys that CFM conditions on (used as PPO history when _use_ppo_history=True).
         self._ppo_history_obs_keys: list[str] = metadata["obs_keys"]
         self._ppo_n_obs_steps: int = metadata["n_obs_steps"]
@@ -312,8 +321,8 @@ class RFSWrapper:
               f"ppo_history={ppo_history}, residual_step={residual_step}")
         print(f"[RFSWrapper] noise_dims={noise_dims}, residual_dims={residual_dims}")
 
-        total_ppo_dim = self.n_residual + self.n_noise * self.policy_horizon
-        print(f"[RFSWrapper] PPO action dim: {self.n_residual} residual + "
+        total_ppo_dim = self.n_residual_flat + self.n_noise * self.policy_horizon
+        print(f"[RFSWrapper] PPO action dim: {self.n_residual}*{self.residual_step} residual + "
               f"{self.n_noise}*{self.policy_horizon} noise = {total_ppo_dim}")
 
         # Override env action/observation spaces for SB3 compatibility.
@@ -531,11 +540,18 @@ class RFSWrapper:
         #ppo_out = ppo_actions.clamp(-1.0, 1.0) 
         ppo_out = ppo_actions.clamp(-3.0, 3.0)
 
-        residual = ppo_out[:, :self.n_residual]
-        noise_flat = ppo_out[:, self.n_residual:]
+        residual_flat = ppo_out[:, : self.n_residual_flat]
+        noise_flat = ppo_out[:, self.n_residual_flat :]
 
         self.last_noise_flat = noise_flat.detach()
-        self.last_residual = residual.detach() if self.n_residual > 0 else None
+        if self.n_residual > 0:
+            residual = residual_flat.reshape(
+                self.num_envs, self.residual_step, self.n_residual
+            )
+            self.last_residual = residual.detach()
+        else:
+            residual = None
+            self.last_residual = None
 
         noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
         if self.noise_slice is not None and self.n_noise > 0:
@@ -567,8 +583,8 @@ class RFSWrapper:
         for substep in range(self.residual_step):
             action = base_actions[:, substep].clone()
 
-            if self.n_residual > 0 and self.residual_slice is not None:
-                action[:, self.residual_slice] += residual * self.residual_scale
+            if residual is not None and self.residual_slice is not None:
+                action[:, self.residual_slice] += residual[:, substep] * self.residual_scale
 
             if self.clip_actions:
                 action[:, :3].clamp_(-0.03, 0.03)
