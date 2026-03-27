@@ -321,7 +321,7 @@ def _plot_debug_poses(
         r, c = divmod(env_id, n_cols)
         ax = axes_z[r][c]
 
-        b_z = bottle_traj[:, env_id, 2]
+        b_z = tip_traj[:, env_id, 2]
         c_z = cup_traj[:, env_id, 2]
         step_idx = np.arange(b_z.shape[0])
 

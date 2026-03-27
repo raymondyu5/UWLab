@@ -31,9 +31,8 @@ def compute_tip_pos(env):
     return bottle_pos, tip_pos, cup_pos
 
 def is_grasped(env) -> torch.Tensor:
-    bottle = env.scene["grasp_object"]
-    bottle_pos = bottle.data.root_pos_w - env.scene.env_origins
-    return bottle_pos[:, 2] > GRASPED_Z_THRESHOLD
+    bottle_pos, tip_pos, cup_pos = compute_tip_pos(env)
+    return tip_pos[:, 2] > GRASPED_Z_THRESHOLD
 
 def is_healthy_z(env) -> torch.Tensor:
     bottle_pos, tip_pos, cup_pos = compute_tip_pos(env)

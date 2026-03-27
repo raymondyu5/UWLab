@@ -529,8 +529,6 @@ class RFSWrapper:
         residual = ppo_out[:, :self.n_residual]
         noise_flat = ppo_out[:, self.n_residual:]
 
-        breakpoint()
-
         self.last_noise_flat = noise_flat.detach()
         self.last_residual = residual.detach() if self.n_residual > 0 else None
 

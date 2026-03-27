@@ -100,7 +100,7 @@ class Gaussian01Policy:
     def predict(self, obs, deterministic: bool = False):
         batch_size = self.env.num_envs
         action_dim =  self.env.n_noise * self.env.policy_horizon
-        return torch.randn(batch_size, action_dim, device=self.env.device), {}
+        return np.random.randn(batch_size, action_dim), {}
 
 
 def _load_eval_cfg(path: str, overrides: list) -> dict:
@@ -185,7 +185,6 @@ def main():
 
     eval_cb._run_eval()
             
-
     env.close()
 
 
