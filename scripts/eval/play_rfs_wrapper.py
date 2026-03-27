@@ -36,6 +36,8 @@ parser.add_argument("--sim_type", type=str, choices=["eval", "distill", "rl"], d
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--output_dir", type=str, default=None,
                     help="Override output directory for results")
+parser.add_argument("--action_horizon", type=int, default=1,
+                    help="Override action horizon from eval config")
 parser.add_argument("overrides", nargs="*",
                     help="Key=value overrides for eval config (e.g. checkpoint=/path record_video=true)")
 AppLauncher.add_app_launcher_args(parser)
@@ -154,11 +156,13 @@ def main():
             env_cfg.events.reset_fixed_camera = None
     env = gym.make(task_id, cfg=env_cfg, render_mode="rgb_array" if record_video else None)
 
+
+
     env = RFSWrapper(
         env,
         diffusion_path=checkpoint_dir,
         noise_dims=(0, 23),
-        residual_step=1,
+        residual_step=args_cli.action_horizon,
         residual_dims=None,
         residual_scale=0.0,
         clip_actions=False,
