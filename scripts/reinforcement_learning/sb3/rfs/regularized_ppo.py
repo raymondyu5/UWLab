@@ -40,6 +40,10 @@ class RegularizedPPO(PPO):
         self._reg_coef: float = 0.0
         self._reg_batch_size: int = 256
 
+    def _excluded_save_params(self) -> list[str]:
+        """Exclude non-picklable regularization helpers from SB3 checkpoints."""
+        return super()._excluded_save_params() + ["_real_loader", "_rfs_env"]
+
     def set_real_regularization(
         self,
         loader,
