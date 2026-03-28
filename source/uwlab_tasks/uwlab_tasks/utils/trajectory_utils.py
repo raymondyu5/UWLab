@@ -101,19 +101,28 @@ def load_real_episode_zarr(episode_path: str):
     ee_pose = _load_zarr_key(store, "ee_pose")
     seg_pc = _load_zarr_key(store, "seg_pc")
     ee_pose_cmd = _load_zarr_key(store, "ee_pose_cmd")
+    try:
+        hand_action_arr = _load_zarr_key(store, "hand_action")
+    except KeyError:
+        hand_action_arr = None
 
     T = actions_arr.shape[0]
     obs_list = []
     for t in range(T):
-        obs_list.append({
+        step = {
             "joint_positions": arm_joint_pos[t],
+            "arm_joint_pos": arm_joint_pos[t],
+            "hand_joint_pos": hand_joint_pos[t],
             "gripper_position": hand_joint_pos[t],
             "cartesian_position": ee_pose[t],
             "ik_joint_pos_desired": arm_joint_pos_target[t],
             "commanded_ee_position": ee_pose_cmd[t],
             "commanded_joint_positions": arm_joint_pos_target[t],
             "seg_pc": seg_pc[t],
-        })
+        }
+        if hand_action_arr is not None:
+            step["hand_action"] = hand_action_arr[t]
+        obs_list.append(step)
 
     actions = [actions_arr[t] for t in range(T)]
     pointclouds = [seg_pc[t] for t in range(T)]

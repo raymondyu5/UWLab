@@ -10,9 +10,11 @@ ignoring any extras. So pi_features_extractor (registered with actor_* keys) ign
 critic_* keys from the full obs dict, and vice versa — with no extra overrides needed.
 """
 
+import os
+from typing import Dict, List, Optional, Type, Union
+
 import gymnasium as gym
 import torch.nn as nn
-from typing import Dict, List, Type, Union
 
 from stable_baselines3.common.policies import MultiInputActorCriticPolicy as MultiInputPolicy
 from stable_baselines3.common.torch_layers import CombinedExtractor
@@ -20,6 +22,36 @@ from stable_baselines3.common.type_aliases import Schedule
 
 ACTOR_PREFIX = "actor_"
 CRITIC_PREFIX = "critic_"
+
+
+def infer_asymmetric_ac_from_ppo_zip(path: str) -> bool:
+    """True if the saved SB3 model's observation space uses actor_/critic_ keys (asymmetric AC)."""
+    from stable_baselines3.common.save_util import load_from_zip_file
+
+    path = os.path.expanduser(path)
+    data, _, _ = load_from_zip_file(path, load_data=True)
+    if not data:
+        return False
+    obs = data.get("observation_space")
+    if obs is None or not hasattr(obs, "spaces"):
+        return False
+    return any(str(k).startswith(ACTOR_PREFIX) for k in obs.spaces)
+
+
+def resolve_asymmetric_ac(cli_asymmetric: bool, rfs_cfg: dict, ckpt_path: Optional[str]) -> bool:
+    """Prefer explicit ``--asymmetric_ac``; else infer from PPO .zip; else ``rfs_cfg['asymmetric_ac']``."""
+    if cli_asymmetric:
+        return True
+    expanded = os.path.expanduser(ckpt_path) if ckpt_path else ""
+    if expanded and os.path.isfile(expanded):
+        use = infer_asymmetric_ac_from_ppo_zip(expanded)
+        if use:
+            print(
+                "[RFS] Inferred asymmetric_ac=True from PPO checkpoint observation_space "
+                f"({ACTOR_PREFIX}*/{CRITIC_PREFIX}* keys). RFSWrapper will match training."
+            )
+        return use
+    return bool(rfs_cfg.get("asymmetric_ac", False))
 
 
 class AsymmetricMlpExtractor(nn.Module):

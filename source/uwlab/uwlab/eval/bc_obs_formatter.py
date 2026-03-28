@@ -113,6 +113,7 @@ class BCObsFormatter:
 
         # --- agent_pos: concatenate obs_keys for current step ---
         obs_parts = []
+
         for key in self.obs_keys:
             val = policy_obs[key]
             if isinstance(val, np.ndarray):

@@ -494,11 +494,29 @@ class RFSWrapper:
             for frame in self._ppo_past_action_buf:
                 frame[reset_mask] = 0.0
 
+    def _ensure_ppo_history_seeded(self, obs: dict) -> None:
+        """If history buffers were cleared (e.g. :meth:`reset_open_loop_buffers`) but we are about to
+        strip PPO obs, seed them from ``obs['policy']`` like :meth:`reset` does after warmup.
+        """
+        if not self._use_ppo_history:
+            return
+        raw = obs["policy"]
+        if self._ppo_history_buf is None:
+            self._update_ppo_history(raw)
+        if self._use_action_history and self._ppo_n_obs_steps > 1 and self._ppo_past_action_buf is None:
+            n_past = self._ppo_n_obs_steps - 1
+            self._ppo_past_action_buf = deque(
+                [torch.zeros(self.num_envs, self.cfm_action_dim, device=self.device) for _ in range(n_past)],
+                maxlen=n_past,
+            )
+
     def _strip_ppo_obs(self, obs: dict) -> dict:
         """Return obs stripped for PPO: remove seg_pc/rgb, strip ee_pose to 3D xyz.
         When ppo_history=True (symmetric) or asymmetric_ac: replaces raw obs_keys
         with flattened agent_pos_history and past_actions_history tensors.
         self.last_obs is NOT modified — CFM still reads the full obs including seg_pc."""
+        if self._use_ppo_history:
+            self._ensure_ppo_history_seeded(obs)
         if self.asymmetric_ac:
             return self._asymmetric_ppo_obs(obs)
         policy = obs["policy"]
@@ -547,6 +565,90 @@ class RFSWrapper:
                 v = v[..., :3]
             result[f"critic_{k}"] = v
         return {"policy": result}
+
+    def decode_ppo_to_env_action(
+        self, ppo_actions: torch.Tensor, substep: int = 0
+    ) -> torch.Tensor:
+        """CFM decode + residual / clip / finger filter for one substep **without** ``env.step``.
+
+        Requires ``self.last_obs`` to be set with a full ``policy`` dict (including ``seg_pc``)
+        so ``formatter.format`` matches training. Does **not** advance formatter or PPO history;
+        call :meth:`open_loop_advance_buffers` after you apply the returned action for open-loop
+        rollouts that skip the simulator.
+
+        For ``residual_step > 1``, defaults to ``substep=0`` (first executed env action in the chunk).
+
+        Args:
+            ppo_actions: (B, total_ppo_dim) same layout as :meth:`step`.
+            substep: Which chunk index along ``residual_step`` to decode (default 0).
+
+        Returns:
+            (B, ``cfm_action_dim``) tensor that would be passed to ``env.step`` at that substep.
+        """
+        ppo_out = ppo_actions.clamp(-3.0, 3.0)
+
+        residual_flat = ppo_out[:, : self.n_residual_flat]
+        noise_flat = ppo_out[:, self.n_residual_flat :]
+
+        self.last_noise_flat = noise_flat.detach()
+        if self.n_residual > 0:
+            residual = residual_flat.reshape(
+                self.num_envs, self.residual_step, self.n_residual
+            )
+            self.last_residual = residual.detach()
+        else:
+            residual = None
+            self.last_residual = None
+
+        noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
+        if self.noise_slice is not None and self.n_noise > 0:
+            noise[:, :, self.noise_slice] = noise_flat.reshape(
+                self.num_envs, self.policy_horizon, self.n_noise
+            )
+
+        diffusion_obs = self.formatter.format(self.last_obs["policy"])
+        with torch.no_grad():
+            cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
+        base_actions = cfm_result["action_pred"]
+
+        ss = int(substep)
+        if ss < 0 or ss >= self.residual_step:
+            raise ValueError(f"substep must be in [0, {self.residual_step}), got {substep}")
+        ss = min(ss, base_actions.shape[1] - 1)
+
+        action = base_actions[:, ss].clone()
+
+        if residual is not None and self.residual_slice is not None:
+            action[:, self.residual_slice] += residual[:, ss] * self.residual_scale
+
+        if self.clip_actions:
+            action[:, :3].clamp_(-0.03, 0.03)
+            action[:, 3:6].clamp_(-0.05, 0.05)
+
+        if self.finger_filter is not None:
+            action[:, self.finger_start_dim :] = self.finger_filter(action[:, self.finger_start_dim :])
+
+        self.last_action = action.detach()
+        return self.last_action
+
+    def open_loop_advance_buffers(self, executed_action: torch.Tensor):
+        """After a virtual decode (no ``env.step``), advance CFM formatter + PPO history like :meth:`step`.
+
+        Call with the same ``executed_action`` returned from :meth:`decode_ppo_to_env_action`
+        (chunk boundary = one open-loop timestep when ``residual_step==1``).
+        """
+        self.formatter.update_action(executed_action)
+        if self._use_ppo_history:
+            self._update_ppo_history(self.last_obs["policy"])
+            self._update_ppo_past_actions(executed_action)
+        if self.asymmetric_ac:
+            self.last_pcd_embedding = self._compute_pcd_embedding()
+
+    def reset_open_loop_buffers(self):
+        """Clear CFM formatter and PPO history deques for a new open-loop pass without ``env.reset()``."""
+        self.formatter.reset()
+        self._ppo_history_buf = None
+        self._ppo_past_action_buf = None
 
     def step(self, ppo_actions: torch.Tensor):
         #ppo_out = ppo_actions.clamp(-1.0, 1.0) 

@@ -70,7 +70,7 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 import uwlab_tasks  # noqa: F401
 
 from wrapper import RFSWrapper
-from asymmetric_policy import AsymmetricActorCriticPolicy
+from asymmetric_policy import AsymmetricActorCriticPolicy, resolve_asymmetric_ac
 from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
 
@@ -115,6 +115,8 @@ def main():
     env = gym.make(args_cli.task, cfg=env_cfg,
                    render_mode="rgb_array" if args_cli.record_video else None)
 
+    asymmetric_ac = resolve_asymmetric_ac(args_cli.asymmetric_ac, rfs_cfg, args_cli.checkpoint)
+
     rfs_env = RFSWrapper(
         env,
         diffusion_path=args_cli.diffusion_path,
@@ -125,7 +127,7 @@ def main():
         clip_actions=rfs_cfg["clip_actions"],
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
-        asymmetric_ac=args_cli.asymmetric_ac,
+        asymmetric_ac=asymmetric_ac,
     )
     # Enable expensive metric caching only for evaluation success counting.
     rfs_env.enable_metrics_cache = True
@@ -133,7 +135,7 @@ def main():
     sb3_env = Sb3VecEnvWrapper(rfs_env)
 
     checkpoint_path = os.path.expanduser(args_cli.checkpoint)
-    custom_objects = {"policy_class": AsymmetricActorCriticPolicy} if args_cli.asymmetric_ac else None
+    custom_objects = {"policy_class": AsymmetricActorCriticPolicy} if asymmetric_ac else None
     agent = PPO.load(checkpoint_path, env=sb3_env, custom_objects=custom_objects,
                      print_system_info=False)
 

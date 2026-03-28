@@ -62,7 +62,8 @@ BOTTLE_POUR_SPAWN_POS = (0.53, -0.105, 0.11)
 PINK_CUP_POUR_POS = (0.53, 0.23, 0.07)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
-POUR_HORIZON = 112
+# POUR_HORIZON = 112
+POUR_HORIZON = 176
 
 
 def obs_cup_pose(env) -> torch.Tensor:
