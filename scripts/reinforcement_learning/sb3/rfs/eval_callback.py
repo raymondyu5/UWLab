@@ -460,11 +460,13 @@ class RFSEvalCallback(BaseCallback):
             logger.begin_episode(pose.name, {"x": pose.x, "y": pose.y, "yaw": pose.yaw})
 
             episode_successes = []
+            episode_success_ever = []
             episode_grasps = []
             episode_lifted = []
             episode_near_miss = []
             recorded = [False] * num_envs
 
+            last_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_grasped   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
@@ -473,14 +475,20 @@ class RFSEvalCallback(BaseCallback):
             for step_idx in range(episode_steps):
                 # Pre-step: read metrics before env.step() so we never read the
                 # post-auto-reset state for envs whose episode just ended.
-                # OR-accumulate so the result is "was this ever true this episode".
+                # last_success: overwrite each step (end-of-episode criterion).
+                # ever_*: OR-accumulate (anytime criterion).
                 active = torch.tensor([not recorded[i] for i in range(num_envs)], dtype=torch.bool, device=device)
                 if active.any():
                     metrics_np = isaac_env.metrics.get_metrics()
-                    ever_success[active]   |= torch.from_numpy(metrics_np["is_success"]).to(device).bool()[active]
-                    ever_grasped[active]   |= torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()[active]
-                    ever_lifted[active]    |= torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()[active]
-                    ever_near_miss[active] |= torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()[active]
+                    m_success   = torch.from_numpy(metrics_np["is_success"]).to(device).bool()
+                    m_grasped   = torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()
+                    m_lifted    = torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()
+                    m_near_miss = torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()
+                    last_success[active]    = m_success[active]
+                    ever_success[active]   |= m_success[active]
+                    ever_grasped[active]   |= m_grasped[active]
+                    ever_lifted[active]    |= m_lifted[active]
+                    ever_near_miss[active] |= m_near_miss[active]
 
                 action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
@@ -489,7 +497,8 @@ class RFSEvalCallback(BaseCallback):
 
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
-                        episode_successes.append(float(ever_success[i]))
+                        episode_successes.append(float(last_success[i]))
+                        episode_success_ever.append(float(ever_success[i]))
                         episode_grasps.append(float(ever_grasped[i]))
                         episode_lifted.append(float(ever_lifted[i]))
                         episode_near_miss.append(float(ever_near_miss[i]))
@@ -512,12 +521,14 @@ class RFSEvalCallback(BaseCallback):
                     break
 
             n_success = sum(episode_successes)
+            n_success_ever = sum(episode_success_ever)
             n_total = len(episode_successes) if episode_successes else num_envs
             n_grasped = sum(episode_grasps) if episode_grasps else None
             n_lifted = sum(episode_lifted) if episode_lifted else None
             n_near_miss = sum(episode_near_miss) if episode_near_miss else None
             logger.end_episode(n_success / n_total if n_total > 0 else False, n_success=n_success, n_total=n_total,
-                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
+                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss,
+                               n_success_ever=n_success_ever)
 
     def _run_random_eval(self, logger, isaac_env, device, num_envs, output_dir):
         num_trials = self.spawn_cfg.num_trials if self.spawn_cfg.num_trials > 0 else 1
@@ -545,15 +556,16 @@ class RFSEvalCallback(BaseCallback):
             logger.begin_episode(f"random_trial_{trial_idx}", None)
 
             per_env_success = [False] * num_envs
+            per_env_success_ever = [False] * num_envs
             per_env_grasped = [False] * num_envs
             per_env_lifted = [False] * num_envs
             per_env_near_miss = [False] * num_envs
             recorded = [False] * num_envs
             done_steps: list[int | None] = [None] * num_envs
 
-            # OR-accumulators: True if the metric was ever satisfied during the episode.
-            # This avoids the post-auto-reset false positive (reading metrics after
-            # Isaac Lab has already reset the env within env.step()).
+            # last_success: overwritten each step — end-of-episode criterion.
+            # ever_*: OR-accumulated — anytime criterion.
+            last_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_success   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_grasped   = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
@@ -571,10 +583,15 @@ class RFSEvalCallback(BaseCallback):
                 active = torch.tensor([not recorded[i] for i in range(num_envs)], dtype=torch.bool, device=device)
                 if active.any():
                     metrics_np = isaac_env.metrics.get_metrics()
-                    ever_success[active]   |= torch.from_numpy(metrics_np["is_success"]).to(device).bool()[active]
-                    ever_grasped[active]   |= torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()[active]
-                    ever_lifted[active]    |= torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()[active]
-                    ever_near_miss[active] |= torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()[active]
+                    m_success   = torch.from_numpy(metrics_np["is_success"]).to(device).bool()
+                    m_grasped   = torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()
+                    m_lifted    = torch.from_numpy(metrics_np["is_healthy_z"]).to(device).bool()
+                    m_near_miss = torch.from_numpy(metrics_np["is_near_miss"]).to(device).bool()
+                    last_success[active]    = m_success[active]
+                    ever_success[active]   |= m_success[active]
+                    ever_grasped[active]   |= m_grasped[active]
+                    ever_lifted[active]    |= m_lifted[active]
+                    ever_near_miss[active] |= m_near_miss[active]
 
                 if self.record_debug_plots:
                     ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
@@ -602,10 +619,11 @@ class RFSEvalCallback(BaseCallback):
 
                 for i in range(num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
-                        per_env_success[i]   = bool(ever_success[i])
-                        per_env_grasped[i]   = bool(ever_grasped[i])
-                        per_env_lifted[i]    = bool(ever_lifted[i])
-                        per_env_near_miss[i] = bool(ever_near_miss[i])
+                        per_env_success[i]       = bool(last_success[i])
+                        per_env_success_ever[i]  = bool(ever_success[i])
+                        per_env_grasped[i]       = bool(ever_grasped[i])
+                        per_env_lifted[i]        = bool(ever_lifted[i])
+                        per_env_near_miss[i]     = bool(ever_near_miss[i])
                         recorded[i] = True
                         done_steps[i] = step_idx
 
@@ -625,12 +643,14 @@ class RFSEvalCallback(BaseCallback):
                 if all(recorded):
                     break
 
-            n_success   = sum(per_env_success)
-            n_grasped   = sum(per_env_grasped)
-            n_lifted    = sum(per_env_lifted)
-            n_near_miss = sum(per_env_near_miss)
+            n_success       = sum(per_env_success)
+            n_success_ever  = sum(per_env_success_ever)
+            n_grasped       = sum(per_env_grasped)
+            n_lifted        = sum(per_env_lifted)
+            n_near_miss     = sum(per_env_near_miss)
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
-                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
+                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss,
+                               n_success_ever=n_success_ever)
             logger.record_scatter_points(
                 xs=init_pos_local[:, 0],
                 ys=init_pos_local[:, 1],
@@ -661,7 +681,8 @@ class RFSEvalCallback(BaseCallback):
             return
 
         log_dict = {
-            "eval/success_rate": results["success_rate"],
+            "eval/success_rate_end": results["success_rate"],
+            "eval/success_rate_ever": results.get("success_rate_ever", 0.0),
             "eval/n_success": results["n_success"],
             "eval/near_miss_rate": results.get("near_miss_rate", 0.0),
             "eval/lifted_rate": results.get("lifted_rate", 0.0),
