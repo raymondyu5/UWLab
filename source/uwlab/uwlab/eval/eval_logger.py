@@ -70,7 +70,8 @@ class EvalLogger:
             self._current["fixed_frames"].append(fixed_frame)
 
     def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
-                    n_grasped: int = None, n_lifted: int = None, n_near_miss: int = None):
+                    n_grasped: int = None, n_lifted: int = None, n_near_miss: int = None,
+                    n_success_ever: int = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
         self._current["n_success"] = n_success
@@ -78,6 +79,7 @@ class EvalLogger:
         self._current["n_grasped"] = n_grasped
         self._current["n_lifted"] = n_lifted
         self._current["n_near_miss"] = n_near_miss
+        self._current["n_success_ever"] = n_success_ever
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
@@ -134,13 +136,16 @@ class EvalLogger:
 
         n_grasped, _, grasped_rate = _sum_metric("n_grasped")
         n_lifted, _, lifted_rate = _sum_metric("n_lifted")
-        n_near_miss, n_near_miss_trials, near_miss_rate = _sum_metric("n_near_miss")
+        n_near_miss, _, near_miss_rate = _sum_metric("n_near_miss")
+        n_success_ever, _, success_rate_ever = _sum_metric("n_success_ever")
 
         summary = {
             "n_episodes": n_episodes,
             "n_success": n_success,
             "n_total": n_total,
             "success_rate": success_rate,
+            "n_success_ever": n_success_ever,
+            "success_rate_ever": success_rate_ever,
             "n_near_miss": n_near_miss,
             "near_miss_rate": near_miss_rate,
             "n_lifted": n_lifted,
@@ -154,7 +159,8 @@ class EvalLogger:
         with open(out_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        msg = f"[EvalLogger] {n_success}/{n_total} success ({100*success_rate:.1f}%)"
+        msg = f"[EvalLogger] {n_success}/{n_total} success_end ({100*success_rate:.1f}%)"
+        msg += f", {n_success_ever}/{n_total} success_ever ({100*success_rate_ever:.1f}%)"
         msg += f", {n_near_miss}/{n_total} near_miss ({100*near_miss_rate:.1f}%)"
         msg += f", {n_lifted}/{n_total} lifted ({100*lifted_rate:.1f}%)"
         msg += f", {n_grasped}/{n_total} grasped ({100*grasped_rate:.1f}%)"

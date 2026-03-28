@@ -78,7 +78,7 @@ class EnvMetrics:
             if t.numel() == 0:
                 raise ValueError(f"Metric {name!r} returned an empty tensor")
 
-            t = t.squeeze()
+            t = t.reshape(-1)
             if t.dim() != 1:
                 raise ValueError(
                     f"Metric {name!r} expected shape (num_envs,), got {tuple(t.shape)}"
