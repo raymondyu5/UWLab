@@ -132,6 +132,8 @@ def main():
     # Enable expensive metric caching only for evaluation success counting.
     rfs_env.enable_metrics_cache = True
 
+    rfs_env._collect_substep_frames = args_cli.record_video
+
     sb3_env = Sb3VecEnvWrapper(rfs_env)
 
     checkpoint_path = os.path.expanduser(args_cli.checkpoint)
@@ -185,6 +187,9 @@ def main():
             obs_np = _to_numpy(obs_dict)
             logger.begin_episode(ep_name, spawn_info)
             per_env_success = [False] * args_cli.num_envs
+            per_env_grasped = [False] * args_cli.num_envs
+            per_env_lifted = [False] * args_cli.num_envs
+            per_env_near_miss = [False] * args_cli.num_envs
             recorded = [False] * args_cli.num_envs
 
             for _ in range(horizon):
@@ -202,32 +207,39 @@ def main():
                 for i in range(args_cli.num_envs):
                     if (terminated[i] or truncated[i]) and not recorded[i]:
                         per_env_success[i] = bool(metrics_seen["is_success"][i])
+                        per_env_grasped[i] = bool(metrics_seen["is_grasped"][i])
+                        per_env_lifted[i] = bool(metrics_seen["is_healthy_z"][i])
+                        per_env_near_miss[i] = bool(metrics_seen["is_near_miss"][i])
                         recorded[i] = True
 
-                frame = rfs_env.render() if args_cli.record_video else None
                 obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
-                logger.record_step(
-                    ee_pose=np.zeros(7),
-                    object_pose=obj_pos,
-                    action=action[0],
-                    frame=frame,
-                )
+                for frame in (rfs_env.last_substep_frames or [None]):
+                    logger.record_step(ee_pose=np.zeros(7), object_pose=obj_pos, action=action[0], frame=frame)
 
                 if all(recorded):
                     break
 
             n_success = sum(per_env_success)
+            n_grasped = sum(per_env_grasped)
+            n_lifted = sum(per_env_lifted)
+            n_near_miss = sum(per_env_near_miss)
             logger.end_episode(
                 n_success / args_cli.num_envs,
                 n_success=n_success,
                 n_total=args_cli.num_envs,
+                n_grasped=n_grasped,
+                n_lifted=n_lifted,
+                n_near_miss=n_near_miss,
             )
             print(f"[play_rfs] [{ep_idx + 1}/{len(episodes)}] {ep_name}: "
-                  f"{n_success}/{args_cli.num_envs} envs succeeded")
+                  f"{n_success}/{args_cli.num_envs} success, {n_near_miss}/{args_cli.num_envs} near_miss, "
+                  f"{n_lifted}/{args_cli.num_envs} lifted, {n_grasped}/{args_cli.num_envs} grasped")
 
     results = logger.finalize()
-    print(f"\n[play_rfs] Success rate: {results['success_rate']:.1%} "
-          f"({results['n_success']}/{results.get('n_total', results['n_episodes'])})")
+    print(f"\n[play_rfs] Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_total']})")
+    print(f"[play_rfs] Near miss: {results['near_miss_rate']:.1%} ({results['n_near_miss']}/{results['n_total']})")
+    print(f"[play_rfs] Lifted: {results['lifted_rate']:.1%} ({results['n_lifted']}/{results['n_total']})")
+    print(f"[play_rfs] Grasped: {results['grasped_rate']:.1%} ({results['n_grasped']}/{results['n_total']})")
     print(f"[play_rfs] Results -> {output_dir}")
 
     env.close()

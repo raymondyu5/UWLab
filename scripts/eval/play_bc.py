@@ -484,8 +484,8 @@ def main():
         spawn_cfg = SpawnCfg(poses=[], num_trials=n_episodes)
 
     # Output dir: logs/eval/<eval_config_stem>/<checkpoint_basename>/
-    if args_cli.output_dir:
-        output_dir = args_cli.output_dir
+    if args_cli.output_dir or eval_cfg.get("output_dir"):
+        output_dir = args_cli.output_dir or eval_cfg["output_dir"]
     else:
         eval_base = os.path.join(os.path.dirname(checkpoint_dir.rstrip("/")), "eval")
         eval_config_stem = os.path.splitext(os.path.basename(args_cli.eval_cfg))[0]

@@ -707,6 +707,11 @@ class RFSWrapper:
             if self.finger_filter is not None:
                 action[:, self.finger_start_dim:] = self.finger_filter(action[:, self.finger_start_dim:])
 
+            if metrics_seen is not None:
+                metrics_np = self.unwrapped.metrics.get_metrics()
+                for k in metric_keys:
+                    metrics_seen[k] |= torch.from_numpy(metrics_np[k]).to(self.device).bool()
+
             self.last_action = action.detach()
             obs, step_rewards, terminated, truncated, info = self.env.step(action)
             if self._collect_substep_frames:
@@ -715,14 +720,6 @@ class RFSWrapper:
             discount *= self.gamma
             self.last_obs = obs
             any_reset |= terminated | truncated
-
-            # Cache metrics at residual/substep granularity.
-            # Metrics are used for eval and are typically boolean-ish ("is_*").
-            if metrics_seen is not None:
-                metrics_np = self.unwrapped.metrics.get_metrics()
-                for k in metric_keys:
-                    # OR across residual steps so "seen during chunk" is never missed.
-                    metrics_seen[k] |= torch.from_numpy(metrics_np[k]).to(self.device).bool()
 
         # Publish cached metrics for downstream logging/eval.
         self._metrics_seen = metrics_seen
