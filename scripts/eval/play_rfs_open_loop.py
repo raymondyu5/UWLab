@@ -2,9 +2,14 @@
 Open-loop RFS evaluation: trajectory train-target actions vs RFS decode on (1) logged obs
 and (2) sim observations after reset. Assumes ``residual_step == 1`` (one env action per PPO chunk).
 
-Uses ``RFSWrapper.decode_ppo_to_env_action`` + ``open_loop_advance_buffers`` (no env step on the
+Uses ``RFSWrapper.decode_ppo_to_env_action`` + ``open_loop_after_decode`` (no env step on the
 real-obs branch). Loads BC train_cfg from ``diffusion_path`` for trajectory action vectors and
 ``policy_obs_from_traj_step`` keys.
+
+**Observation history:** On the **real** pass, by default the full obs window comes from the zarr
+(``--no-use_trajectory_history`` rolls only agent-pos from successive **logged** frames). On the
+**sim-reset** pass, agent-pos history rolls from **sim** observations. **Past actions** for CFM and
+PPO always come from the **logged** trajectory at timestep ``i``, never from the RFS decode.
 
 Usage:
     ./uwlab.sh -p scripts/eval/play_rfs_open_loop.py --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml --trajectory_file data_storage/datasets/03_24_bourbon_pour/episode_68/episode_68.zarr --diffusion_path logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise  --rfs_cfg configs/rl/arm_rfs_joint_cfg.yaml  --rfs_checkpoint logs/rfs/PourBottle-JointAbs_0326_2312_28e64e/model_000650.zip --headless --enable_cameras
@@ -68,6 +73,12 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Force asymmetric AC obs layout; else inferred from --rfs_checkpoint when set.",
+)
+parser.add_argument(
+"--use_trajectory_history",
+    action="store_true",
+    dest="use_trajectory_history",
+    help="Use trajectory history for real-obs pass (default)",
 )
 parser.add_argument("overrides", nargs="*", help="eval_cfg overrides (e.g. checkpoint=/path)")
 AppLauncher.add_app_launcher_args(parser)
@@ -381,6 +392,115 @@ def _training_action_vector_numpy(traj_obs_t: dict, train_cfg: dict, action_dim:
     return a.astype(np.float64)
 
 
+def _tensor_cat_policy_keys(policy: dict, keys: list[str], device: torch.device) -> torch.Tensor:
+    parts = []
+    for key in keys:
+        val = policy[key]
+        if isinstance(val, np.ndarray):
+            val = torch.from_numpy(val).to(device)
+        parts.append(val.float())
+    return torch.cat(parts, dim=-1)
+
+
+def _zero_policy_like(template: dict) -> dict:
+    return {k: torch.zeros_like(v) for k, v in template.items()}
+
+
+def _seed_past_actions_from_trajectory(
+    rfs_env: RFSWrapper,
+    i: int,
+    traj_obs,
+    traj_actions,
+    train_cfg: dict,
+    device: torch.device,
+) -> None:
+    """Past-action buffers (formatter + PPO) always follow the **logged** episode at index ``i``."""
+    fmt = rfs_env.formatter
+    n = fmt.n_obs_steps
+    if n <= 1:
+        fmt.seed_past_actions_only(None)
+        rfs_env.seed_ppo_past_actions_only(None)
+        return
+    past_fmt: list[torch.Tensor] = []
+    past_ppo: list[torch.Tensor] = []
+    for k in range(n - 1):
+        idx = i - (n - 1) + k
+        if fmt.action_dim > 0:
+            if idx < 0:
+                past_fmt.append(torch.zeros(1, fmt.action_dim, device=device, dtype=torch.float32))
+            else:
+                a = _training_action_vector_numpy(
+                    traj_obs[idx], train_cfg, fmt.action_dim, traj_actions[idx]
+                )
+                past_fmt.append(
+                    torch.from_numpy(np.asarray(a, dtype=np.float32)).reshape(1, -1).to(device)
+                )
+        if rfs_env._use_ppo_history and rfs_env._use_action_history:
+            if idx < 0:
+                past_ppo.append(
+                    torch.zeros(1, rfs_env.cfm_action_dim, device=device, dtype=torch.float32)
+                )
+            else:
+                a = _training_action_vector_numpy(
+                    traj_obs[idx], train_cfg, rfs_env.cfm_action_dim, traj_actions[idx]
+                )
+                past_ppo.append(
+                    torch.from_numpy(np.asarray(a, dtype=np.float32)).reshape(1, -1).to(device)
+                )
+    if fmt.action_dim > 0:
+        fmt.seed_past_actions_only(past_fmt)
+    else:
+        fmt.seed_past_actions_only(None)
+    if rfs_env._use_ppo_history and rfs_env._use_action_history:
+        rfs_env.seed_ppo_past_actions_only(past_ppo)
+    else:
+        rfs_env.seed_ppo_past_actions_only(None)
+
+
+def _seed_open_loop_obs_from_trajectory(
+    rfs_env: RFSWrapper,
+    i: int,
+    traj_obs,
+    train_cfg: dict,
+    obs_keys: list[str],
+    image_keys: list[str],
+    device: torch.device,
+) -> None:
+    """Observation history only (real eval): zarr window ending at ``i``. Call after :func:`_seed_past_actions_from_trajectory`."""
+    fmt = rfs_env.formatter
+    n_fmt = fmt.n_obs_steps
+    n_ppo = rfs_env._ppo_n_obs_steps
+    if n_fmt != n_ppo:
+        raise ValueError(
+            f"Formatter n_obs_steps ({n_fmt}) != RFSWrapper _ppo_n_obs_steps ({n_ppo}); mismatch CFM metadata."
+        )
+    n = n_fmt
+    zero_pol = _zero_policy_like(policy_obs_from_traj_step(traj_obs[0], device, obs_keys, image_keys))
+
+    def policy_at(idx: int) -> dict:
+        if idx < 0:
+            return zero_pol
+        return policy_obs_from_traj_step(traj_obs[idx], device, obs_keys, image_keys)
+
+    if n == 1:
+        fmt.seed_agent_pos_prefix_only([])
+    else:
+        agent_prefix: list[torch.Tensor] = []
+        for k in range(n - 1):
+            idx = i - (n - 1) + k
+            agent_prefix.append(_tensor_cat_policy_keys(policy_at(idx), fmt.obs_keys, device))
+        fmt.seed_agent_pos_prefix_only(agent_prefix)
+
+    if not rfs_env._use_ppo_history:
+        return
+    ppo_keys = rfs_env._ppo_history_obs_keys
+    ppo_frames: list[torch.Tensor] = []
+    for k in range(n):
+        idx = i - (n - 1) + k
+        ppo_frames.append(_tensor_cat_policy_keys(policy_at(idx), ppo_keys, device))
+    rfs_env.seed_ppo_obs_frames_only(ppo_frames)
+
+
 class GaussianNoisePolicy:
     def __init__(self, rfs_env: RFSWrapper):
         self.rfs_env = rfs_env
@@ -393,13 +513,34 @@ class GaussianNoisePolicy:
         return np.random.randn(b, d).astype(np.float32), {}
 
 
-def _run_rfs_open_loop_pass(rfs_env: RFSWrapper, model, device: torch.device, T: int, policy_obs_fn) -> np.ndarray:
+def _run_rfs_open_loop_pass(
+    rfs_env: RFSWrapper,
+    model,
+    device: torch.device,
+    T: int,
+    policy_obs_fn,
+    *,
+    sim_pass: bool = False,
+    use_trajectory_history: bool = False,
+    traj_obs=None,
+    traj_actions=None,
+    train_cfg=None,
+    obs_keys=None,
+    image_keys=None,
+) -> np.ndarray:
     cfm_dim = rfs_env.cfm_action_dim
     out = np.zeros((T, cfm_dim), dtype=np.float64)
     rfs_env.reset_open_loop_buffers()
     with torch.inference_mode():
         for i in range(T):
             pol = policy_obs_fn(i)
+            assert traj_obs is not None and traj_actions is not None and train_cfg is not None
+            _seed_past_actions_from_trajectory(rfs_env, i, traj_obs, traj_actions, train_cfg, device)
+            if not sim_pass and use_trajectory_history:
+                assert obs_keys is not None and image_keys is not None
+                _seed_open_loop_obs_from_trajectory(
+                    rfs_env, i, traj_obs, train_cfg, obs_keys, image_keys, device
+                )
             rfs_env.last_obs = {"policy": pol}
             if rfs_env.asymmetric_ac:
                 rfs_env.last_pcd_embedding = rfs_env._compute_pcd_embedding()
@@ -409,7 +550,8 @@ def _run_rfs_open_loop_pass(rfs_env: RFSWrapper, model, device: torch.device, T:
             ppo_t = torch.from_numpy(np.asarray(ppo_action, dtype=np.float32)).to(device)
             env_act = rfs_env.decode_ppo_to_env_action(ppo_t)
             out[i] = env_act[0].detach().cpu().numpy()
-            rfs_env.open_loop_advance_buffers(env_act)
+            roll_ppo_obs = sim_pass or not use_trajectory_history
+            rfs_env.open_loop_after_decode(roll_ppo_obs=roll_ppo_obs)
     return out
 
 
@@ -620,7 +762,20 @@ def main():
     def policy_obs_real(i: int) -> dict:
         return policy_obs_from_traj_step(traj_obs[i], device, obs_keys, image_keys)
 
-    actions_rfs_real = _run_rfs_open_loop_pass(rfs_env, model, device, T, policy_obs_real)
+    actions_rfs_real = _run_rfs_open_loop_pass(
+        rfs_env,
+        model,
+        device,
+        T,
+        policy_obs_real,
+        sim_pass=False,
+        use_trajectory_history=args_cli.use_trajectory_history,
+        traj_obs=traj_obs,
+        traj_actions=traj_actions,
+        train_cfg=train_cfg,
+        obs_keys=obs_keys,
+        image_keys=image_keys,
+    )
 
     real_arm = np.stack([np.asarray(traj_obs[i]["joint_positions"], dtype=np.float64).reshape(-1)[:7] for i in range(T)])
     real_hand = np.stack([np.asarray(traj_obs[i]["gripper_position"], dtype=np.float64).reshape(-1)[:16] for i in range(T)])
@@ -649,7 +804,20 @@ def main():
         sim_hand[i] = sim_ex["gripper_position"]
         return obs["policy"]
 
-    actions_rfs_sim = _run_rfs_open_loop_pass(rfs_env, model, device, T, policy_obs_sim)
+    actions_rfs_sim = _run_rfs_open_loop_pass(
+        rfs_env,
+        model,
+        device,
+        T,
+        policy_obs_sim,
+        sim_pass=True,
+        use_trajectory_history=False,
+        traj_obs=traj_obs,
+        traj_actions=traj_actions,
+        train_cfg=train_cfg,
+        obs_keys=obs_keys,
+        image_keys=image_keys,
+    )
 
     _plot_actions(
         os.path.join(output_dir, "actions_open_loop.png"),
@@ -675,6 +843,10 @@ def main():
         "residual_step": rfs_env.residual_step,
         "obs_keys": obs_keys,
         "asymmetric_ac": asymmetric_ac,
+        "use_trajectory_history": args_cli.use_trajectory_history,
+        "past_actions_from": "logged_trajectory",
+        "real_obs_history": "zarr_window" if args_cli.use_trajectory_history else "logged_roll",
+        "sim_obs_history": "sim_roll",
     }
     with open(os.path.join(output_dir, "open_loop_meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)

@@ -183,6 +183,10 @@ def main():
     noise_dims = _parse_dims(args_cli.noise_dims or rfs_cfg["noise_dims"])
     residual_dims = _parse_dims(args_cli.residual_dims or rfs_cfg["residual_dims"])
     eval_interval = args_cli.eval_interval or eval_cfg["interval"]
+
+    # Eval should be based on number of env steps, not PPO steps
+    # env steps are scaled by residual_step
+    eval_interval = eval_interval // rfs_cfg["residual_step"]
     eval_spawn = args_cli.eval_spawn or eval_cfg["spawn"]
 
     timestamp = datetime.now().strftime("%m%d_%H%M")

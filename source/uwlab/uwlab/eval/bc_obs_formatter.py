@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Dict, List
+from typing import Dict, List, Optional
 import numpy as np
 import torch
 
@@ -95,6 +95,70 @@ class BCObsFormatter:
                 maxlen=self.n_obs_steps - 1,
             )
         self._past_action_buf.append(action)
+
+    def seed_deques_before_format(
+        self,
+        agent_pos_prefix: List[torch.Tensor],
+        past_action_prefix: Optional[List[torch.Tensor]] = None,
+    ) -> None:
+        """Align rolling buffers with a logged trajectory before the next :meth:`format` call.
+
+        Pass ``n_obs_steps - 1`` rows of concatenated ``obs_keys`` tensors ``(B, D)``, oldest first,
+        matching timesteps ``i - (n_obs_steps - 1)`` … ``i - 1``. The next :meth:`format` should
+        receive the **current** frame ``i``; it will append so the stack matches training.
+
+        For timesteps before the episode start, pass zeros (see open-loop scripts).
+
+        When ``n_obs_steps == 1``, pass empty lists; buffers are cleared so :meth:`format` inits.
+        """
+        if self.n_obs_steps == 1:
+            if agent_pos_prefix or past_action_prefix:
+                raise ValueError("n_obs_steps=1 requires empty prefix lists")
+            self._agent_pos_buf = None
+            self._past_action_buf = None
+            return
+        need = self.n_obs_steps - 1
+        if len(agent_pos_prefix) != need:
+            raise ValueError(
+                f"Expected {need} agent_pos prefix rows (n_obs_steps-1), got {len(agent_pos_prefix)}"
+            )
+        self._agent_pos_buf = deque(agent_pos_prefix, maxlen=self.n_obs_steps)
+        if self.action_dim > 0:
+            if past_action_prefix is None or len(past_action_prefix) != need:
+                raise ValueError(
+                    f"Expected {need} past_action rows (B, {self.action_dim}), "
+                    f"got {None if past_action_prefix is None else len(past_action_prefix)}"
+                )
+            self._past_action_buf = deque(past_action_prefix, maxlen=need)
+        else:
+            self._past_action_buf = None
+
+    def seed_agent_pos_prefix_only(self, agent_pos_prefix: List[torch.Tensor]) -> None:
+        """Set only the agent_pos deque (``n_obs_steps - 1`` rows). Past-action deque is unchanged."""
+        if self.n_obs_steps == 1:
+            if agent_pos_prefix:
+                raise ValueError("n_obs_steps=1 requires empty agent_pos_prefix")
+            self._agent_pos_buf = None
+            return
+        need = self.n_obs_steps - 1
+        if len(agent_pos_prefix) != need:
+            raise ValueError(
+                f"Expected {need} agent_pos prefix rows (n_obs_steps-1), got {len(agent_pos_prefix)}"
+            )
+        self._agent_pos_buf = deque(agent_pos_prefix, maxlen=self.n_obs_steps)
+
+    def seed_past_actions_only(self, past_action_rows: Optional[List[torch.Tensor]]) -> None:
+        """Replace the past-action deque from logged data (``n_obs_steps - 1`` rows). No-op if no past-action channel."""
+        if self.n_obs_steps <= 1 or self.action_dim <= 0:
+            self._past_action_buf = None
+            return
+        need = self.n_obs_steps - 1
+        if past_action_rows is None or len(past_action_rows) != need:
+            raise ValueError(
+                f"Expected {need} past_action rows (B, {self.action_dim}), "
+                f"got {None if past_action_rows is None else len(past_action_rows)}"
+            )
+        self._past_action_buf = deque(past_action_rows, maxlen=need)
 
     def format(self, raw_obs: dict) -> Dict[str, torch.Tensor]:
         """

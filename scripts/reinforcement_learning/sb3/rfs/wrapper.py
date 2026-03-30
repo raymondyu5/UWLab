@@ -38,6 +38,8 @@ for _p in [
 
 import dill
 from collections import deque
+from typing import List, Optional
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -573,8 +575,7 @@ class RFSWrapper:
 
         Requires ``self.last_obs`` to be set with a full ``policy`` dict (including ``seg_pc``)
         so ``formatter.format`` matches training. Does **not** advance formatter or PPO history;
-        call :meth:`open_loop_advance_buffers` after you apply the returned action for open-loop
-        rollouts that skip the simulator.
+        call :meth:`open_loop_after_decode` after open-loop scripts that skip the simulator.
 
         For ``residual_step > 1``, defaults to ``substep=0`` (first executed env action in the chunk).
 
@@ -631,18 +632,74 @@ class RFSWrapper:
         self.last_action = action.detach()
         return self.last_action
 
-    def open_loop_advance_buffers(self, executed_action: torch.Tensor):
-        """After a virtual decode (no ``env.step``), advance CFM formatter + PPO history like :meth:`step`.
+    def open_loop_after_decode(self, roll_ppo_obs: bool = False) -> None:
+        """Called after :meth:`decode_ppo_to_env_action` in open-loop scripts.
 
-        Call with the same ``executed_action`` returned from :meth:`decode_ppo_to_env_action`
-        (chunk boundary = one open-loop timestep when ``residual_step==1``).
+        Past actions are **not** updated from the decoded action (they come from the logged episode).
+        When ``roll_ppo_obs`` is True, append ``last_obs['policy']`` to the PPO agent-pos deque so
+        observation history rolls (sim branch, or real branch without full zarr obs seeding).
+        When False, the next step will re-seed obs from the trajectory (full real eval).
         """
-        self.formatter.update_action(executed_action)
-        if self._use_ppo_history:
+        if roll_ppo_obs and self._use_ppo_history:
             self._update_ppo_history(self.last_obs["policy"])
-            self._update_ppo_past_actions(executed_action)
-        if self.asymmetric_ac:
+        if self.asymmetric_ac and roll_ppo_obs:
             self.last_pcd_embedding = self._compute_pcd_embedding()
+
+    def seed_ppo_past_actions_only(self, past_frames: Optional[List[torch.Tensor]]) -> None:
+        """Replace PPO past-action deque only (logged actions at chunk boundaries)."""
+        if not self._use_ppo_history or not self._use_action_history or self._ppo_n_obs_steps <= 1:
+            self._ppo_past_action_buf = None
+            return
+        need = self._ppo_n_obs_steps - 1
+        if past_frames is None or len(past_frames) != need:
+            raise ValueError(
+                f"Expected {need} past_action frames, got "
+                f"{None if past_frames is None else len(past_frames)}"
+            )
+        self._ppo_past_action_buf = deque([t.clone() for t in past_frames], maxlen=need)
+
+    def seed_ppo_obs_frames_only(self, agent_pos_frames: List[torch.Tensor]) -> None:
+        """Replace PPO agent-pos history deque only (full ``n_obs_steps`` frames, oldest→newest)."""
+        if not self._use_ppo_history:
+            return
+        n = self._ppo_n_obs_steps
+        if len(agent_pos_frames) != n:
+            raise ValueError(f"Expected {n} agent_pos frames, got {len(agent_pos_frames)}")
+        self._ppo_history_buf = deque([t.clone() for t in agent_pos_frames], maxlen=n)
+
+    def seed_ppo_open_loop_from_trajectory(
+        self,
+        agent_pos_frames: List[torch.Tensor],
+        past_action_frames: Optional[List[torch.Tensor]] = None,
+    ) -> None:
+        """Set PPO actor history deques from logged data before :meth:`_strip_ppo_obs`.
+
+        ``agent_pos_frames`` length ``n_obs_steps``: concat of ``_ppo_history_obs_keys`` per frame,
+        oldest→newest (newest = current). ``past_action_frames`` length ``n_obs_steps-1``: actions
+        aligned with training past-action buffer (zeros before episode start). No-op if not
+        ``_use_ppo_history``.
+        """
+        if not self._use_ppo_history:
+            return
+        n = self._ppo_n_obs_steps
+        if len(agent_pos_frames) != n:
+            raise ValueError(
+                f"Expected {n} agent_pos frames (n_obs_steps), got {len(agent_pos_frames)}"
+            )
+        self._ppo_history_buf = deque([t.clone() for t in agent_pos_frames], maxlen=n)
+        if self._use_action_history and n > 1:
+            need = n - 1
+            if past_action_frames is None or len(past_action_frames) != need:
+                raise ValueError(
+                    f"Expected {need} past_action frames, got "
+                    f"{None if past_action_frames is None else len(past_action_frames)}"
+                )
+            self._ppo_past_action_buf = deque(
+                [t.clone() for t in past_action_frames],
+                maxlen=need,
+            )
+        else:
+            self._ppo_past_action_buf = None
 
     def reset_open_loop_buffers(self):
         """Clear CFM formatter and PPO history deques for a new open-loop pass without ``env.reset()``."""
