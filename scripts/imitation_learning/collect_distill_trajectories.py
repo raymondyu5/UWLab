@@ -63,6 +63,17 @@ parser.add_argument("--task", type=str, default="UW-FrankaLeap-GraspPinkCup-IkRe
 parser.add_argument("--output_dir", type=str, default="logs/distill_collection")
 parser.add_argument("--num_episodes", type=int, default=100)
 parser.add_argument("--num_warmup_steps", type=int, default=10)
+parser.add_argument(
+    "--stored_seg_pc_source",
+    type=str,
+    default="rendered",
+    choices=("rendered", "mesh", "both"),
+    help=(
+        "Which point cloud to store under dataset key 'seg_pc': "
+        "'rendered' (camera, default), 'mesh' (synthetic mesh), or 'both' "
+        "(store rendered in 'seg_pc' and mesh in extra key 'seg_pc_mesh')."
+    ),
+)
 parser.add_argument("--n_residual", type=int, default=0,
                     help="Number of leading PPO output dims that are residual (0 = pure noise). "
                          "Must match rfs.residual_dims end value from training config.")
@@ -72,6 +83,13 @@ parser.add_argument("--residual_scale", type=float, default=0.01,
 
 parser.add_argument("--asymmetric_ac", action="store_true", default=False,
                     help="Load AsymmetricActorCriticPolicy; actor sees PCD embedding + agent_pos history.")
+parser.add_argument(
+    "--actor_pcd_key",
+    type=str,
+    default="mesh",
+    choices=("mesh", "rendered"),
+    help="PCD source for the actor embedding: 'mesh' (mesh_pc, default) or 'rendered' (seg_pc from cameras).",
+)
 parser.add_argument("--finger_smooth_alpha", type=float, default=0.7,
                     help="LPFilter alpha for finger dims (matches dsrl_cfg.yaml). 1.0 = disabled.")
 parser.add_argument("--horizon", type=int, default=None,
@@ -116,7 +134,8 @@ class _RolloutBuffer(DictRolloutBuffer):
 
 
 def _compute_pcd_embedding(
-    policy_obs: dict, diffusion, downsample_points: int, device: torch.device
+    policy_obs: dict, diffusion, downsample_points: int, device: torch.device,
+    src_key: str = "mesh_pc",
 ) -> torch.Tensor:
     """Encode PCD for the asymmetric actor obs.
 
@@ -125,10 +144,12 @@ def _compute_pcd_embedding(
     mesh_pc and normalise it under the "seg_pc" key — exactly what happens in RL_MODE
     where cameras are disabled and policy_obs["seg_pc"] IS the mesh PC.
 
+    src_key: "mesh_pc" (default, matches training) or "seg_pc" (rendered, for gap eval).
+
     Returns (B, pcd_feat_dim).
     """
     pcd_key = diffusion.obs_encoder.pcd_keys[0]    # "seg_pc"
-    pcd = policy_obs["mesh_pc"].float()             # (B, 3, N)
+    pcd = policy_obs[src_key].float()               # (B, 3, N)
     N = pcd.shape[-1]
     if N > downsample_points:
         perm = torch.randperm(N, device=device)[:downsample_points]
@@ -219,6 +240,7 @@ def main():
     print(f"[collect_distill] Output: {args_cli.output_dir}")
     print(f"[collect_distill] Task: {args_cli.task}, episodes: {args_cli.num_episodes}")
     print(f"[collect_distill] asymmetric_ac: {args_cli.asymmetric_ac}")
+    print(f"[collect_distill] stored_seg_pc_source: {args_cli.stored_seg_pc_source}")
     print(f"[collect_distill] obs_keys: {metadata['obs_keys']}, n_obs_steps: {n_obs_steps}, "
           f"use_action_history: {use_action_history}")
 
@@ -273,9 +295,10 @@ def main():
                     [torch.zeros(1, action_dim, device=device) for _ in range(n_past)],
                     maxlen=n_past,
                 )
+            _actor_src_key = "seg_pc" if args_cli.actor_pcd_key == "rendered" else "mesh_pc"
             if args_cli.asymmetric_ac:
                 pcd_emb = _compute_pcd_embedding(
-                    post_warmup_policy_obs, diffusion, downsample_points, device
+                    post_warmup_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
                 )
 
             arm_joint_pos_list = []
@@ -285,6 +308,7 @@ def main():
             noise_list = []
             noise_mean_list = []
             seg_pc_list = []
+            seg_pc_mesh_list = []
             arm_joint_pos_target_list = []
             ee_pose_cmd_list = []
             rewards_list = []
@@ -357,9 +381,14 @@ def main():
                 actions_list.append(env_action[0].cpu().numpy())
                 noise_list.append(noise[0].cpu().numpy())
                 noise_mean_list.append(noise_mean.detach().cpu().numpy())
-                # seg_pc is camera-rendered in distill_mode (RenderedSegPC); this is what we store
-                # so the downstream BC student learns from camera-domain observations.
-                seg_pc_list.append(policy_obs["seg_pc"][0].T.cpu().numpy())
+                rendered_seg_pc = policy_obs["seg_pc"][0].T.cpu().numpy()
+                mesh_seg_pc = policy_obs["mesh_pc"][0].T.cpu().numpy()
+                if args_cli.stored_seg_pc_source == "mesh":
+                    seg_pc_list.append(mesh_seg_pc)
+                else:
+                    seg_pc_list.append(rendered_seg_pc)
+                if args_cli.stored_seg_pc_source == "both":
+                    seg_pc_mesh_list.append(mesh_seg_pc)
                 ee_pose_cmd_list.append(policy_obs["ee_pose"][0].cpu().numpy())
 
                 success_before = isaac_env.metrics.get_metrics()["is_success"]
@@ -385,7 +414,7 @@ def main():
                 # PCD embedding from post-step obs (used as actor_pcd_emb next step).
                 if args_cli.asymmetric_ac:
                     pcd_emb = _compute_pcd_embedding(
-                        new_policy_obs, diffusion, downsample_points, device
+                        new_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
                     )
 
                 arm_joint_pos_target_list.append(new_policy_obs["arm_joint_pos"][0].cpu().numpy())
@@ -417,6 +446,8 @@ def main():
                     "rewards":              np.array(rewards_list),
                     "dones":                np.array(dones_list),
                 }
+                if args_cli.stored_seg_pc_source == "both":
+                    episode_data["seg_pc_mesh"] = np.array(seg_pc_mesh_list)
                 _save_episode_zarr(args_cli.output_dir, n_success, episode_data)
                 n_success += 1
                 pbar.update(1)
