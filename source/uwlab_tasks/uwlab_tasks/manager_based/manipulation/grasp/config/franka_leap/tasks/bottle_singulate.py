@@ -36,6 +36,7 @@ from .rewards.singulate_rewards import (
 from ....mdp import (
     CachedSamplePC,
     reset_object_pose,
+    reset_bottle_and_box,
     reset_table_block,
     capture_bottle_reset_height,
     bottle_too_far,
@@ -62,15 +63,22 @@ BOX_USD = "/workspace/uwlab/assets/poptart/rigid_object.usd"
 BOX_OBJECT_NUM_POINTS = 128
 
 # ---------------------------------------------------------------------------
-# Spawn positions
-# Bottle: centred in workspace; box placed immediately to the -x side of bottle.
-# Gap between bottle edge and box edge: 0.015 m.
+# Bottle randomisation bounds (centre of bottle)
+# x: [.38 + bottle_width/2, .68 - bottle_width/2]
+# y: [.11 - bottle_length/2, .16 - bottle_length/2]
 # ---------------------------------------------------------------------------
-SINGULATE_BOTTLE_SPAWN_POS = (0.55, 0.0, 0.11)
+BOTTLE_X_RANGE = (0.38 + BOTTLE_WIDTH / 2, 0.68 - BOTTLE_WIDTH / 2)   # (0.42, 0.64)
+BOTTLE_Y_RANGE = (0.11 - BOTTLE_LENGTH / 2, 0.16 - BOTTLE_LENGTH / 2)  # (-0.015, 0.035)
+BOTTLE_RESET_HEIGHT = 0.11
 
-_box_center_x = SINGULATE_BOTTLE_SPAWN_POS[0] - BOTTLE_WIDTH / 2 - BOX_WIDTH / 2 - 0.015
-BOX_SPAWN_POS = (_box_center_x, 0.0, BOX_LENGTH / 2)
 BOX_SPAWN_ROT = (1.0, 0.0, 0.0, 0.0)  # upright, axis-aligned
+BOX_RESET_HEIGHT = BOX_LENGTH / 2      # 0.0675  (box stands upright on table)
+
+# Nominal centres (midpoint of randomisation range) — used for scene init_state and object_spawn_defaults.
+_BOTTLE_CENTER_X = (BOTTLE_X_RANGE[0] + BOTTLE_X_RANGE[1]) / 2   # 0.53
+_BOTTLE_CENTER_Y = (BOTTLE_Y_RANGE[0] + BOTTLE_Y_RANGE[1]) / 2   # 0.01
+SINGULATE_BOTTLE_SPAWN_POS = (_BOTTLE_CENTER_X, _BOTTLE_CENTER_Y, BOTTLE_RESET_HEIGHT)
+BOX_SPAWN_POS = (_BOTTLE_CENTER_X - BOTTLE_WIDTH / 2 - BOX_WIDTH / 2, _BOTTLE_CENTER_Y, BOX_RESET_HEIGHT)
 
 SINGULATE_HORIZON = 176
 
@@ -148,6 +156,9 @@ class SingulateBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             "reset_height": SINGULATE_BOTTLE_SPAWN_POS[2],
         }
 
+        # Disable the base-class reset_object event; reset_bottle_and_box handles both objects.
+        self.events.reset_object = None
+
         self.setup_horizon(horizon=SINGULATE_HORIZON)
 
         # Rewards
@@ -201,42 +212,22 @@ class SingulateBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             },
         )
 
-        self.events.reset_object = EventTerm(
-            func=reset_object_pose,
+        self.events.reset_bottle_and_box = EventTerm(
+            func=reset_bottle_and_box,
             mode="reset",
             params={
-                "asset_cfg": SceneEntityCfg("grasp_object"),
-                "default_pos": SINGULATE_BOTTLE_SPAWN_POS,
-                "default_rot_quat": BOTTLE_SPAWN_ROT,
-                "pose_range": {
-                    "x": (-0.05, 0.05),
-                    "y": (-0.05, 0.05),
-                    "z": (0.0, 0.0),
-                    "roll": (0.0, 0.0),
-                    "pitch": (0.0, 0.0),
-                    "yaw": (0.0, 0.0),
-                },
-                "reset_height": SINGULATE_BOTTLE_SPAWN_POS[2],
-                "table_block_name": "table_block",
-            },
-        )
-
-        self.events.reset_box_object = EventTerm(
-            func=reset_object_pose,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("box"),
-                "default_pos": BOX_SPAWN_POS,
-                "default_rot_quat": BOX_SPAWN_ROT,
-                "pose_range": {
-                    "x": (-0.01, 0.01),
-                    "y": (-0.05, 0.05),
-                    "z": (0.0, 0.0),
-                    "roll": (0.0, 0.0),
-                    "pitch": (0.0, 0.0),
-                    "yaw": (0.0, 0.0),
-                },
-                "reset_height": BOX_SPAWN_POS[2],
+                "bottle_cfg": SceneEntityCfg("grasp_object"),
+                "box_cfg": SceneEntityCfg("box"),
+                "bottle_x_range": BOTTLE_X_RANGE,
+                "bottle_y_range": BOTTLE_Y_RANGE,
+                "bottle_rot_quat": BOTTLE_SPAWN_ROT,
+                "bottle_reset_height": BOTTLE_RESET_HEIGHT,
+                "bottle_width": BOTTLE_WIDTH,
+                "bottle_length": BOTTLE_LENGTH,
+                "box_width": BOX_WIDTH,
+                "box_length": BOX_LENGTH,
+                "box_rot_quat": BOX_SPAWN_ROT,
+                "box_reset_height": BOX_RESET_HEIGHT,
                 "table_block_name": "table_block",
             },
         )

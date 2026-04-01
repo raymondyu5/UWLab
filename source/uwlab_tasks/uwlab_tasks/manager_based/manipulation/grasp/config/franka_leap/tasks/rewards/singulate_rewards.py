@@ -17,7 +17,7 @@ SUCCESS_DIST_THRESHOLD = 0.1  # 3-D distance to target to count as success
 # exceeds this threshold. The nominal spawn separation is ~0.10 m
 # (BOTTLE_WIDTH/2 + gap + BOX_WIDTH/2 = 0.04 + 0.015 + 0.045),
 # so this triggers as soon as the box has been pushed meaningfully away.
-BOX_CLEAR_DIST_THRESHOLD = 0.12
+BOX_CLEAR_DIST_THRESHOLD = 0.15
 
 
 # ---------------------------------------------------------------------------

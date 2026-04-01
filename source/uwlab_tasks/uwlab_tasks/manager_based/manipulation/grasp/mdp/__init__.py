@@ -16,6 +16,7 @@ from .events import (
     apply_sysid_params_on_reset,
     reset_robot_joints,
     reset_object_pose,
+    reset_bottle_and_box,
     reset_table_block,
     reset_camera_pose,
     set_fixed_camera_view,

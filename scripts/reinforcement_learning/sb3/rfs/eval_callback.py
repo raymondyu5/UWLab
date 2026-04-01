@@ -435,10 +435,12 @@ class RFSEvalCallback(BaseCallback):
         # Eval modified env state, formatter buffers, and PPO history.
         # Reset everything and sync SB3's cached obs so the next training
         # rollout doesn't start from a stale observation.
-        reset_out = self.model.env.reset()
-        sb3_obs = reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
-        self.model._last_obs = sb3_obs
-        self.model._last_episode_starts = np.ones((num_envs,), dtype=bool)
+        # (Skip for non-SB3 models like GaussianNoisePolicy that have no env/obs cache.)
+        if hasattr(self.model, "env") and self.model.env is not None:
+            reset_out = self.model.env.reset()
+            sb3_obs = reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
+            self.model._last_obs = sb3_obs
+            self.model._last_episode_starts = np.ones((num_envs,), dtype=bool)
 
     def _run_fixed_pose_eval(self, logger, isaac_env, device, num_envs):
         poses = self.spawn_cfg.poses

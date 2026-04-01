@@ -194,3 +194,67 @@ def reset_object_pose(
 
     asset.write_root_pose_to_sim(target_state[:, :7], env_ids=env_ids)
     asset.write_root_velocity_to_sim(target_state[:, 7:], env_ids=env_ids)
+
+
+def reset_bottle_and_box(
+    env,
+    env_ids: torch.Tensor,
+    bottle_cfg: SceneEntityCfg,
+    box_cfg: SceneEntityCfg,
+    bottle_x_range: tuple,
+    bottle_y_range: tuple,
+    bottle_rot_quat: tuple,
+    bottle_reset_height: float,
+    bottle_width: float,
+    bottle_length: float,
+    box_width: float,
+    box_length: float,
+    box_rot_quat: tuple,
+    box_reset_height: float,
+    table_block_name: str | None = None,
+):
+    """Reset bottle to a random position and place box relative to it.
+
+    The bottle is sampled uniformly from bottle_x_range × bottle_y_range.
+    The box is placed flush against the -x face of the bottle, with its y
+    sampled uniformly along the bottle's length.
+    """
+    n = len(env_ids)
+    device = env.device
+    origins = env.scene.env_origins[env_ids]
+
+    # Optional table block z offset (same for both objects)
+    block_z_offset = torch.zeros(n, device=device)
+    if table_block_name is not None:
+        block = env.scene[table_block_name]
+        block_z_offset = (
+            block.data.root_state_w[env_ids, 2]
+            - env.scene.env_origins[env_ids, 2]
+            - block.data.default_root_state[env_ids, 2]
+        )
+
+    # --- Bottle ---
+    bottle_x = torch.empty(n, device=device).uniform_(*bottle_x_range)
+    bottle_y = torch.empty(n, device=device).uniform_(*bottle_y_range)
+    bottle_z = origins[:, 2] + bottle_reset_height + block_z_offset
+
+    bottle_pos = torch.stack([origins[:, 0] + bottle_x, origins[:, 1] + bottle_y, bottle_z], dim=1)
+    bottle_quat = torch.tensor(list(bottle_rot_quat), device=device, dtype=torch.float32).unsqueeze(0).expand(n, -1)
+
+    bottle = env.scene[bottle_cfg.name]
+    bottle.write_root_pose_to_sim(torch.cat([bottle_pos, bottle_quat], dim=-1), env_ids=env_ids)
+    bottle.write_root_velocity_to_sim(torch.zeros(n, 6, device=device), env_ids=env_ids)
+
+    # --- Box: flush against the -x face of the bottle ---
+    box_x = bottle_x - bottle_width / 2 - box_width / 2
+    # y sampled uniformly along the bottle's length
+    y_half_range = (bottle_length - box_length) / 2
+    box_y = bottle_y + torch.empty(n, device=device).uniform_(-y_half_range, y_half_range)
+    box_z = origins[:, 2] + box_reset_height + block_z_offset
+
+    box_pos = torch.stack([origins[:, 0] + box_x, origins[:, 1] + box_y, box_z], dim=1)
+    box_quat = torch.tensor(list(box_rot_quat), device=device, dtype=torch.float32).unsqueeze(0).expand(n, -1)
+
+    box = env.scene[box_cfg.name]
+    box.write_root_pose_to_sim(torch.cat([box_pos, box_quat], dim=-1), env_ids=env_ids)
+    box.write_root_velocity_to_sim(torch.zeros(n, 6, device=device), env_ids=env_ids)
