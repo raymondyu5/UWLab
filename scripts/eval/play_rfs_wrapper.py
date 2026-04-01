@@ -37,7 +37,7 @@ parser.add_argument(
 parser.add_argument(
     "--rfs_cfg",
     type=str,
-    default="configs/rl/rfs_cfg.yaml",
+    default="configs/rl/arm_rfs_joint_cfg.yaml",
     help="RFS hyperparams (noise_dims, residual_dims, residual_step, ...).",
 )
 parser.add_argument(
