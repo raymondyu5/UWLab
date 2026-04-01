@@ -11,13 +11,13 @@ GRASPED_Z_THRESHOLD = 0.15    # bottle centre z (env-local) above table to count
 
 # Target: workspace centre at z=0.30. Must match SINGULATE_TARGET_POS in bottle_singulate.py.
 SINGULATE_TARGET_POS = (0.55, 0.0, 0.30)
-SUCCESS_DIST_THRESHOLD = 0.10  # 3-D distance to target to count as success
+SUCCESS_DIST_THRESHOLD = 0.1  # 3-D distance to target to count as success
 
 # Box approach corridor: box is "clear" when its XY distance from the bottle
 # exceeds this threshold. The nominal spawn separation is ~0.10 m
 # (BOTTLE_WIDTH/2 + gap + BOX_WIDTH/2 = 0.04 + 0.015 + 0.045),
 # so this triggers as soon as the box has been pushed meaningfully away.
-BOX_CLEAR_DIST_THRESHOLD = 0.10
+BOX_CLEAR_DIST_THRESHOLD = 0.12
 
 
 # ---------------------------------------------------------------------------

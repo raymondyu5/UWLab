@@ -735,7 +735,7 @@ class RFSWrapper:
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         any_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        metric_keys = ("is_success", "is_grasped", "is_healthy_z", "is_near_miss")
+        metric_keys = tuple(self.unwrapped.metrics._specs.keys())
         metrics_seen: dict[str, torch.Tensor] | None = None
         if self.enable_metrics_cache:
             metrics_seen = {

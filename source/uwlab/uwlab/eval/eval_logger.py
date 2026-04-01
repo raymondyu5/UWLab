@@ -70,16 +70,14 @@ class EvalLogger:
             self._current["fixed_frames"].append(fixed_frame)
 
     def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
-                    n_grasped: int = None, n_lifted: int = None, n_near_miss: int = None,
-                    n_success_ever: int = None):
+                    n_success_ever: int = None,
+                    extra_metrics: dict[str, int] | None = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
         self._current["n_success"] = n_success
         self._current["n_total"] = n_total
-        self._current["n_grasped"] = n_grasped
-        self._current["n_lifted"] = n_lifted
-        self._current["n_near_miss"] = n_near_miss
         self._current["n_success_ever"] = n_success_ever
+        self._current["extra_metrics"] = dict(extra_metrics) if extra_metrics else {}
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
             self._current["frames"] = []  # free memory
@@ -87,10 +85,13 @@ class EvalLogger:
         self._episodes.append(self._current)
         self._current = None
 
-    def record_scatter_points(self, xs, ys, successes, lifted):
-        """Record per-env (x, y, success, lifted) results for scatter plot visualization."""
-        for x, y, s, l in zip(xs, ys, successes, lifted):
-            self._scatter_points.append({"x": float(x), "y": float(y), "success": bool(s), "lifted": bool(l)})
+    def record_scatter_points(self, xs, ys, successes, secondary=None, secondary_name: str = "secondary"):
+        """Record per-env (x, y, success, optional secondary metric) for scatter visualization."""
+        for i, (x, y, s) in enumerate(zip(xs, ys, successes)):
+            pt = {"x": float(x), "y": float(y), "success": bool(s)}
+            if secondary is not None:
+                pt[secondary_name] = bool(secondary[i])
+            self._scatter_points.append(pt)
 
     def finalize(self) -> dict:
         results = self._write_results()
@@ -111,6 +112,15 @@ class EvalLogger:
         )
         success_rate = n_success / n_total if n_total > 0 else 0.0
 
+        # Collect all extra_metric keys across episodes
+        all_extra_keys: list[str] = []
+        seen = set()
+        for e in self._episodes:
+            for k in e.get("extra_metrics", {}).keys():
+                if k not in seen:
+                    all_extra_keys.append(k)
+                    seen.add(k)
+
         records = []
         for i, ep in enumerate(self._episodes):
             rec = {
@@ -122,36 +132,43 @@ class EvalLogger:
             if ep.get("n_success") is not None and ep.get("n_total") is not None:
                 rec["n_success"] = ep["n_success"]
                 rec["n_total"] = ep["n_total"]
-            for key in ("n_grasped", "n_lifted", "n_near_miss"):
-                if ep.get(key) is not None:
-                    rec[key] = ep[key]
+            for k in all_extra_keys:
+                v = ep.get("extra_metrics", {}).get(k)
+                if v is not None:
+                    rec[k] = v
             records.append(rec)
 
-        def _sum_metric(key):
-            eps = [e for e in self._episodes if e.get(key) is not None]
-            n_sum = sum(e[key] for e in eps)
-            n_trials = sum(e["n_total"] for e in eps if e.get("n_total") is not None)
+        def _sum_extra(key):
+            eps = [e for e in self._episodes if e.get("extra_metrics", {}).get(key) is not None]
+            n_sum = sum(e["extra_metrics"][key] for e in eps)
+            n_trials = sum(e["n_total"] for e in self._episodes if e.get("n_total") is not None)
             rate = n_sum / n_trials if n_trials > 0 else 0.0
-            return n_sum, n_trials, rate
+            return n_sum, rate
 
-        n_grasped, _, grasped_rate = _sum_metric("n_grasped")
-        n_lifted, _, lifted_rate = _sum_metric("n_lifted")
-        n_near_miss, _, near_miss_rate = _sum_metric("n_near_miss")
-        n_success_ever, _, success_rate_ever = _sum_metric("n_success_ever")
+        n_success_ever_sum = sum(
+            e.get("extra_metrics", {}).get("n_success_ever", 0) for e in self._episodes
+        )
+        n_success_ever_rate = n_success_ever_sum / n_total if n_total > 0 else 0.0
+        # n_success_ever stored directly on episode for backward compat
+        n_success_ever_direct = sum(
+            e["n_success_ever"] for e in self._episodes if e.get("n_success_ever") is not None
+        )
+        n_success_ever_total = n_success_ever_direct or n_success_ever_sum
+        success_rate_ever = n_success_ever_total / n_total if n_total > 0 else 0.0
+
+        extra_rates: dict[str, dict] = {}
+        for k in all_extra_keys:
+            n, rate = _sum_extra(k)
+            extra_rates[k] = {"n": n, "rate": rate}
 
         summary = {
             "n_episodes": n_episodes,
             "n_success": n_success,
             "n_total": n_total,
             "success_rate": success_rate,
-            "n_success_ever": n_success_ever,
+            "n_success_ever": n_success_ever_total,
             "success_rate_ever": success_rate_ever,
-            "n_near_miss": n_near_miss,
-            "near_miss_rate": near_miss_rate,
-            "n_lifted": n_lifted,
-            "lifted_rate": lifted_rate,
-            "n_grasped": n_grasped,
-            "grasped_rate": grasped_rate,
+            "extra_metric_rates": {k: v["rate"] for k, v in extra_rates.items()},
             "episodes": records,
         }
 
@@ -160,10 +177,9 @@ class EvalLogger:
             json.dump(summary, f, indent=2)
 
         msg = f"[EvalLogger] {n_success}/{n_total} success_end ({100*success_rate:.1f}%)"
-        msg += f", {n_success_ever}/{n_total} success_ever ({100*success_rate_ever:.1f}%)"
-        msg += f", {n_near_miss}/{n_total} near_miss ({100*near_miss_rate:.1f}%)"
-        msg += f", {n_lifted}/{n_total} lifted ({100*lifted_rate:.1f}%)"
-        msg += f", {n_grasped}/{n_total} grasped ({100*grasped_rate:.1f}%)"
+        msg += f", {n_success_ever_total}/{n_total} success_ever ({100*success_rate_ever:.1f}%)"
+        for k, v in extra_rates.items():
+            msg += f", {v['n']}/{n_total} {k} ({100*v['rate']:.1f}%)"
         print(f"{msg} -> {out_path}")
         return summary
 
@@ -226,20 +242,22 @@ class EvalLogger:
     def _write_scatter_plots(self):
         points = self._scatter_points
         successes = np.array([p["success"] for p in points])
-        lifted = np.array([p["lifted"] for p in points])
-
         self._write_scatter_plot(
             metric=successes,
             positive_label="success",
             title_metric_name="success",
             filename="scatter_success.png",
         )
-        self._write_scatter_plot(
-            metric=lifted,
-            positive_label="lifted",
-            title_metric_name="lifted",
-            filename="scatter_lifted.png",
-        )
+        # Write a scatter for every secondary metric recorded in scatter points.
+        extra_keys = [k for k in points[0].keys() if k not in ("x", "y", "success")] if points else []
+        for key in extra_keys:
+            vals = np.array([p.get(key, False) for p in points])
+            self._write_scatter_plot(
+                metric=vals,
+                positive_label=key,
+                title_metric_name=key,
+                filename=f"scatter_{key}.png",
+            )
 
     def _write_episode_video(self, episode_idx: int, ep: dict):
         import imageio

@@ -131,6 +131,45 @@ gym.register(
 )
 
 
+########## Bottle Singulate #########
+
+gym.register(
+    id="UW-FrankaLeap-SingulateBottle-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_singulate:SingulateBottleFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-SingulateBottle-JointRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_singulate:SingulateBottleFrankaLeapJointRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-SingulateBottle-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_singulate:SingulateBottleFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-SingulateBottle-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_singulate:SingulateBottleFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Empty #########
 
 gym.register(
