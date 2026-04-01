@@ -46,6 +46,8 @@ from ....mdp import (
     bottle_dropped,
     bottle_too_far,
     cup_toppled,
+    log_object_mass,
+    log_object_scales,
 )
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
@@ -69,37 +71,6 @@ PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 # POUR_HORIZON = 112
 POUR_HORIZON = 128
 
-
-def _log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
-    asset = env.scene[asset_cfg.name]
-    masses = asset.root_physx_view.get_masses()  # (num_envs,)
-    print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
-
-
-_scale_logged = False
-
-def _log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
-    global _scale_logged
-    if _scale_logged:
-        return
-    _scale_logged = True
-    try:
-        import isaaclab.sim as sim_utils
-        from pxr import UsdGeom
-        stage = sim_utils.get_current_stage()
-        for asset_name in ("grasp_object", "pink_cup"):
-            prim_path_template = env.scene[asset_name].cfg.prim_path
-            paths = sim_utils.find_matching_prim_paths(prim_path_template)[:4]
-            scales = []
-            for p in paths:
-                prim = stage.GetPrimAtPath(p)
-                for op in UsdGeom.Xformable(prim).GetOrderedXformOps():
-                    if "scale" in op.GetOpName():
-                        scales.append(tuple(round(v, 3) for v in op.Get()))
-                        break
-            print(f"[DR] {asset_name} scales (first {len(scales)} envs): {scales}")
-    except Exception as e:
-        print(f"[DR] scale logging failed: {e}")
 
 
 def obs_cup_pose(env) -> torch.Tensor:
@@ -289,9 +260,15 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         )
 
         self.events.log_object_scales = EventTerm(
-            func=_log_object_scales,
+            func=log_object_scales,
             mode="reset",
             params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        self.events.log_cup_scales = EventTerm(
+            func=log_object_scales,
+            mode="reset",
+            params={"asset_cfg": SceneEntityCfg("pink_cup")},
         )
 
         self.events.randomize_object_mass = EventTerm(
@@ -307,7 +284,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         )
 
         self.events.log_object_mass = EventTerm(
-            func=_log_object_mass,
+            func=log_object_mass,
             mode="reset",
             min_step_count_between_reset=800,
             params={"asset_cfg": SceneEntityCfg("grasp_object")},

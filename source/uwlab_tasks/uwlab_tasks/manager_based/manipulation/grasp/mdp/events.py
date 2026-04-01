@@ -258,3 +258,35 @@ def reset_bottle_and_box(
     box = env.scene[box_cfg.name]
     box.write_root_pose_to_sim(torch.cat([box_pos, box_quat], dim=-1), env_ids=env_ids)
     box.write_root_velocity_to_sim(torch.zeros(n, 6, device=device), env_ids=env_ids)
+
+
+_scales_logged: set = set()
+
+
+def log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
+    asset = env.scene[asset_cfg.name]
+    masses = asset.root_physx_view.get_masses()
+    print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
+
+
+def log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
+    global _scales_logged
+    if asset_cfg.name in _scales_logged:
+        return
+    _scales_logged.add(asset_cfg.name)
+    try:
+        import isaaclab.sim as sim_utils
+        from pxr import UsdGeom
+        stage = sim_utils.get_current_stage()
+        prim_path_template = env.scene[asset_cfg.name].cfg.prim_path
+        paths = sim_utils.find_matching_prim_paths(prim_path_template)[:4]
+        scales = []
+        for p in paths:
+            prim = stage.GetPrimAtPath(p)
+            for op in UsdGeom.Xformable(prim).GetOrderedXformOps():
+                if "scale" in op.GetOpName():
+                    scales.append(tuple(round(v, 3) for v in op.Get()))
+                    break
+        print(f"[DR] {asset_cfg.name} scales (first {len(scales)} envs): {scales}")
+    except Exception as e:
+        print(f"[DR] scale logging failed: {e}")

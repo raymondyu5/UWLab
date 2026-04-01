@@ -17,36 +17,38 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from .... import mdp
-from ....mdp import CachedSamplePC, reset_object_pose, reset_table_block
+from ....mdp import CachedSamplePC, reset_object_pose, reset_table_block, bottle_too_far, log_object_mass, log_object_scales
 from .rewards.grasp_rewards import GraspReward
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
-# Pink cup spawn values from rl_env_ycb_cam_custom_init_pink_cup.yaml (RigidObject section):
-# pos: [0.55, 0.0, 0.11], rot: axis=[0], angles=[1.57] -> X-axis 90deg -> quat (0.707, 0.707, 0, 0)
-# scale: [1.0, 1.0, 1.0] — the 0.35 scale in recenter_ycb.yaml is baked into rigid_object.usd already
-# pose_range: x: [-0.05, 0.05], y: [-0.05, 0.05], z: [0,0], roll: [0,0], yaw: [0,0]
+# Cup origin is at the bottom of the mesh (~15cm tall), so spawn z=0.11 places the bottom on the table.
+# Spawn center: x=0.525 (midpoint of real-world x∈[0.45,0.60]), y=0.1
+# pose_range: x ±0.075 covers [0.45, 0.60]; y ±0.02
 
-PINK_CUP_HORIZON = 200
-PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40) # from yaml
+PINK_CUP_HORIZON = 128
+PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40)
 PINK_CUP_OBJECT_NUM_POINTS = 128
 
 PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
+PINK_CUP_SPAWN_POS = (0.525, 0.1, 0.07)
+PINK_CUP_SPAWN_ROT = (0.707, 0.707, 0.0, 0.0)
 
 @configclass
 class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
     grasp_object = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/GraspObject",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.55, 0.0, 0.11),
-            rot=(0.707, 0.707, 0.0, 0.0),
+            pos=PINK_CUP_SPAWN_POS,
+            rot=PINK_CUP_SPAWN_ROT,
         ),
         spawn=sim_utils.UsdFileCfg(
             usd_path=PINK_CUP_USD,
@@ -62,7 +64,7 @@ class GraspPinkCupSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
 
     table_block = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TableBlock",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(PINK_CUP_SPAWN_POS[0], PINK_CUP_SPAWN_POS[1], 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=sim_utils.UsdFileCfg(
             usd_path="/workspace/uwlab/assets/table/table_block.usd",
             scale=(1.2, 1.0, 0.10),
@@ -86,6 +88,7 @@ class GraspPinkCupSysidSceneCfg(GraspPinkCupSceneCfg):
 
 
 SUCCESS_HEIGHT = 0.20  # object z above table (local frame) to count as grasped
+GRASPED_HEIGHT = 0.12  # 12cm above table — requires actual lift from z=0.07 spawn
 
 
 @configclass
@@ -93,8 +96,7 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     scene: GraspPinkCupSceneCfg = GraspPinkCupSceneCfg(num_envs=1, env_spacing=2.5)
     table_z_range: tuple = (0.0, 0.05)  # set to (0.0, 0.0) to disable table height randomization
 
-    def is_success(self, env) -> torch.Tensor:
-        """Returns bool tensor (num_envs,): True if object is lifted above SUCCESS_HEIGHT."""
+    def _cup_z_above_table(self, env) -> torch.Tensor:
         obj = env.scene["grasp_object"]
         pos = obj.data.root_pos_w - env.scene.env_origins
         block = env.scene["table_block"]
@@ -103,12 +105,20 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             - env.scene.env_origins[:, 2]
             - block.data.default_root_state[:, 2]
         )
-        return pos[:, 2] >= (SUCCESS_HEIGHT + table_z_offset)
+        return pos[:, 2], table_z_offset
+
+    def is_grasped(self, env) -> torch.Tensor:
+        z, table_z_offset = self._cup_z_above_table(env)
+        return z >= (GRASPED_HEIGHT + table_z_offset)
+
+    def is_success(self, env) -> torch.Tensor:
+        z, table_z_offset = self._cup_z_above_table(env)
+        return z >= (SUCCESS_HEIGHT + table_z_offset)
 
     def __post_init__(self):
         super().__post_init__()
 
-        # Default object spawn pose from scene config (set in __post_init__); used by eval scripts.
+        # Default object spawn pose from scene config; used by eval scripts.
         init = self.scene.grasp_object.init_state
         self.object_spawn_defaults = {
             "default_pos": tuple(init.pos),
@@ -116,15 +126,16 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             "reset_height": float(init.pos[2]),
         }
 
-        self.horizon = PINK_CUP_HORIZON
-        self.episode_length_s = self.horizon * self.decimation * self.sim.dt
+        self.setup_horizon(horizon=PINK_CUP_HORIZON)
 
-        # # --- Instantiate GraspReward and add finger contact sensors ---
+        self.metrics_spec = {"is_success": self.is_success, "is_grasped": self.is_grasped}
+
+        # --- Instantiate GraspReward and add finger contact sensors ---
         grasp_rew = GraspReward(
             asset_name="robot",
             object_name="grasp_object",
             fingers_name_list=FINGERS_NAME_LIST,
-            init_height=0.11,
+            init_height=float(init.pos[2]),
             target_pos=PINK_CUP_TARGET_POS,
         )
         grasp_rew.setup_additional(self.scene)
@@ -163,17 +174,17 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "default_pos": (0.55, 0.0, 0.11),
-                "default_rot_quat": (0.707, 0.707, 0.0, 0.0),
+                "default_pos": PINK_CUP_SPAWN_POS,
+                "default_rot_quat": PINK_CUP_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.05, 0.05),
-                    "y": (-0.05, 0.05),
+                    "x": (-0.075, 0.075),
+                    "y": (-0.02, 0.02),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
-                "reset_height": 0.11,
+                "reset_height": PINK_CUP_SPAWN_POS[2],
                 "table_block_name": "table_block",
             },
         )
@@ -207,6 +218,37 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "operation": "scale",
                 "distribution": "uniform",
             },
+        )
+
+        self.events.randomize_object_scale = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_scale,
+            mode="prestartup",
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "scale_range": (0.8, 1.2),
+            },
+        )
+
+        self.events.log_object_mass = EventTerm(
+            func=log_object_mass,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        self.events.log_object_scales = EventTerm(
+            func=log_object_scales,
+            mode="reset",
+            params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        self.terminations.cup_too_far = DoneTerm(
+            func=bottle_too_far,
+            params={
+                "object_name": "grasp_object",
+                "max_xy_dist": 1.0,
+            },
+            time_out=False,
         )
 
 @configclass

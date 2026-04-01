@@ -62,6 +62,12 @@ parser.add_argument("--task", type=str, default="UW-FrankaLeap-GraspPinkCup-IkRe
                     help="Task with seg_pc (GraspPinkCup, PourBottle, GraspBottle). Must use IkRel-v0.")
 parser.add_argument("--output_dir", type=str, default="logs/distill_collection")
 parser.add_argument("--num_episodes", type=int, default=100)
+parser.add_argument(
+    "--num_envs",
+    type=int,
+    default=1,
+    help="Number of parallel envs. Only used in mesh mode (RL_MODE, no cameras). Forced to 1 in rendered mode.",
+)
 parser.add_argument("--num_warmup_steps", type=int, default=10)
 parser.add_argument(
     "--stored_seg_pc_source",
@@ -105,7 +111,7 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-from collections import deque
+from collections import deque, defaultdict
 
 import gymnasium as gym
 import numpy as np
@@ -119,6 +125,7 @@ import uwlab_tasks  # noqa: F401
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_franka_leap import (
     parse_franka_leap_env_cfg,
     DISTILL_MODE,
+    RL_MODE,
 )
 
 from wrapper import _load_cfm_checkpoint, LPFilter  # handles both old and new checkpoint formats
@@ -217,29 +224,40 @@ def main():
         custom_objects["policy_class"] = AsymmetricActorCriticPolicy
     agent = PPO.load(args_cli.ppo_checkpoint, device=device, custom_objects=custom_objects)
 
+    # Mode selection:
+    #   mesh mode   → RL_MODE (no cameras, seg_pc IS mesh_pc) → supports num_envs > 1
+    #   rendered mode → DISTILL_MODE (cameras required)       → forces num_envs=1
+    use_rl_mode = (args_cli.actor_pcd_key == "mesh")
+    num_envs = args_cli.num_envs if use_rl_mode else 1
+    if not use_rl_mode and args_cli.num_envs > 1:
+        print(f"[collect_distill] WARNING: rendered mode requires cameras; forcing num_envs=1 (requested {args_cli.num_envs})")
+    run_mode = RL_MODE if use_rl_mode else DISTILL_MODE
+
+    # In RL_MODE, seg_pc is already mesh — no separate mesh_pc key exists.
+    # In DISTILL_MODE rendered mode, actor and diffusion both see rendered seg_pc.
+    # In DISTILL_MODE mesh mode (single env), actor and diffusion see mesh_pc via override.
+    _actor_src_key = "seg_pc" if use_rl_mode else ("seg_pc" if args_cli.actor_pcd_key == "rendered" else "mesh_pc")
+
     env_cfg = parse_franka_leap_env_cfg(
         args_cli.task,
-        DISTILL_MODE,
+        run_mode,
         device=str(device),
-        num_envs=1,
+        num_envs=num_envs,
         use_fabric=not args_cli.disable_fabric,
     )
     if args_cli.horizon is not None:
-        # horizon = policy steps only; add both warmup budgets so the episode
-        # isn't cut short before the policy gets args_cli.horizon full steps.
         total_steps = (args_cli.horizon
-                       + env_cfg.num_warmup_steps        # internal env warmup
-                       + args_cli.num_warmup_steps)      # external script warmup
+                       + env_cfg.num_warmup_steps
+                       + args_cli.num_warmup_steps)
         env_cfg.horizon = total_steps
         env_cfg.episode_length_s = total_steps * env_cfg.decimation * env_cfg.sim.dt
     env = gym.make(args_cli.task, cfg=env_cfg)
     isaac_env = env.unwrapped
-    episode_steps = int(isaac_env.max_episode_length)
 
     os.makedirs(args_cli.output_dir, exist_ok=True)
     print(f"[collect_distill] Output: {args_cli.output_dir}")
-    print(f"[collect_distill] Task: {args_cli.task}, episodes: {args_cli.num_episodes}")
-    print(f"[collect_distill] asymmetric_ac: {args_cli.asymmetric_ac}")
+    print(f"[collect_distill] Task: {args_cli.task}, episodes: {args_cli.num_episodes}, num_envs: {num_envs}, mode: {run_mode}")
+    print(f"[collect_distill] asymmetric_ac: {args_cli.asymmetric_ac}, actor_pcd_key: {args_cli.actor_pcd_key}")
     print(f"[collect_distill] stored_seg_pc_source: {args_cli.stored_seg_pc_source}")
     print(f"[collect_distill] obs_keys: {metadata['obs_keys']}, n_obs_steps: {n_obs_steps}, "
           f"use_action_history: {use_action_history}")
@@ -247,216 +265,219 @@ def main():
     finger_filter = LPFilter(alpha=args_cli.finger_smooth_alpha).to(device) \
         if args_cli.finger_smooth_alpha < 1.0 else None
 
-    # num_episodes = target number of SUCCESSFUL episodes to save.
-    # Loop until that many successes are collected; failures are discarded.
-    # Note: PourBottle has no success termination — only failure terminations
-    # (bottle_dropped, bottle_too_far, cup_toppled). terminated=True always means
-    # failure; success is only possible at truncated=True (timeout). We check
-    # is_success() BEFORE env.step() because IsaacLab auto-resets on termination,
-    # so querying after would return the reset state.
+    # --- Initial reset and warmup (applied to all envs together at startup) ---
+    # When envs auto-reset mid-collection, they receive the env's internal warmup
+    # (env_cfg.num_warmup_steps) but not this external warmup. Acceptable tradeoff.
+    obs_raw, _ = env.reset()
+    formatter.reset()
+    if finger_filter is not None:
+        finger_filter.reset()
+        finger_filter(isaac_env.scene["robot"].data.joint_pos[:, 7:])
+
+    warmup_act = isaac_env.cfg.warmup_action(isaac_env)  # (num_envs, action_dim)
+    for _ in range(args_cli.num_warmup_steps):
+        obs_raw, _, _, _, _ = env.step(warmup_act)
+
+    # --- Initialize batch PPO history buffers from post-warmup obs ---
+    post_warmup_policy_obs = obs_raw["policy"]
+    post_warmup_agent_pos = torch.cat(
+        [post_warmup_policy_obs[k].float() for k in metadata["obs_keys"]], dim=-1
+    )  # (num_envs, D)
+    ppo_history_buf = deque(
+        [post_warmup_agent_pos.clone() for _ in range(n_obs_steps)],
+        maxlen=n_obs_steps,
+    )
+    if use_action_history and n_obs_steps > 1:
+        n_past = n_obs_steps - 1
+        ppo_past_action_buf = deque(
+            [torch.zeros(num_envs, action_dim, device=device) for _ in range(n_past)],
+            maxlen=n_past,
+        )
+    else:
+        ppo_past_action_buf = None
+
+    if args_cli.asymmetric_ac:
+        pcd_emb = _compute_pcd_embedding(
+            post_warmup_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
+        )  # (num_envs, feat_dim)
+
+    # --- Per-env episode state ---
+    # Note: PourBottle has no success termination — only failure terminations.
+    # terminated=True always means failure; success is checked via is_success BEFORE
+    # env.step() because IsaacLab auto-resets on termination.
+    env_data = [defaultdict(list) for _ in range(num_envs)]
+    ever_grasped   = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    ever_lifted    = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    ever_near_miss = torch.zeros(num_envs, dtype=torch.bool, device=device)
+
     n_success = 0
     n_attempts = 0
+    n_ever_grasped = 0
+    n_ever_lifted = 0
+    n_ever_near_miss = 0
+
     with torch.inference_mode():
         pbar = tqdm(total=args_cli.num_episodes, desc="collect_distill")
         while n_success < args_cli.num_episodes:
-            n_attempts += 1
-            obs_raw, _ = env.reset()
+            policy_obs = obs_raw["policy"]
 
-            # Reset formatter and PPO history buffers — mirrors RFSWrapper.reset().
-            formatter.reset()
-            ppo_history_buf = None
-            ppo_past_action_buf = None
+            # Build obs for diffusion base policy.
+            # In RL_MODE, seg_pc is already mesh — no override needed.
+            # In DISTILL_MODE rendered mode, diffusion also sees rendered seg_pc.
+            # In DISTILL_MODE mesh mode, override seg_pc with mesh_pc to match training.
+            if use_rl_mode:
+                mesh_obs = policy_obs
+            else:
+                mesh_obs = dict(policy_obs)
+                if _actor_src_key != "seg_pc":
+                    mesh_obs["seg_pc"] = policy_obs["mesh_pc"]
 
+            diff_obs = formatter.format(mesh_obs)
+
+            # Build PPO obs (batch: num_envs).
+            if args_cli.asymmetric_ac:
+                actor_obs = {
+                    "actor_pcd_emb": pcd_emb.cpu().numpy(),  # (num_envs, feat_dim)
+                    "actor_agent_pos_history": torch.stack(
+                        list(ppo_history_buf), dim=1
+                    ).flatten(1).cpu().numpy(),  # (num_envs, n_obs_steps * D)
+                }
+                if use_action_history and n_obs_steps > 1 and ppo_past_action_buf is not None:
+                    actor_obs["actor_past_actions_history"] = torch.stack(
+                        list(ppo_past_action_buf), dim=1
+                    ).flatten(1).cpu().numpy()
+                obs_tensor, _ = agent.policy.obs_to_tensor(actor_obs)
+            else:
+                ppo_obs_np = _format_ppo_obs(policy_obs)  # (num_envs, D)
+                obs_tensor, _ = agent.policy.obs_to_tensor(ppo_obs_np)
+
+            dist = agent.policy.get_distribution(obs_tensor)
+            ppo_mean = dist.distribution.loc  # (num_envs, output_dim)
+            ppo_action_np = dist.get_actions(deterministic=False).detach().cpu().numpy()
+            ppo_action_np = np.clip(ppo_action_np, agent.action_space.low, agent.action_space.high)
+            ppo_action = torch.as_tensor(ppo_action_np, device=device)  # (num_envs, output_dim)
+
+            residual_raw = ppo_action[:, :args_cli.n_residual]
+            noise      = ppo_action[:, args_cli.n_residual:].reshape(num_envs, diffusion_horizon, action_dim)
+            noise_mean = ppo_mean[:, args_cli.n_residual:].reshape(num_envs, diffusion_horizon, action_dim)
+
+            base = diffusion.predict_action(diff_obs, noise)["action_pred"][:, 0]  # (num_envs, action_dim)
+            env_action = base.clone()
             if finger_filter is not None:
-                finger_filter.reset()
-                current_fingers = isaac_env.scene["robot"].data.joint_pos[:, 7:]
-                finger_filter(current_fingers)
+                env_action[:, 6:] = finger_filter(env_action[:, 6:])
+            if args_cli.n_residual > 0:
+                env_action[:, :args_cli.n_residual] += residual_raw * args_cli.residual_scale
 
-            # External warmup — mirrors RFSWrapper._do_warmup().
-            # Formatter is NOT updated during warmup (same as RFSWrapper).
-            warmup_act = isaac_env.cfg.warmup_action(isaac_env)
-            for _ in range(args_cli.num_warmup_steps):
-                obs_raw, _, _, _, _ = env.step(warmup_act)
+            # Collect pre-step data for each env.
+            for i in range(num_envs):
+                env_data[i]["arm_joint_pos"].append(policy_obs["arm_joint_pos"][i].cpu().numpy())
+                env_data[i]["hand_joint_pos"].append(policy_obs["hand_joint_pos"][i].cpu().numpy())
+                env_data[i]["ee_pose"].append(policy_obs["ee_pose"][i].cpu().numpy())
+                env_data[i]["actions"].append(env_action[i].cpu().numpy())
+                env_data[i]["noise"].append(noise[i].cpu().numpy())
+                env_data[i]["noise_mean"].append(noise_mean[i].detach().cpu().numpy())
+                env_data[i]["ee_pose_cmd"].append(policy_obs["ee_pose"][i].cpu().numpy())
+                if use_rl_mode:
+                    env_data[i]["seg_pc"].append(policy_obs["seg_pc"][i].T.cpu().numpy())
+                else:
+                    rendered_pc = policy_obs["seg_pc"][i].T.cpu().numpy()
+                    mesh_pc     = policy_obs["mesh_pc"][i].T.cpu().numpy()
+                    env_data[i]["seg_pc"].append(mesh_pc if args_cli.stored_seg_pc_source == "mesh" else rendered_pc)
+                    if args_cli.stored_seg_pc_source == "both":
+                        env_data[i]["seg_pc_mesh"].append(mesh_pc)
 
-            # Initialize PPO history buffers from post-warmup obs.
-            # Mirrors RFSWrapper.reset() after _do_warmup(): fills all n_obs_steps
-            # frames with the current obs and initialises past_action with zeros.
-            post_warmup_policy_obs = obs_raw["policy"]
-            post_warmup_agent_pos = torch.cat(
-                [post_warmup_policy_obs[k].float() for k in metadata["obs_keys"]], dim=-1
-            )  # (1, D)
-            ppo_history_buf = deque(
-                [post_warmup_agent_pos.clone() for _ in range(n_obs_steps)],
-                maxlen=n_obs_steps,
-            )
-            if use_action_history and n_obs_steps > 1:
-                n_past = n_obs_steps - 1
-                ppo_past_action_buf = deque(
-                    [torch.zeros(1, action_dim, device=device) for _ in range(n_past)],
-                    maxlen=n_past,
-                )
-            _actor_src_key = "seg_pc" if args_cli.actor_pcd_key == "rendered" else "mesh_pc"
+            # Get metrics before step (IsaacLab auto-resets on termination, so
+            # querying after would return reset-state metrics).
+            metrics = isaac_env.metrics.get_metrics()
+            success_before  = metrics["is_success"]
+            ever_grasped   |= torch.as_tensor(metrics["is_grasped"],   device=device).bool()
+            ever_lifted    |= torch.as_tensor(metrics["is_healthy_z"],  device=device).bool()
+            ever_near_miss |= torch.as_tensor(metrics["is_near_miss"],  device=device).bool()
+
+            obs_raw, reward, terminated, truncated, _ = env.step(env_action)
+
+            # Update histories for all envs (done-env reset handling corrects them below).
+            formatter.update_action(env_action)
+            new_policy_obs = obs_raw["policy"]
+            new_agent_pos = torch.cat(
+                [new_policy_obs[k].float() for k in metadata["obs_keys"]], dim=-1
+            )  # (num_envs, D)
+            ppo_history_buf.append(new_agent_pos)
+            if ppo_past_action_buf is not None:
+                ppo_past_action_buf.append(env_action.clone())
             if args_cli.asymmetric_ac:
                 pcd_emb = _compute_pcd_embedding(
-                    post_warmup_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
+                    new_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
                 )
 
-            arm_joint_pos_list = []
-            hand_joint_pos_list = []
-            ee_pose_list = []
-            actions_list = []
-            noise_list = []
-            noise_mean_list = []
-            seg_pc_list = []
-            seg_pc_mesh_list = []
-            arm_joint_pos_target_list = []
-            ee_pose_cmd_list = []
-            rewards_list = []
-            dones_list = []
+            # Collect post-step data for each env.
+            for i in range(num_envs):
+                env_data[i]["arm_joint_pos_target"].append(new_policy_obs["arm_joint_pos"][i].cpu().numpy())
+                r = reward[i]
+                env_data[i]["rewards"].append(float(r.item() if hasattr(r, "item") else r))
+                env_data[i]["dones"].append(bool(terminated[i].cpu() or truncated[i].cpu()))
 
-            for step in range(episode_steps):
-                policy_obs = obs_raw["policy"]
+            # Detect done envs and handle their episodes.
+            terminated_cpu = terminated.cpu().bool() if torch.is_tensor(terminated) else torch.as_tensor(terminated, dtype=torch.bool)
+            truncated_cpu  = truncated.cpu().bool()  if torch.is_tensor(truncated)  else torch.as_tensor(truncated,  dtype=torch.bool)
+            done_mask = terminated_cpu | truncated_cpu  # (num_envs,)
 
-                # Build mesh-domain obs for diffusion base policy.
-                # In DISTILL_MODE, policy_obs["seg_pc"] is camera-rendered, but the base
-                # policy was trained on mesh-based PCD.  Replace seg_pc with mesh_pc so
-                # the formatter and diffusion see mesh-domain PCD — identical to what they
-                # see in RL_MODE where cameras are disabled and seg_pc IS mesh_pc.
-                # All other keys (arm_joint_pos, hand_joint_pos, …) are unchanged.
-                mesh_obs = dict(policy_obs)
-                mesh_obs["seg_pc"] = policy_obs["mesh_pc"]
+            if done_mask.any():
+                for i in done_mask.nonzero(as_tuple=True)[0].tolist():
+                    n_attempts += 1
+                    episode_failed = bool(terminated_cpu[i])
+                    success = (not episode_failed) and bool(success_before[i])
 
-                # Format for diffusion inference (maintains n_obs_steps rolling history).
-                # Mirrors RFSWrapper.step(): formatter.format(self.last_obs["policy"]).
-                diff_obs = formatter.format(mesh_obs)
+                    n_ever_grasped   += int(ever_grasped[i])
+                    n_ever_lifted    += int(ever_lifted[i])
+                    n_ever_near_miss += int(ever_near_miss[i])
 
-                # Build PPO obs.
-                if args_cli.asymmetric_ac:
-                    # Actor obs mirrors RFSWrapper._asymmetric_ppo_obs():
-                    #   actor_pcd_emb            — PointNet embedding of current mesh PCD
-                    #   actor_agent_pos_history  — flattened n_obs_steps frames of obs_keys
-                    #   actor_past_actions_history — flattened (n_obs_steps-1) past actions
-                    # Only actor keys are needed here; critic keys are not required for
-                    # get_distribution (pi_features_extractor ignores critic_* keys).
-                    actor_obs = {
-                        "actor_pcd_emb": pcd_emb[0].cpu().numpy(),
-                        "actor_agent_pos_history": torch.stack(
-                            list(ppo_history_buf), dim=1
-                        ).flatten(1)[0].cpu().numpy(),
-                    }
-                    if use_action_history and n_obs_steps > 1 and ppo_past_action_buf is not None:
-                        actor_obs["actor_past_actions_history"] = torch.stack(
-                            list(ppo_past_action_buf), dim=1
-                        ).flatten(1)[0].cpu().numpy()
-                    obs_tensor, _ = agent.policy.obs_to_tensor(actor_obs)
-                else:
-                    ppo_obs_np = _format_ppo_obs(policy_obs)
-                    obs_tensor, _ = agent.policy.obs_to_tensor(ppo_obs_np[0])
+                    if success and n_success < args_cli.num_episodes:
+                        episode_data = {k: np.array(v) for k, v in env_data[i].items()}
+                        _save_episode_zarr(args_cli.output_dir, n_success, episode_data)
+                        n_success += 1
+                        pbar.update(1)
 
-                dist = agent.policy.get_distribution(obs_tensor)
-                # mean: deterministic prediction — stored as supervision target for BC
-                ppo_mean = dist.distribution.loc.squeeze(0)           # (output_dim,)
-                # sample: used for env stepping (preserves stochastic behavior)
-                ppo_action_np = dist.get_actions(deterministic=False).squeeze(0).detach().cpu().numpy()
-                ppo_action_np = np.clip(ppo_action_np, agent.action_space.low, agent.action_space.high)
+                    # Reset per-env episode state.
+                    env_data[i] = defaultdict(list)
+                    ever_grasped[i]   = False
+                    ever_lifted[i]    = False
+                    ever_near_miss[i] = False
 
-                ppo_action = torch.as_tensor(ppo_action_np, device=device).unsqueeze(0)
+                # Reset formatter history for done envs (fills all frames with post-reset obs).
+                reset_mask = done_mask.to(device)
+                formatter.reset_envs(reset_mask, new_policy_obs)
 
-                residual_raw = ppo_action[:, :args_cli.n_residual]
-                noise = ppo_action[:, args_cli.n_residual:].reshape(-1, diffusion_horizon, action_dim)
-                noise_mean = ppo_mean[args_cli.n_residual:].reshape(diffusion_horizon, action_dim)
-
-                base = diffusion.predict_action(diff_obs, noise)["action_pred"][:, 0]
-
-                env_action = base.clone()
-                if finger_filter is not None:
-                    env_action[:, 6:] = finger_filter(env_action[:, 6:])
-                if args_cli.n_residual > 0:
-                    # Mirrors RFSWrapper.step(): action[:, residual_slice] += residual * residual_scale
-                    env_action[:, :args_cli.n_residual] += residual_raw * args_cli.residual_scale
-
-                arm_joint_pos_list.append(policy_obs["arm_joint_pos"][0].cpu().numpy())
-                hand_joint_pos_list.append(policy_obs["hand_joint_pos"][0].cpu().numpy())
-                ee_pose_list.append(policy_obs["ee_pose"][0].cpu().numpy())
-                actions_list.append(env_action[0].cpu().numpy())
-                noise_list.append(noise[0].cpu().numpy())
-                noise_mean_list.append(noise_mean.detach().cpu().numpy())
-                rendered_seg_pc = policy_obs["seg_pc"][0].T.cpu().numpy()
-                mesh_seg_pc = policy_obs["mesh_pc"][0].T.cpu().numpy()
-                if args_cli.stored_seg_pc_source == "mesh":
-                    seg_pc_list.append(mesh_seg_pc)
-                else:
-                    seg_pc_list.append(rendered_seg_pc)
-                if args_cli.stored_seg_pc_source == "both":
-                    seg_pc_mesh_list.append(mesh_seg_pc)
-                ee_pose_cmd_list.append(policy_obs["ee_pose"][0].cpu().numpy())
-
-                success_before = isaac_env.metrics.get_metrics()["is_success"]
-                obs_raw, reward, terminated, truncated, _ = env.step(env_action)
-
-                # Advance all histories with post-step obs.
-                # Mirrors RFSWrapper.step() cleanup (single-env: no reset_envs needed).
-                new_policy_obs = obs_raw["policy"]
-
-                # Formatter past-action history (feeds diff_obs["past_actions"] next step).
-                formatter.update_action(env_action)
-
-                # PPO agent-pos history (feeds actor_agent_pos_history next step).
-                new_agent_pos = torch.cat(
+                # Reset PPO history buffers: fill all frames for done envs with post-reset obs.
+                current_agent_pos = torch.cat(
                     [new_policy_obs[k].float() for k in metadata["obs_keys"]], dim=-1
                 )
-                ppo_history_buf.append(new_agent_pos)
-
-                # PPO past-action history (feeds actor_past_actions_history next step).
+                for frame in ppo_history_buf:
+                    frame[reset_mask] = current_agent_pos[reset_mask]
                 if ppo_past_action_buf is not None:
-                    ppo_past_action_buf.append(env_action.clone())
+                    for frame in ppo_past_action_buf:
+                        frame[reset_mask] = 0.0
 
-                # PCD embedding from post-step obs (used as actor_pcd_emb next step).
-                if args_cli.asymmetric_ac:
-                    pcd_emb = _compute_pcd_embedding(
-                        new_policy_obs, diffusion, downsample_points, device, src_key=_actor_src_key
-                    )
+                # Reset finger filter state for done envs.
+                if finger_filter is not None and finger_filter.y is not None:
+                    current_fingers = isaac_env.scene["robot"].data.joint_pos[:, 7:]
+                    finger_filter.y[reset_mask] = current_fingers[reset_mask]
 
-                arm_joint_pos_target_list.append(new_policy_obs["arm_joint_pos"][0].cpu().numpy())
+                # pcd_emb was already recomputed from new_policy_obs above (which contains
+                # post-reset obs for done envs), so no additional handling needed.
 
-                r = reward[0]
-                rewards_list.append(float(r.item() if hasattr(r, "item") else r))
-                done = bool(terminated[0].cpu().numpy() or truncated[0].cpu().numpy())
-                dones_list.append(done)
-
-                if terminated.any() or truncated.any():
-                    break
-
-            # terminated=True means a failure condition fired — discard regardless of success_before.
-            # truncated=True means timeout — success_before determines the outcome.
-            episode_failed = bool(terminated[0].cpu().numpy())
-            success = (not episode_failed) and bool(success_before[0])
-
-            if success:
-                episode_data = {
-                    "arm_joint_pos":        np.array(arm_joint_pos_list),
-                    "hand_joint_pos":       np.array(hand_joint_pos_list),
-                    "ee_pose":              np.array(ee_pose_list),
-                    "actions":              np.array(actions_list),
-                    "noise":                np.array(noise_list),
-                    "noise_mean":           np.array(noise_mean_list),
-                    "seg_pc":               np.array(seg_pc_list),
-                    "arm_joint_pos_target": np.array(arm_joint_pos_target_list),
-                    "ee_pose_cmd":          np.array(ee_pose_cmd_list),
-                    "rewards":              np.array(rewards_list),
-                    "dones":                np.array(dones_list),
-                }
-                if args_cli.stored_seg_pc_source == "both":
-                    episode_data["seg_pc_mesh"] = np.array(seg_pc_mesh_list)
-                _save_episode_zarr(args_cli.output_dir, n_success, episode_data)
-                n_success += 1
-                pbar.update(1)
-
-            rate = 100 * n_success / n_attempts
-            pbar.set_postfix(saved=n_success, attempts=n_attempts, rate=f"{rate:.1f}%", steps=len(actions_list))
+            rate       = 100 * n_success        / max(n_attempts, 1)
+            grasp_rate = 100 * n_ever_grasped   / max(n_attempts, 1)
+            lift_rate  = 100 * n_ever_lifted    / max(n_attempts, 1)
+            miss_rate  = 100 * n_ever_near_miss / max(n_attempts, 1)
+            pbar.set_postfix(
+                saved=n_success, attempts=n_attempts,
+                rate=f"{rate:.1f}%", grasp=f"{grasp_rate:.1f}%",
+                lift=f"{lift_rate:.1f}%", miss=f"{miss_rate:.1f}%",
+            )
         pbar.close()
 
-    rate = 100 * n_success / n_attempts
+    rate = 100 * n_success / max(n_attempts, 1)
     print(f"\n[collect_distill] Done. Saved {n_success} successful episodes from {n_attempts} attempts ({rate:.1f}%)")
     print(f"[collect_distill] Episodes saved to {args_cli.output_dir}")
     env.close()
