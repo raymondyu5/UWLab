@@ -126,6 +126,27 @@ def pour_joint_pos_limits(env, asset_name: str = "robot") -> torch.Tensor:
 def pour_action_rate_l2(env) -> torch.Tensor:
     return nan_to_num(_action_rate_l2(env))
 
+
+_FINGER_SENSOR_LINK = {
+    "palm_lower": "palm_lower",
+    "fingertip": "fingertip_sensor",
+    "thumb_fingertip": "thumb_sensor",
+    "fingertip_2": "fingertip_2_sensor",
+    "fingertip_3": "fingertip_3_sensor",
+}
+_FINGERS_NAME_LIST = list(_FINGER_SENSOR_LINK.keys())
+
+
+def pour_finger_table_contact(env) -> torch.Tensor:
+    sensor_data = []
+    for name in _FINGERS_NAME_LIST:
+        sensor = env.scene[f"{name}_table_contact"]
+        force = torch.linalg.norm(
+            sensor._data.net_forces_w.reshape(env.num_envs, 3), dim=1)
+        sensor_data.append(force.unsqueeze(1))
+    any_contact = (torch.cat(sensor_data, dim=1) > 1.0).any(dim=1).float()
+    return nan_to_num(any_contact)
+
 class SimplePourReward:
     """
     Simple reward class for bourbon pouring task. 

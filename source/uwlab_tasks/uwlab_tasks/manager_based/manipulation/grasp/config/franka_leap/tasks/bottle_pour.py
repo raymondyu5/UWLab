@@ -11,6 +11,7 @@ import torch
 import isaaclab.utils.math as math_utils
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
+from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -26,12 +27,15 @@ from .rewards.pour_rewards import (
     PourReward,
     pour_action_rate_l2,
     pour_cup_topple,
+    pour_finger_table_contact,
     pour_grasped,
     pour_joint_pos_limits,
     pour_joint_vel_l2,
     pour_success,
     pour_xy_healthy,
     pour_xy_near_miss,
+    _FINGER_SENSOR_LINK,
+    _FINGERS_NAME_LIST,
 )
 
 from ....mdp import (
@@ -63,7 +67,39 @@ PINK_CUP_POUR_POS = (0.53, 0.23, 0.07)
 PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
 # POUR_HORIZON = 112
-POUR_HORIZON = 176
+POUR_HORIZON = 128
+
+
+def _log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
+    asset = env.scene[asset_cfg.name]
+    masses = asset.root_physx_view.get_masses()  # (num_envs,)
+    print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
+
+
+_scale_logged = False
+
+def _log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
+    global _scale_logged
+    if _scale_logged:
+        return
+    _scale_logged = True
+    try:
+        import isaaclab.sim as sim_utils
+        from pxr import UsdGeom
+        stage = sim_utils.get_current_stage()
+        for asset_name in ("grasp_object", "pink_cup"):
+            prim_path_template = env.scene[asset_name].cfg.prim_path
+            paths = sim_utils.find_matching_prim_paths(prim_path_template)[:4]
+            scales = []
+            for p in paths:
+                prim = stage.GetPrimAtPath(p)
+                for op in UsdGeom.Xformable(prim).GetOrderedXformOps():
+                    if "scale" in op.GetOpName():
+                        scales.append(tuple(round(v, 3) for v in op.Get()))
+                        break
+            print(f"[DR] {asset_name} scales (first {len(scales)} envs): {scales}")
+    except Exception as e:
+        print(f"[DR] scale logging failed: {e}")
 
 
 def obs_cup_pose(env) -> torch.Tensor:
@@ -155,6 +191,19 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             params={"asset_name": "robot"},
         )
         self.rewards.action_rate = RewTerm(func=pour_action_rate_l2, weight=-5.0e-3)
+        self.rewards.finger_table_contact = RewTerm(func=pour_finger_table_contact, weight=-1.0)
+
+        from isaaclab.sensors.contact_sensor import ContactSensorCfg
+        for link_name in _FINGERS_NAME_LIST:
+            sensor_link = _FINGER_SENSOR_LINK[link_name]
+            sensor = ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + sensor_link,
+                update_period=0.0,
+                history_length=3,
+                filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
+                debug_vis=False,
+            )
+            setattr(self.scene, f"{link_name}_table_contact", sensor)
 
         # Task-defined boolean-ish metrics used by eval scripts.
         self.metrics_spec = {
@@ -237,6 +286,49 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             func=capture_bottle_reset_height,
             mode="reset",
             params={"object_name": "grasp_object"},
+        )
+
+        self.events.log_object_scales = EventTerm(
+            func=_log_object_scales,
+            mode="reset",
+            params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        self.events.randomize_object_mass = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_mass,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "mass_distribution_params": (0.2, 1.0),
+                "operation": "scale",
+                "distribution": "uniform",
+            },
+        )
+
+        self.events.log_object_mass = EventTerm(
+            func=_log_object_mass,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        self.events.randomize_object_scale = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_scale,
+            mode="prestartup",
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "scale_range": (0.9, 1.1),
+            },
+        )
+
+        self.events.randomize_cup_scale = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_scale,
+            mode="prestartup",
+            params={
+                "asset_cfg": SceneEntityCfg("pink_cup"),
+                "scale_range": (0.9, 1.1),
+            },
         )
 
         # Terminations
