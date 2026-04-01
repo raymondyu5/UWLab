@@ -129,7 +129,12 @@ class GraspBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         grasp_rew.setup_finger_entities(self.scene)
         grasp_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
 
-        self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
+        self.rewards.lift = RewTerm(func=grasp_rew.rew_lift, weight=4.0)
+        self.rewards.contact = RewTerm(func=grasp_rew.rew_contact, weight=4.0)
+        self.rewards.finger2object = RewTerm(func=grasp_rew.rew_finger2object, weight=4.0)
+        self.rewards.wrist_penalty = RewTerm(func=grasp_rew.rew_wrist_penalty, weight=4.0)
+        self.rewards.joint_vel = RewTerm(func=grasp_rew.rew_joint_vel, weight=-4e-3)
+        self.rewards.action_rate = RewTerm(func=grasp_rew.rew_action_rate, weight=-2e-2)
         self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
         self.observations.policy.manipulated_object_pose = ObsTerm(func=grasp_rew.obs_manipulated_object_pose)
         self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)

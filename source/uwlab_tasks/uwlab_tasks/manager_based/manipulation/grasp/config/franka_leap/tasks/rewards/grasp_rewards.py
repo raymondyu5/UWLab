@@ -55,6 +55,7 @@ class GraspReward:
         self.contact_or_not = None
         self.finger_object_dev = None
         self.reset_init_height = None  # (num_envs,) — captured after reset; None until first capture
+        self._cached_step = -1  # env.common_step_counter value at last _ensure_computed call
 
     def capture_reset_height(self, env, env_ids):
         """Capture actual object Z after reset (accounts for table height randomization).
@@ -118,6 +119,42 @@ class GraspReward:
                 filter_prim_paths_expr=filter_expr,
                 debug_vis=False)
             setattr(scene_cfg, f"{link_name}_contact", sensor)
+
+    def _ensure_computed(self, env):
+        """Compute shared per-step state at most once per env step."""
+        if env.common_step_counter != self._cached_step:
+            self.get_object_info(env)
+            self.get_finger_info(env)
+            self.get_contact_info(env)
+            self._cached_step = env.common_step_counter
+
+    # Individual reward terms — register each as a separate RewTerm for per-term logging.
+    # Weights to match original combined grasp_rewards(weight=4.0):
+    #   rew_lift / rew_contact / rew_finger2object / rew_wrist_penalty → weight=4.0
+    #   rew_joint_vel  → weight=-4e-3   (= 4.0 * 1e-3)
+    #   rew_action_rate → weight=-2e-2  (= 4.0 * 5e-3)
+
+    def rew_lift(self, env):
+        self._ensure_computed(env)
+        return self.liftobject_rewards(env)
+
+    def rew_contact(self, env):
+        self._ensure_computed(env)
+        return self.object2fingercontact_rewards(env)
+
+    def rew_finger2object(self, env):
+        self._ensure_computed(env)
+        return self.finger2object_rewards(env)
+
+    def rew_wrist_penalty(self, env):
+        self._ensure_computed(env)
+        return self.penalty_contact(env)
+
+    def rew_joint_vel(self, env):
+        return self._joint_vel_l2(env)
+
+    def rew_action_rate(self, env):
+        return self._action_rate_l2(env)
 
     def grasp_rewards(self, env):
         self.get_object_info(env)
@@ -249,3 +286,210 @@ class GraspReward:
             (env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
 
 
+class SimpleGraspReward:
+    """Sparse reward set for grasp tasks.
+
+    Terms (register each as a separate RewTerm):
+        rew_grasped       — object z >= init_z + 0.12
+        rew_lifted        — object z in [init_z + 0.20, init_z + 0.50]
+        rew_success       — 3D dist(object, target_pos) <= 0.15
+        rew_wrist_penalty — panda_link6 contacts table with >4 N
+        rew_joint_vel     — L2 joint velocity penalty
+        rew_action_rate   — L2 action-rate penalty
+
+    Obs terms (wire as ObsTerm):
+        obs_manipulated_object_pose — current object pose (7D, env-local)
+        obs_target_object_pose      — fixed target pose (7D)
+        obs_contact                 — binary finger contact per finger (N, num_fingers)
+        obs_object_in_tip           — finger-to-object displacements (N, num_fingers*3)
+
+    Setup (call in task __post_init__ before registering terms):
+        setup_wrist_sensor(scene_cfg)
+        setup_finger_entities(scene_cfg)
+        setup_finger_sensors(scene_cfg, object_prim_name)
+        capture_reset_height — register as EventTerm(mode="reset") after reset_object
+    """
+
+    GRASPED_Z = 0.12
+    LIFTED_Z_LOW = 0.20
+    LIFTED_Z_HIGH = 0.50
+    SUCCESS_DIST = 0.15
+
+    _FINGER_SENSOR_LINK = {
+        "palm_lower": "palm_lower",
+        "fingertip": "fingertip_sensor",
+        "thumb_fingertip": "thumb_sensor",
+        "fingertip_2": "fingertip_2_sensor",
+        "fingertip_3": "fingertip_3_sensor",
+    }
+
+    def __init__(
+        self,
+        asset_name: str,
+        object_name: str,
+        fingers_name_list: list,
+        init_height: float,
+        target_pos: tuple,
+    ):
+        self.asset_name = asset_name
+        self.object_name = object_name
+        self.fingers_name_list = fingers_name_list
+        self.init_height = init_height
+        self.target_pos = target_pos
+
+        self.reset_init_height = None  # (num_envs,) — captured after reset
+        self._cached_step = -1
+        self._object_pose = None    # (num_envs, 7) env-local
+        self._contact_or_not = None # (num_envs, num_fingers)
+        self._finger_object_dev = None  # (num_envs, num_fingers, 3)
+
+    # ------------------------------------------------------------------
+    # Scene setup
+    # ------------------------------------------------------------------
+
+    def setup_wrist_sensor(self, scene_cfg):
+        sensor = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda_link6",
+            update_period=0.0,
+            history_length=3,
+            filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
+            debug_vis=False,
+        )
+        setattr(scene_cfg, "panda_link6_contact", sensor)
+
+    def setup_finger_entities(self, scene_cfg):
+        for link_name in self.fingers_name_list:
+            setattr(scene_cfg, link_name, RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + link_name,
+                spawn=None,
+            ))
+
+    def setup_finger_sensors(self, scene_cfg, object_prim_name: str = "GraspObject"):
+        filter_expr = ["{ENV_REGEX_NS}/" + object_prim_name]
+        for link_name in self.fingers_name_list:
+            sensor_link = self._FINGER_SENSOR_LINK.get(link_name, link_name)
+            setattr(scene_cfg, f"{link_name}_contact", ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + sensor_link,
+                update_period=0.0,
+                history_length=3,
+                filter_prim_paths_expr=filter_expr,
+                debug_vis=False,
+            ))
+
+    # ------------------------------------------------------------------
+    # Reset event — wire as EventTerm(mode="reset") after reset_object
+    # ------------------------------------------------------------------
+
+    def capture_reset_height(self, env, env_ids):
+        if self.reset_init_height is None:
+            self.reset_init_height = torch.zeros(env.num_envs, device=env.device)
+        obj = env.scene[self.object_name]
+        self.reset_init_height[env_ids] = (
+            obj.data.root_state_w[env_ids, 2] - env.scene.env_origins[env_ids, 2]
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_computed(self, env):
+        if env.common_step_counter != self._cached_step:
+            obj_state = env.scene[self.object_name]._data.root_state_w[:, :7].clone()
+            obj_state[:, :3] -= env.scene.env_origins
+            self._object_pose = obj_state
+
+            finger_poses = []
+            for name in self.fingers_name_list:
+                fp = env.scene[name]._data.root_state_w[:, :7].clone()
+                fp[:, :3] -= env.scene.env_origins
+                finger_poses.append(fp.unsqueeze(1))
+            finger_poses = torch.cat(finger_poses, dim=1)
+            obj_expanded = self._object_pose[:, :3].unsqueeze(1).expand_as(finger_poses[..., :3])
+            self._finger_object_dev = obj_expanded - finger_poses[..., :3]
+
+            sensor_data = []
+            for name in self.fingers_name_list:
+                sensor = env.scene[f"{name}_contact"]
+                force = torch.linalg.norm(
+                    sensor._data.force_matrix_w.reshape(env.num_envs, 3), dim=1
+                ).unsqueeze(1)
+                sensor_data.append(force)
+            self._contact_or_not = (torch.cat(sensor_data, dim=1) > 4.0).int()
+
+            self._cached_step = env.common_step_counter
+
+    def _init_height_tensor(self, env):
+        if self.reset_init_height is not None:
+            return self.reset_init_height.to(env.device)
+        return torch.full((env.num_envs,), self.init_height, device=env.device)
+
+    def _target_pos_tensor(self, env):
+        return torch.tensor(
+            [list(self.target_pos)], device=env.device, dtype=torch.float32
+        ).expand(env.num_envs, -1)
+
+    # ------------------------------------------------------------------
+    # Reward terms
+    # ------------------------------------------------------------------
+
+    def rew_grasped(self, env) -> torch.Tensor:
+        """Sparse +1 when object z >= init_z + 0.12 m."""
+        self._ensure_computed(env)
+        z_above = self._object_pose[:, 2] - self._init_height_tensor(env)
+        return (z_above >= self.GRASPED_Z).float()
+
+    def rew_lifted(self, env) -> torch.Tensor:
+        """Sparse +1 when object z in [init_z + 0.20, init_z + 0.50] m."""
+        self._ensure_computed(env)
+        z_above = self._object_pose[:, 2] - self._init_height_tensor(env)
+        return ((z_above >= self.LIFTED_Z_LOW) & (z_above <= self.LIFTED_Z_HIGH)).float()
+
+    def rew_success(self, env) -> torch.Tensor:
+        """Sparse +1 when 3D distance from object to target_pos <= 0.15 m."""
+        self._ensure_computed(env)
+        dist = torch.linalg.norm(
+            self._object_pose[:, :3] - self._target_pos_tensor(env), dim=1
+        )
+        return (dist <= self.SUCCESS_DIST).float()
+
+    def rew_wrist_penalty(self, env) -> torch.Tensor:
+        """Sparse -1 when panda_link6 contacts the table with > 4 N."""
+        sensor = env.scene["panda_link6_contact"]
+        force = torch.linalg.norm(
+            sensor._data.net_forces_w.reshape(env.num_envs, 3), dim=1
+        )
+        return -(force > 4.0).float()
+
+    def rew_joint_vel(self, env) -> torch.Tensor:
+        robot = env.scene[self.asset_name]
+        return torch.sum(robot.data.joint_vel ** 2, dim=1)
+
+    def rew_action_rate(self, env) -> torch.Tensor:
+        return torch.sum(
+            (env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1
+        )
+
+    # ------------------------------------------------------------------
+    # Obs terms
+    # ------------------------------------------------------------------
+
+    def obs_manipulated_object_pose(self, env) -> torch.Tensor:
+        """Current object pose (7D) in env-local frame."""
+        self._ensure_computed(env)
+        return self._object_pose
+
+    def obs_target_object_pose(self, env) -> torch.Tensor:
+        """Fixed target pose (7D): target_pos xyz + object's default rotation."""
+        target = self._target_pos_tensor(env)
+        default_quat = env.scene[self.object_name]._data.default_root_state[:, 3:7].clone()
+        return torch.cat([target, default_quat], dim=1)
+
+    def obs_contact(self, env) -> torch.Tensor:
+        """Binary contact per finger (N, num_fingers)."""
+        self._ensure_computed(env)
+        return self._contact_or_not
+
+    def obs_object_in_tip(self, env) -> torch.Tensor:
+        """Object-center to finger displacement vectors, flattened (N, num_fingers*3)."""
+        self._ensure_computed(env)
+        return self._finger_object_dev.reshape(env.num_envs, -1)

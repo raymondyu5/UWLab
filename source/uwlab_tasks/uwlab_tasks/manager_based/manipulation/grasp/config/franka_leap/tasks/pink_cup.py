@@ -25,7 +25,7 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from .... import mdp
 from ....mdp import CachedSamplePC, reset_object_pose, reset_table_block, bottle_too_far, log_object_mass, log_object_scales
-from .rewards.grasp_rewards import GraspReward
+from .rewards.grasp_rewards import SimpleGraspReward
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
@@ -35,7 +35,7 @@ from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 # pose_range: x ±0.075 covers [0.45, 0.60]; y ±0.02
 
 PINK_CUP_HORIZON = 128
-PINK_CUP_TARGET_POS = (0.60, 0.10, 0.40)
+PINK_CUP_TARGET_POS = (0.55, 0.10, 0.35)
 PINK_CUP_OBJECT_NUM_POINTS = 128
 
 PINK_CUP_USD = "/workspace/uwlab/assets/pink_cup/rigid_object.usd"
@@ -128,25 +128,33 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
         self.setup_horizon(horizon=PINK_CUP_HORIZON)
 
-        self.metrics_spec = {"is_success": self.is_success, "is_grasped": self.is_grasped}
-
-        # --- Instantiate GraspReward and add finger contact sensors ---
-        grasp_rew = GraspReward(
+        simple_rew = SimpleGraspReward(
             asset_name="robot",
             object_name="grasp_object",
             fingers_name_list=FINGERS_NAME_LIST,
-            init_height=float(init.pos[2]),
+            init_height=PINK_CUP_SPAWN_POS[2],
             target_pos=PINK_CUP_TARGET_POS,
         )
-        grasp_rew.setup_additional(self.scene)
-        grasp_rew.setup_finger_entities(self.scene)
-        grasp_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
+        simple_rew.setup_wrist_sensor(self.scene)
+        simple_rew.setup_finger_entities(self.scene)
+        simple_rew.setup_finger_sensors(self.scene, object_prim_name="GraspObject")
 
-        self.rewards.grasp_rewards = RewTerm(func=grasp_rew.grasp_rewards, weight=4.0)
-        self.observations.policy.target_object_pose = ObsTerm(func=grasp_rew.obs_target_object_pose)
-        self.observations.policy.manipulated_object_pose = ObsTerm(func=grasp_rew.obs_manipulated_object_pose)
-        self.observations.policy.contact_obs = ObsTerm(func=grasp_rew.obs_contact)
-        self.observations.policy.object_in_tip = ObsTerm(func=grasp_rew.obs_object_in_tip)
+        self.rewards.grasped     = RewTerm(func=simple_rew.rew_grasped,       weight=1.0)
+        self.rewards.lifted      = RewTerm(func=simple_rew.rew_lifted,        weight=5.0)
+        self.rewards.success     = RewTerm(func=simple_rew.rew_success,       weight=10.0)
+        self.rewards.wrist       = RewTerm(func=simple_rew.rew_wrist_penalty, weight=-2.0)
+        self.rewards.joint_vel   = RewTerm(func=simple_rew.rew_joint_vel,     weight=-1e-3)
+        self.rewards.action_rate = RewTerm(func=simple_rew.rew_action_rate,   weight=-5e-3)
+        self.metrics_spec = {"is_success": simple_rew.rew_success, "is_lifted": simple_rew.rew_lifted, "is_grasped": simple_rew.rew_grasped}
+
+        self.events.capture_reset_height = EventTerm(
+            func=simple_rew.capture_reset_height, mode="reset", params={}
+        )
+    
+        self.observations.policy.target_object_pose = ObsTerm(func=simple_rew.obs_target_object_pose)
+        self.observations.policy.manipulated_object_pose = ObsTerm(func=simple_rew.obs_manipulated_object_pose)
+        self.observations.policy.contact_obs = ObsTerm(func=simple_rew.obs_contact)
+        self.observations.policy.object_in_tip = ObsTerm(func=simple_rew.obs_object_in_tip)
 
         synth_pc = CachedSamplePC(
             asset_name="robot",
@@ -187,12 +195,6 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "reset_height": PINK_CUP_SPAWN_POS[2],
                 "table_block_name": "table_block",
             },
-        )
-
-        self.events.capture_reset_height = EventTerm(
-            func=grasp_rew.capture_reset_height,
-            mode="reset",
-            params={},
         )
 
         self.events.randomize_object_material = EventTerm(
