@@ -1,0 +1,92 @@
+# RFS + FastTD3 training config.
+# All algorithm parameters live here; CLI handles env/infra args only.
+#
+# Key FastTD3 design choices (see fast_td3.md):
+#   - Large batch (32k) + parallel envs for stable distributional critic
+#   - Distributional RL (categorical atoms, v_min/v_max)
+#   - Clipped Double Q-learning (min of two Q-nets)
+#   - Mixed per-env exploration noise [std_min, std_max]
+#   - Cosine LR schedule for actor and critic
+#   - No layer norm / residual paths (unnecessary with large-batch parallel envs)
+
+td3:
+  # ---- Network architecture ----
+  actor_hidden_dim: 512          # 3-layer MLP: dim → dim/2 → dim/4
+  critic_hidden_dim: 1024        # 3-layer MLP: dim → dim/2 → dim/4
+  init_scale: 0.01               # Normal init scale for actor output layer
+
+  # ---- Distributional RL ----
+  num_atoms: 101                 # Number of categorical support atoms
+  v_min: -20.0                   # Min value for categorical support
+  v_max: 20.0                    # Max value for categorical support
+
+  # ---- Replay buffer ----
+  batch_size: 32768              # Training batch size (n_env × per_env_batch)
+  buffer_size: 1000              # Transitions stored per environment
+  learning_starts: 500           # Env steps before first gradient update
+
+  # ---- N-step returns ----
+  num_steps: 1                   # Set >1 to enable n-step returns (reserved)
+
+  # ---- Update schedule ----
+  num_updates: 2                 # Gradient updates per env step
+  policy_frequency: 2            # Update actor every N critic updates
+  rollout_log_interval: 200      # Call reward/noise callbacks every N env steps
+
+  # ---- Optimisation ----
+  actor_learning_rate: 3.0e-4
+  critic_learning_rate: 3.0e-4
+  actor_learning_rate_end: 1.0e-5   # Final LR after cosine decay
+  critic_learning_rate_end: 1.0e-5
+  weight_decay: 1.0e-5
+  tau: 0.005                     # Target network soft-update coefficient
+  gamma: 0.99
+
+  # ---- TD3 noise ----
+  policy_noise: 0.2              # Std of noise added to target policy actions
+  noise_clip: 0.5                # Clip target policy noise to [-clip, +clip]
+
+  # ---- Exploration noise (per-env mixed noise) ----
+  std_min: 0.05
+  std_max: 0.4
+
+  # ---- Algorithmic flags ----
+  use_cdq: true                  # Clipped Double Q (min vs avg of Q1, Q2)
+  disable_bootstrap: false       # If true: never bootstrap on terminal states
+  obs_normalization: true        # Online empirical obs normalisation
+  reward_normalization: false    # Running reward-scale normalisation
+
+  # ---- Gradient clipping ----
+  use_grad_norm_clipping: true
+  max_grad_norm: 10.0
+
+  # ---- Compute ----
+  amp: false                     # Automatic mixed precision (experimental)
+  compile: false                 # torch.compile (experimental)
+
+rfs:
+  # Slices of the CFM action dim (22D for IkRel) that receive noise / residual.
+  # Format: "start:end". Leave empty string for no noise or no residual.
+  noise_dims: "0:22"       # full action gets TD3 noise
+  residual_dims: "6:22"    # hand dims (6:22) get TD3 residual
+
+  # Number of env steps to execute per TD3 step.
+  residual_step: 1
+
+  # Residual scale: TD3 residual output in [-1,1] is multiplied by this.
+  residual_scale: 0.1
+
+  # Clip arm IK-delta to real-world safe limits after scaling * step_dt.
+  clip_actions: true
+
+  finger_smooth_alpha: 1.0  # 1.0 = disabled
+  finger_start_dim: 6
+
+  # Whether TD3 actor obs includes a flattened n_obs_steps-frame history.
+  ppo_history: false
+
+eval:
+  interval: 50          # Fire eval every N "rollouts" (rollout_log_interval steps)
+  spawn: "cardinal_3x3" # spawn config name in configs/eval/spawns/
+  record_video: true
+  record_plots: false

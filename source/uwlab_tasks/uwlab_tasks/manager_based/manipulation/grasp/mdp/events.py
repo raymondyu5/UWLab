@@ -245,11 +245,16 @@ def reset_bottle_and_box(
     bottle.write_root_pose_to_sim(torch.cat([bottle_pos, bottle_quat], dim=-1), env_ids=env_ids)
     bottle.write_root_velocity_to_sim(torch.zeros(n, 6, device=device), env_ids=env_ids)
 
-    # --- Box: flush against the -x face of the bottle ---
-    box_x = bottle_x - bottle_width / 2 - box_width / 2
+    # --- Box: behind bottle, up to flush against -x face of the bottle ---
+    box_x_min = - box_width / 2
+    box_x_max = -.01
+    box_x = bottle_x - bottle_width / 2 - box_width / 2 + torch.empty(n, device=device).uniform_(box_x_min, box_x_max)
     # y sampled uniformly along the bottle's length
-    y_half_range = (bottle_length - box_length) / 2
-    box_y = bottle_y + torch.empty(n, device=device).uniform_(-y_half_range, y_half_range)
+    #y_half_range = (bottle_length - box_length) / 2
+
+    box_y_min = - box_length / 2
+    box_y_max = bottle_length - box_length / 2
+    box_y = bottle_y - bottle_length / 2 + torch.empty(n, device=device).uniform_(box_y_min, box_y_max)
     box_z = origins[:, 2] + box_reset_height + block_z_offset
 
     box_pos = torch.stack([origins[:, 0] + box_x, origins[:, 1] + box_y, box_z], dim=1)
@@ -266,7 +271,6 @@ _scales_logged: set = set()
 def log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
     asset = env.scene[asset_cfg.name]
     masses = asset.root_physx_view.get_masses()
-    print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
 
 
 def log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
@@ -287,6 +291,5 @@ def log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
                 if "scale" in op.GetOpName():
                     scales.append(tuple(round(v, 3) for v in op.Get()))
                     break
-        print(f"[DR] {asset_cfg.name} scales (first {len(scales)} envs): {scales}")
-    except Exception as e:
-        print(f"[DR] scale logging failed: {e}")
+    except:
+        pass

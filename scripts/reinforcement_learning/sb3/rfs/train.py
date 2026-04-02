@@ -17,7 +17,7 @@ Usage (inside container):
         --task UW-FrankaLeap-PourBottle-IkRel-v0 \\
         --num_envs 1024 \\
         --diffusion_path logs/real/.../cfm/pcd_cfm/horizon_4_nobs_1 \\
-        --eval_spawn bottle_pour_narrow \\
+        --eval_spawn random_1_trial \\
         --headless
 """
 

@@ -37,6 +37,6 @@ rfs:
 
 eval:
   interval: 50
-  spawn: "bottle_pour_narrow"
+  spawn: "random_1_trial"
   record_video: true
   record_plots: false

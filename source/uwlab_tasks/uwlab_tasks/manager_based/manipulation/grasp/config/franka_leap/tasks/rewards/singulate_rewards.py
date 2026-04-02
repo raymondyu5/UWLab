@@ -13,22 +13,21 @@ GRASPED_Z_THRESHOLD = 0.15    # bottle centre z (env-local) above table to count
 SINGULATE_TARGET_POS = (0.55, 0.0, 0.30)
 SUCCESS_DIST_THRESHOLD = 0.1  # 3-D distance to target to count as success
 
-# Box approach corridor: box is "clear" when its XY distance from the bottle
-# exceeds this threshold. The nominal spawn separation is ~0.10 m
-# (BOTTLE_WIDTH/2 + gap + BOX_WIDTH/2 = 0.04 + 0.015 + 0.045),
+# Box approach corridor: box is "clear" when its Y distance from the bottle
+# exceeds this threshold. At spawn, the max separation is bottle_length / 2 + box_length = .125 + .135 = .26
 # so this triggers as soon as the box has been pushed meaningfully away.
-BOX_CLEAR_DIST_THRESHOLD = 0.15
+BOX_CLEAR_DIST_THRESHOLD = 0.25
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers (defined first so predicates can call them)
 # ---------------------------------------------------------------------------
 
-def _box_bottle_xy_separation(env) -> torch.Tensor:
-    """XY distance between box centre and bottle centre (env-local)."""
+def _box_bottle_y_separation(env) -> torch.Tensor:
+    """y distance between box centre and bottle centre (env-local)."""
     bottle_pos = env.scene["grasp_object"].data.root_pos_w - env.scene.env_origins
     box_pos = env.scene["box"].data.root_pos_w - env.scene.env_origins
-    return torch.norm(bottle_pos[:, :2] - box_pos[:, :2], dim=1)
+    return bottle_pos[:, 1] - box_pos[:, 1]
 
 
 def _joint_vel_l2(env, asset_name: str) -> torch.Tensor:
@@ -58,11 +57,14 @@ def nan_to_num(val) -> torch.Tensor:
 # Metric predicates (return bool tensor, used by metrics_spec)
 # ---------------------------------------------------------------------------
 
+def is_box_clear(env) -> torch.Tensor:
+    """Box has been pushed outside the approach corridor (Y sep from bottle > threshold)."""
+    return _box_bottle_y_separation(env) > BOX_CLEAR_DIST_THRESHOLD
+
 def is_grasped(env) -> torch.Tensor:
     bottle = env.scene["grasp_object"]
     pos = bottle.data.root_pos_w - env.scene.env_origins
     return pos[:, 2] > GRASPED_Z_THRESHOLD
-
 
 def is_success(env) -> torch.Tensor:
     """Bottle centre within SUCCESS_DIST_THRESHOLD of the fixed target position."""
@@ -72,27 +74,19 @@ def is_success(env) -> torch.Tensor:
     return torch.norm(pos - target.unsqueeze(0), dim=1) < SUCCESS_DIST_THRESHOLD
 
 
-def is_box_clear(env) -> torch.Tensor:
-    """Box has been pushed outside the approach corridor (XY sep from bottle > threshold)."""
-    return _box_bottle_xy_separation(env) > BOX_CLEAR_DIST_THRESHOLD
-
-
 # ---------------------------------------------------------------------------
 # Reward terms (wire as RewTerm)
 # ---------------------------------------------------------------------------
-
-def singulate_grasped(env) -> torch.Tensor:
-    return nan_to_num(is_grasped(env).float())
-
-
-def singulate_success(env) -> torch.Tensor:
-    return nan_to_num(is_success(env).float())
-
 
 def singulate_box_separation(env) -> torch.Tensor:
     """Sparse reward: 1 when box has been pushed outside the approach corridor (XY sep > 0.10 m)."""
     return nan_to_num(is_box_clear(env).float())
 
+def singulate_grasped(env) -> torch.Tensor:
+    return singulate_box_separation(env) * nan_to_num(is_grasped(env).float())
+
+def singulate_success(env) -> torch.Tensor:
+    return singulate_box_separation(env) * nan_to_num(is_success(env).float())
 
 def singulate_joint_vel_l2(env, asset_name: str = "robot") -> torch.Tensor:
     return nan_to_num(_joint_vel_l2(env, asset_name))

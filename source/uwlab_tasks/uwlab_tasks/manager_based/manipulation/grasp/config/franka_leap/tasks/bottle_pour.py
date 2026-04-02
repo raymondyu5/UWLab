@@ -22,7 +22,7 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from .rewards.pour_rewards import BOTTLE_CAP_OFFSET, is_grasped, is_healthy_z, is_near_miss, is_success
+from .rewards.pour_rewards import BOTTLE_CAP_OFFSET, is_grasped, is_healthy_z, is_near_miss, is_success, is_precise_success
 from .rewards.pour_rewards import (
     PourReward,
     pour_action_rate_l2,
@@ -32,6 +32,7 @@ from .rewards.pour_rewards import (
     pour_joint_pos_limits,
     pour_joint_vel_l2,
     pour_success,
+    pour_precise_success,
     pour_xy_healthy,
     pour_xy_near_miss,
     _FINGER_SENSOR_LINK,
@@ -46,8 +47,6 @@ from ....mdp import (
     bottle_dropped,
     bottle_too_far,
     cup_toppled,
-    log_object_mass,
-    log_object_scales,
 )
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
@@ -70,7 +69,6 @@ PINK_CUP_POUR_ROT = (0.707, 0.707, 0.0, 0.0)
 
 # POUR_HORIZON = 112
 POUR_HORIZON = 128
-
 
 
 def obs_cup_pose(env) -> torch.Tensor:
@@ -150,6 +148,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.rewards.xy_healthy = RewTerm(func=pour_xy_healthy, weight=2.0)
         self.rewards.xy_near_miss = RewTerm(func=pour_xy_near_miss, weight=5.0)
         self.rewards.success = RewTerm(func=pour_success, weight=10.0)
+        self.rewards.precise_success = RewTerm(func=pour_precise_success, weight=10.0)
         self.rewards.cup_topple = RewTerm(func=pour_cup_topple, weight=-10.0)
         self.rewards.joint_vel = RewTerm(
             func=pour_joint_vel_l2,
@@ -178,6 +177,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
         # Task-defined boolean-ish metrics used by eval scripts.
         self.metrics_spec = {
+            "is_precise_success": is_precise_success,
             "is_success": is_success,
             "is_grasped": is_grasped,
             "is_healthy_z": is_healthy_z,
@@ -259,17 +259,6 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             params={"object_name": "grasp_object"},
         )
 
-        self.events.log_object_scales = EventTerm(
-            func=log_object_scales,
-            mode="reset",
-            params={"asset_cfg": SceneEntityCfg("grasp_object")},
-        )
-
-        self.events.log_cup_scales = EventTerm(
-            func=log_object_scales,
-            mode="reset",
-            params={"asset_cfg": SceneEntityCfg("pink_cup")},
-        )
 
         self.events.randomize_object_mass = EventTerm(
             func=isaac_mdp.randomize_rigid_body_mass,
@@ -283,12 +272,6 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             },
         )
 
-        self.events.log_object_mass = EventTerm(
-            func=log_object_mass,
-            mode="reset",
-            min_step_count_between_reset=800,
-            params={"asset_cfg": SceneEntityCfg("grasp_object")},
-        )
 
         self.events.randomize_object_scale = EventTerm(
             func=isaac_mdp.randomize_rigid_body_scale,

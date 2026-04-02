@@ -12,6 +12,7 @@ BOTTLE_CAP_OFFSET = (-0.132179, 0.0, 0.0)
 # i.e. 5cm to 15cm above the cup rim (~0.15m tall).
 NEAR_MISS_XY_RADIUS = 0.15
 SUCCESS_XY_RADIUS = 0.04
+PRECISE_SUCCESS_XY_RADIUS = 0.02
 GRASPED_Z_THRESHOLD = 0.05
 HEALTHY_Z_RANGE = (0.17, 0.3)
 
@@ -49,6 +50,13 @@ def is_success(env) -> torch.Tensor:
     bottle_pos, tip_pos, cup_pos = compute_tip_pos(env)
     xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
     is_near_cup = (xy_dist < SUCCESS_XY_RADIUS)
+    healthy_z = is_healthy_z(env)
+    return healthy_z & is_near_cup
+
+def is_precise_success(env) -> torch.Tensor:
+    bottle_pos, tip_pos, cup_pos = compute_tip_pos(env)
+    xy_dist = torch.norm(tip_pos[:, :2] - cup_pos[:, :2], dim=1)
+    is_near_cup = (xy_dist < PRECISE_SUCCESS_XY_RADIUS)
     healthy_z = is_healthy_z(env)
     return healthy_z & is_near_cup
 
@@ -110,6 +118,8 @@ def pour_xy_near_miss(env) -> torch.Tensor:
 def pour_success(env) -> torch.Tensor:
     return nan_to_num(is_success(env).float())
 
+def pour_precise_success(env) -> torch.Tensor:
+    return nan_to_num(is_precise_success(env).float())
 
 def pour_cup_topple(env, cup_name: str = "pink_cup") -> torch.Tensor:
     return nan_to_num(_cup_toppled(env, cup_name=cup_name).float())

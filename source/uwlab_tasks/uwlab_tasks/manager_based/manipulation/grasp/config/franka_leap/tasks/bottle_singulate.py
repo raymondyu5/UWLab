@@ -68,19 +68,20 @@ BOX_OBJECT_NUM_POINTS = 128
 # y: [.11 - bottle_length/2, .16 - bottle_length/2]
 # ---------------------------------------------------------------------------
 BOTTLE_X_RANGE = (0.38 + BOTTLE_WIDTH / 2, 0.68 - BOTTLE_WIDTH / 2)   # (0.42, 0.64)
-BOTTLE_Y_RANGE = (0.11 - BOTTLE_LENGTH / 2, 0.16 - BOTTLE_LENGTH / 2)  # (-0.015, 0.035)
-BOTTLE_RESET_HEIGHT = 0.11
+BOTTLE_Y_RANGE = (.11 - BOTTLE_LENGTH/2, .16 - BOTTLE_LENGTH/2)  # (-0.015, 0.035)
+BOTTLE_RESET_HEIGHT = BOTTLE_WIDTH / 2 + .03
 
 BOX_SPAWN_ROT = (1.0, 0.0, 0.0, 0.0)  # upright, axis-aligned
-BOX_RESET_HEIGHT = BOX_LENGTH / 2      # 0.0675  (box stands upright on table)
+BOX_RESET_HEIGHT = BOX_WIDTH / 2 + .03      # 0.0675  (box stands upright on table)
 
 # Nominal centres (midpoint of randomisation range) — used for scene init_state and object_spawn_defaults.
 _BOTTLE_CENTER_X = (BOTTLE_X_RANGE[0] + BOTTLE_X_RANGE[1]) / 2   # 0.53
 _BOTTLE_CENTER_Y = (BOTTLE_Y_RANGE[0] + BOTTLE_Y_RANGE[1]) / 2   # 0.01
 SINGULATE_BOTTLE_SPAWN_POS = (_BOTTLE_CENTER_X, _BOTTLE_CENTER_Y, BOTTLE_RESET_HEIGHT)
-BOX_SPAWN_POS = (_BOTTLE_CENTER_X - BOTTLE_WIDTH / 2 - BOX_WIDTH / 2, _BOTTLE_CENTER_Y, BOX_RESET_HEIGHT)
+MARGIN = .1
+BOX_SPAWN_POS = (_BOTTLE_CENTER_X - BOTTLE_WIDTH / 2 - BOX_WIDTH / 2 - MARGIN, _BOTTLE_CENTER_Y, BOX_RESET_HEIGHT)
 
-SINGULATE_HORIZON = 176
+SINGULATE_HORIZON = 192
 
 
 # ---------------------------------------------------------------------------
@@ -238,24 +239,6 @@ class SingulateBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             params={"object_name": "grasp_object"},
         )
 
-        # Terminations
-        self.terminations.bottle_too_far = DoneTerm(
-            func=bottle_too_far,
-            params={
-                "object_name": "grasp_object",
-                "max_xy_dist": 1.0,
-            },
-            time_out=False,
-        )
-        self.terminations.box_toppled = DoneTerm(
-            func=cup_toppled,
-            params={
-                "cup_name": "box",
-                "spawn_quat": BOX_SPAWN_ROT,
-                "angle_thresh_rad": 0.524,
-            },
-            time_out=False,
-        )
 
 
 # ---------------------------------------------------------------------------

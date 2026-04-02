@@ -4,6 +4,6 @@ num_inference_steps: 5
 device: cuda:0
 num_envs: 1
 action_horizon: 16
-spawn: bottle_pour_narrow
+spawn: random_1_trial
 record_video: false
 record_plots: true

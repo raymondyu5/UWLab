@@ -1,0 +1,82 @@
+# RFS + FastTD3 config for JointAbs/JointRel arm policies.
+# Equivalent to arm_rfs_joint_cfg.yaml but for FastTD3 instead of PPO.
+# Action space: 23D [7D arm joints | 16D abs hand], horizon=16.
+# TD3 action space: 23 * 16 = 368 dims (noise) + 23 dims (residual).
+
+td3:
+  # ---- Network architecture ----
+  actor_hidden_dim: 512
+  critic_hidden_dim: 1024
+  init_scale: 0.01
+
+  # ---- Distributional RL ----
+  num_atoms: 101
+  v_min: 0.0
+  v_max: 100.0
+
+  # ---- Replay buffer ----
+  batch_size: 32768
+  buffer_size: 1000
+  learning_starts: 500
+
+  # ---- N-step returns ----
+  num_steps: 1
+
+  # ---- Update schedule ----
+  num_updates: 2
+  policy_frequency: 2
+  rollout_log_interval: 200
+
+  # ---- Optimisation ----
+  actor_learning_rate: 3.0e-4
+  critic_learning_rate: 3.0e-4
+  actor_learning_rate_end: 1.0e-5
+  critic_learning_rate_end: 1.0e-5
+  weight_decay: 1.0e-5
+  tau: 0.005
+  gamma: 0.99
+
+  # ---- TD3 noise ----
+  policy_noise: 0.001
+  noise_clip: 0.1
+
+  # ---- Exploration noise ----
+  std_min: 0.005
+  std_max: 0.1
+
+  # ---- Algorithmic flags ----
+  use_cdq: true
+  disable_bootstrap: false
+  obs_normalization: true
+  reward_normalization: false
+
+  # ---- Gradient clipping ----
+  use_grad_norm_clipping: true
+  max_grad_norm: 10.0
+
+  # ---- Compute ----
+  amp: false
+  compile: false
+
+rfs:
+  noise_dims: "0:23"       # full 23D action gets TD3 noise
+  residual_dims: "0:23"    # full 23D residual
+
+  residual_step: 1
+  residual_scale: 0.01
+
+  # BoundedRelativeJointPositionAction clamps joints to arm limits — no extra clip needed.
+  clip_actions: false
+
+  finger_smooth_alpha: 1.0
+  finger_start_dim: 7      # JointAbs: 7 arm joints before hand dims
+
+  num_warmup_steps: 5
+
+  ppo_history: false
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true
+  record_plots: false

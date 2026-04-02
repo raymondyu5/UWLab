@@ -34,7 +34,7 @@ parser.add_argument("--cfg", type=str, default="configs/rl/dsrl_cfg.yaml")
 parser.add_argument("--num_envs", type=int, default=16)
 parser.add_argument("--num_episodes", type=int, default=5)
 parser.add_argument("--eval_spawn", type=str, default=None,
-                    help="Spawn config name in configs/eval/spawns/ (e.g. bottle_pour_narrow). "
+                    help="Spawn config name in configs/eval/spawns/ (e.g. random_1_trial). "
                          "If omitted, uses random resets.")
 parser.add_argument("--asymmetric_ac", action="store_true", default=False)
 parser.add_argument("--record_video", action="store_true", default=False)

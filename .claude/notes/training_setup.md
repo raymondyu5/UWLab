@@ -55,7 +55,7 @@ rfs:
 
 eval:
   interval: 50         # Eval every 50 PPO iterations
-  spawn: "bottle_pour_narrow"  # Default spawn (overridden by CLI to "random_1_trial")
+  spawn: "random_1_trial"  # Default spawn (overridden by CLI to "random_1_trial")
   record_video: true
 ```
 
