@@ -43,6 +43,7 @@ from ....mdp import (
     CachedSamplePC,
     reset_object_pose,
     reset_robot_joints_ee_box,
+    reset_robot_joints_ee_box_hand_rand,
     reset_table_block,
     capture_bottle_reset_height,
     bottle_dropped,
@@ -343,9 +344,9 @@ class PourBottleFrankaLeapEeBoxCfg(PourBottleFrankaLeapCfg):
 
     # EE bounding box for arm reset (env-local, metres).
     ee_pos_box: dict = {
-        "x": (0.35, 0.65),
+        "x": (0.4, 0.65),
         "y": (-0.15, 0.15),
-        "z": (0.25, 0.55),
+        "z": (0.15, 0.5),
     }
     # World-frame EE orientation to hold fixed. None = preserve current per-env orientation.
     ee_default_quat_w: list | None = None
@@ -371,6 +372,47 @@ class PourBottleFrankaLeapEeBoxCfg(PourBottleFrankaLeapCfg):
 
 @configclass
 class PourBottleFrankaLeapEeBoxJointAbsCfg(PourBottleFrankaLeapEeBoxCfg):
+    actions = franka_leap.FrankaLeapJointPositionAction()
+
+    def warmup_action(self, env) -> torch.Tensor:
+        # Hold IK-solved joint positions so warmup doesn't drive back to ARM_RESET.
+        robot = env.scene["robot"]
+        return robot.data.joint_pos.clone()
+
+
+@configclass
+class PourBottleFrankaLeapEeBoxHandRandCfg(PourBottleFrankaLeapEeBoxCfg):
+    """PourBottle variant with EE-box arm reset AND randomized hand configuration.
+
+    At each reset the arm is placed within ``ee_pos_box`` via IK (inherited from
+    PourBottleFrankaLeapEeBoxCfg) and the hand joint positions are sampled uniformly
+    from the timesteps of ``hand_action_zarr_path``.
+
+    Set hand_action_zarr_path to a zarr store containing ``data/hand_action``
+    with shape [T, 16] (absolute hand joint commands, float32).
+    """
+    hand_action_zarr_path: str = "data_storage/critical_damping_largegains_fixed_fingers_2/episode_4/episode_4.zarr" #"data_storage/datasets/03_24_bourbon_pour/episode_1/episode_1.zarr"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.reset_robot = EventTerm(
+            func=reset_robot_joints_ee_box_hand_rand,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "arm_joint_pos": ARM_RESET,
+                "hand_joint_pos": HAND_RESET,
+                "ee_pos_box": self.ee_pos_box,
+                "ee_default_quat_w": self.ee_default_quat_w,
+                "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
+                "num_ik_iters": self.ee_box_ik_iters,
+                "hand_action_zarr_path": self.hand_action_zarr_path,
+            },
+        )
+
+
+@configclass
+class PourBottleFrankaLeapEeBoxHandRandJointAbsCfg(PourBottleFrankaLeapEeBoxHandRandCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:

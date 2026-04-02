@@ -16,6 +16,7 @@ from .events import (
     apply_sysid_params_on_reset,
     reset_robot_joints,
     reset_robot_joints_ee_box,
+    reset_robot_joints_ee_box_hand_rand,
     reset_object_pose,
     reset_bottle_and_box,
     reset_table_block,

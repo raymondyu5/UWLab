@@ -125,6 +125,140 @@ def reset_robot_joints(
     robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
 
+def _init_ee_box_solver(cfg: EventTermCfg, env: ManagerBasedEnv):
+    """Shared init logic for EE-box reset terms. Returns (robot, arm_joint_ids, n_arm_joints, solver)."""
+    import uwlab_assets.robots.franka_leap as franka_leap
+
+    asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+    asset_cfg.resolve(env.scene)
+    robot: Articulation = env.scene[asset_cfg.name]
+
+    arm_joint_ids, _ = robot.find_joints(franka_leap.ARM_JOINT_NAMES)
+    n_arm_joints: int = len(arm_joint_ids)
+
+    solver_cfg = DifferentialInverseKinematicsActionCfg(
+        asset_name=asset_cfg.name,
+        joint_names=franka_leap.ARM_JOINT_NAMES,
+        body_name=franka_leap.FRANKA_LEAP_EE_BODY,
+        controller=DifferentialIKControllerCfg(
+            command_type="pose",
+            use_relative_mode=False,
+            ik_method="dls",
+        ),
+        body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
+            pos=franka_leap.FRANKA_LEAP_EE_OFFSET,
+        ),
+        scale=1.0,
+    )
+    solver: DifferentialInverseKinematicsAction = solver_cfg.class_type(solver_cfg, env)
+    return robot, arm_joint_ids, n_arm_joints, solver
+
+
+def _run_ee_box_reset(
+    robot: Articulation,
+    solver: DifferentialInverseKinematicsAction,
+    arm_joint_ids: list,
+    n_arm_joints: int,
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    arm_joint_pos: list,
+    hand_joint_pos: list | torch.Tensor,
+    ee_pos_box: dict,
+    ee_default_quat_w: list | None,
+    arm_joint_limits: dict | None,
+    num_ik_iters: int,
+) -> None:
+    """Shared reset logic for EE-box reset terms."""
+    num_reset = len(env_ids)
+
+    # 1. Write arm (ARM_RESET) + hand to env_ids so IK starts from a known pose.
+    arm_pos = torch.tensor(arm_joint_pos, device=env.device, dtype=torch.float32)
+    if arm_joint_limits is not None:
+        order = [f"panda_joint{i}" for i in range(1, 8)]
+        low = torch.tensor(
+            [arm_joint_limits[j][0] for j in order], device=env.device, dtype=torch.float32
+        )
+        high = torch.tensor(
+            [arm_joint_limits[j][1] for j in order], device=env.device, dtype=torch.float32
+        )
+        arm_pos = arm_pos.clamp(low, high)
+    if isinstance(hand_joint_pos, torch.Tensor) and hand_joint_pos.dim() == 2:
+        hand_pos = hand_joint_pos.to(device=env.device, dtype=torch.float32)
+    else:
+        hand_pos = torch.tensor(hand_joint_pos, device=env.device, dtype=torch.float32).unsqueeze(0).expand(num_reset, -1)
+    joint_pos_init = torch.cat([arm_pos.unsqueeze(0).expand(num_reset, -1), hand_pos], dim=1)
+    robot.write_joint_state_to_sim(
+        joint_pos_init, torch.zeros_like(joint_pos_init), env_ids=env_ids
+    )
+
+    # 2. Get current EE pose for ALL envs (base frame).
+    pos_b_all, quat_b_all = solver._compute_frame_pose()
+    pos_b_all = pos_b_all.clone()
+    quat_b_all = quat_b_all.clone()
+
+    # 3. Sample target EE positions from box (env-local → world frame).
+    box = ee_pos_box
+    target_pos_w = torch.stack(
+        [
+            torch.empty(num_reset, device=env.device).uniform_(*box["x"]),
+            torch.empty(num_reset, device=env.device).uniform_(*box["y"]),
+            torch.empty(num_reset, device=env.device).uniform_(*box["z"]),
+        ],
+        dim=1,
+    )
+    target_pos_w += env.scene.env_origins[env_ids]
+
+    if ee_default_quat_w is not None:
+        target_quat_w = torch.tensor(
+            ee_default_quat_w, device=env.device, dtype=torch.float32
+        ).unsqueeze(0).expand(num_reset, -1)
+    else:
+        target_quat_w = None
+
+    if target_quat_w is not None:
+        target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
+            robot.data.root_link_pos_w[env_ids],
+            robot.data.root_link_quat_w[env_ids],
+            target_pos_w,
+            target_quat_w,
+        )
+    else:
+        identity_quat = torch.zeros(num_reset, 4, device=env.device)
+        identity_quat[:, 0] = 1.0
+        target_pos_b, _ = math_utils.subtract_frame_transforms(
+            robot.data.root_link_pos_w[env_ids],
+            robot.data.root_link_quat_w[env_ids],
+            target_pos_w,
+            identity_quat,
+        )
+        target_quat_b = quat_b_all[env_ids]
+
+    pos_b_all[env_ids] = target_pos_b
+    quat_b_all[env_ids] = target_quat_b
+    solver.process_actions(torch.cat([pos_b_all, quat_b_all], dim=1))
+
+    # 4. Iterate DLS IK with 0.25 exponential smoothing.
+    for _ in range(num_ik_iters):
+        solver.apply_actions()
+        delta = 0.25 * (
+            robot.data.joint_pos_target[env_ids][:, arm_joint_ids]
+            - robot.data.joint_pos[env_ids][:, arm_joint_ids]
+        )
+        new_arm_pos = robot.data.joint_pos[env_ids][:, arm_joint_ids] + delta
+        robot.write_joint_state_to_sim(
+            position=new_arm_pos,
+            velocity=torch.zeros(num_reset, n_arm_joints, device=env.device),
+            joint_ids=arm_joint_ids,
+            env_ids=env_ids,
+        )
+
+    # Set PD targets to match the written positions so the controller holds the
+    # IK-solved pose during the sim step inside reset() and the warmup steps.
+    # Without this, the controller drives joints back toward the default targets.
+    final_arm_pos = robot.data.joint_pos[env_ids][:, arm_joint_ids].clone()
+    robot.set_joint_position_target(final_arm_pos, joint_ids=arm_joint_ids, env_ids=env_ids)
+
+
 class reset_robot_joints_ee_box(ManagerTermBase):
     """Reset arm joints to configurations within an end-effector bounding box.
 
@@ -156,33 +290,53 @@ class reset_robot_joints_ee_box(ManagerTermBase):
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        import uwlab_assets.robots.franka_leap as franka_leap
+        self.robot, self.arm_joint_ids, self.n_arm_joints, self.solver = _init_ee_box_solver(cfg, env)
 
-        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
-        asset_cfg.resolve(env.scene)
-        self.robot: Articulation = env.scene[asset_cfg.name]
-
-        # Arm joint IDs for partial write_joint_state_to_sim calls
-        arm_joint_ids, _ = self.robot.find_joints(franka_leap.ARM_JOINT_NAMES)
-        self.arm_joint_ids: list[int] = arm_joint_ids
-        self.n_arm_joints: int = len(arm_joint_ids)
-
-        # DLS IK solver (Isaac Lab, with LEAP EE offset)
-        solver_cfg = DifferentialInverseKinematicsActionCfg(
-            asset_name=asset_cfg.name,
-            joint_names=franka_leap.ARM_JOINT_NAMES,
-            body_name=franka_leap.FRANKA_LEAP_EE_BODY,
-            controller=DifferentialIKControllerCfg(
-                command_type="pose",
-                use_relative_mode=False,
-                ik_method="dls",
-            ),
-            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
-                pos=franka_leap.FRANKA_LEAP_EE_OFFSET,
-            ),
-            scale=1.0,
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor,
+        asset_cfg: SceneEntityCfg,
+        arm_joint_pos: list,
+        hand_joint_pos: list | torch.Tensor,
+        ee_pos_box: dict,
+        ee_default_quat_w: list | None = None,
+        arm_joint_limits: dict | None = None,
+        num_ik_iters: int = 20,
+    ) -> None:
+        _run_ee_box_reset(
+            self.robot, self.solver, self.arm_joint_ids, self.n_arm_joints,
+            env, env_ids, arm_joint_pos, hand_joint_pos,
+            ee_pos_box, ee_default_quat_w, arm_joint_limits, num_ik_iters,
         )
-        self.solver: DifferentialInverseKinematicsAction = solver_cfg.class_type(solver_cfg, env)
+
+
+class reset_robot_joints_ee_box_hand_rand(ManagerTermBase):
+    """EE-box arm reset that also randomizes the hand configuration from a zarr dataset.
+
+    Identical arm reset logic to ``reset_robot_joints_ee_box``; at each reset the hand
+    joint positions are sampled uniformly from the timesteps of a recorded episode
+    stored in a zarr file (``hand_action`` array, shape [T, 16]).
+
+    Required extra param:
+        hand_action_zarr_path: str — path to a zarr store that contains
+            ``data/hand_action`` with shape [T, 16], dtype float32.
+            The full set of timesteps is cached as a GPU tensor at init.
+    """
+
+    def __init__(self, cfg: EventTermCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        import zarr
+        import numpy as np
+
+        self.robot, self.arm_joint_ids, self.n_arm_joints, self.solver = _init_ee_box_solver(cfg, env)
+
+        zarr_path: str = cfg.params["hand_action_zarr_path"]
+        store = zarr.open(zarr_path)
+        hand_actions_np = np.asarray(store["data/hand_action"]).astype(np.float32)  # [T, 16]
+        self.hand_action_cache: torch.Tensor = torch.tensor(
+            hand_actions_np, device=env.device, dtype=torch.float32
+        )
 
     def __call__(
         self,
@@ -195,97 +349,18 @@ class reset_robot_joints_ee_box(ManagerTermBase):
         ee_default_quat_w: list | None = None,
         arm_joint_limits: dict | None = None,
         num_ik_iters: int = 20,
+        hand_action_zarr_path: str | None = None,
     ) -> None:
         num_reset = len(env_ids)
+        T = self.hand_action_cache.shape[0]
+        indices = torch.randint(0, T, (num_reset,), device=env.device)
+        sampled_hand = self.hand_action_cache[indices]  # [num_reset, 16]
 
-        # 1. Write arm (ARM_RESET) + hand to env_ids so IK starts from a known pose.
-        arm_pos = torch.tensor(arm_joint_pos, device=env.device, dtype=torch.float32)
-        if arm_joint_limits is not None:
-            order = [f"panda_joint{i}" for i in range(1, 8)]
-            low = torch.tensor(
-                [arm_joint_limits[j][0] for j in order], device=env.device, dtype=torch.float32
-            )
-            high = torch.tensor(
-                [arm_joint_limits[j][1] for j in order], device=env.device, dtype=torch.float32
-            )
-            arm_pos = arm_pos.clamp(low, high)
-        hand_pos = torch.tensor(hand_joint_pos, device=env.device, dtype=torch.float32)
-        joint_pos_init = torch.cat([arm_pos, hand_pos]).unsqueeze(0).repeat(num_reset, 1)
-        self.robot.write_joint_state_to_sim(
-            joint_pos_init, torch.zeros_like(joint_pos_init), env_ids=env_ids
+        _run_ee_box_reset(
+            self.robot, self.solver, self.arm_joint_ids, self.n_arm_joints,
+            env, env_ids, arm_joint_pos, sampled_hand,
+            ee_pos_box, ee_default_quat_w, arm_joint_limits, num_ik_iters,
         )
-
-        # 2. Get current EE pose for ALL envs (base frame).
-        #    Non-resetting envs keep their current pose as IK target (no change).
-        #    Resetting envs will have their target overridden below.
-        pos_b_all, quat_b_all = self.solver._compute_frame_pose()
-        pos_b_all = pos_b_all.clone()
-        quat_b_all = quat_b_all.clone()
-
-        # 3. Sample target EE positions from box (env-local → world frame).
-        box = ee_pos_box
-        target_pos_w = torch.stack(
-            [
-                torch.empty(num_reset, device=env.device).uniform_(*box["x"]),
-                torch.empty(num_reset, device=env.device).uniform_(*box["y"]),
-                torch.empty(num_reset, device=env.device).uniform_(*box["z"]),
-            ],
-            dim=1,
-        )
-        target_pos_w += env.scene.env_origins[env_ids]
-
-        # Orientation: use provided quat or preserve current per-env quat.
-        if ee_default_quat_w is not None:
-            target_quat_w = torch.tensor(
-                ee_default_quat_w, device=env.device, dtype=torch.float32
-            ).unsqueeze(0).expand(num_reset, -1)
-        else:
-            # Convert base-frame current quat → world frame then reuse it.
-            # Since we only need consistent orientation across envs, use the
-            # current per-env base-frame orientation unchanged as the target.
-            target_quat_w = None  # handled below in base-frame directly
-
-        # Convert world → robot base frame (or use base-frame quat directly).
-        if target_quat_w is not None:
-            target_pos_b, target_quat_b = math_utils.subtract_frame_transforms(
-                self.robot.data.root_link_pos_w[env_ids],
-                self.robot.data.root_link_quat_w[env_ids],
-                target_pos_w,
-                target_quat_w,
-            )
-        else:
-            # Keep current per-env orientation; only change position.
-            identity_quat = torch.zeros(num_reset, 4, device=env.device)
-            identity_quat[:, 0] = 1.0  # [1, 0, 0, 0]
-            target_pos_b, _ = math_utils.subtract_frame_transforms(
-                self.robot.data.root_link_pos_w[env_ids],
-                self.robot.data.root_link_quat_w[env_ids],
-                target_pos_w,
-                identity_quat,
-            )
-            target_quat_b = quat_b_all[env_ids]  # preserve current orientation
-
-        # Override targets only for resetting envs.
-        pos_b_all[env_ids] = target_pos_b
-        quat_b_all[env_ids] = target_quat_b
-
-        self.solver.process_actions(torch.cat([pos_b_all, quat_b_all], dim=1))
-
-        # 4. Iterate DLS IK with 0.25 exponential smoothing (same as reset_states pattern).
-        #    Writes only arm joints for env_ids; hand joints are untouched.
-        for _ in range(num_ik_iters):
-            self.solver.apply_actions()
-            delta = 0.25 * (
-                self.robot.data.joint_pos_target[env_ids][:, self.arm_joint_ids]
-                - self.robot.data.joint_pos[env_ids][:, self.arm_joint_ids]
-            )
-            new_arm_pos = self.robot.data.joint_pos[env_ids][:, self.arm_joint_ids] + delta
-            self.robot.write_joint_state_to_sim(
-                position=new_arm_pos,
-                velocity=torch.zeros(num_reset, self.n_arm_joints, device=env.device),
-                joint_ids=self.arm_joint_ids,
-                env_ids=env_ids,
-            )
 
 
 def reset_table_block(

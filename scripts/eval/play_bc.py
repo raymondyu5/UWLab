@@ -2,12 +2,7 @@
 Evaluate a BC (CFM) policy inside the Isaac Sim environment.
 
 Usage (inside container):
-    ./isaaclab.sh -p scripts/play_bc.py \\
-        --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml \\
-        checkpoint=logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise \\
-        record_video=true --num_envs 64
-
-isaacpy scripts/play_bc.py --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml checkpoint=logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise record_video=true --num_envs 4 --sim_type rl
+isaacpy scripts/eval/play_bc.py --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml checkpoint=logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise record_video=true --num_envs 4 --sim_type rl --headless --enable_cameras 
 
 The checkpoint dir must contain:
     .hydra/config.yaml   (saved by Hydra at train time)
@@ -437,6 +432,41 @@ def _plot_reset_positions(reset_ee_positions: list, output_dir: str):
     print(f"[play_bc] Reset EE scatter saved to: {path}")
 
 
+def _plot_reset_joint_distributions(reset_joint_obs: dict, output_dir: str):
+    """Histogram of reset joint positions for each dimension across all envs and episodes.
+
+    reset_joint_obs: dict mapping obs key (e.g. "arm_joint_pos", "hand_joint_pos")
+        to a list of (num_envs, D) arrays, one per episode.
+    Saves one PNG per obs key: reset_joint_dist_{key}.png
+    """
+    for key, arrays in reset_joint_obs.items():
+        data = np.concatenate(arrays, axis=0)  # (N_total, D)
+        n_samples, n_dims = data.shape
+
+        n_cols = min(8, n_dims)
+        n_rows = (n_dims + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(2.5 * n_cols, 2.2 * n_rows))
+        axes_flat = np.array(axes).flatten() if n_dims > 1 else [axes]
+
+        for dim in range(n_dims):
+            ax = axes_flat[dim]
+            ax.hist(data[:, dim], bins=30, color="#2E8B57", edgecolor="white", linewidth=0.4)
+            ax.set_title(f"dim {dim}", fontsize=8)
+            ax.set_xlabel("value", fontsize=7)
+            ax.tick_params(labelsize=6)
+            ax.grid(alpha=0.3)
+
+        for ax in axes_flat[n_dims:]:
+            ax.set_visible(False)
+
+        fig.suptitle(f"Reset distribution: {key}  (n={n_samples})", fontsize=10)
+        fig.tight_layout()
+        path = os.path.join(output_dir, f"reset_joint_dist_{key}.png")
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        print(f"[play_bc] Reset joint distribution saved to: {path}")
+
+
 def _rgb_frame_from_camera(camera, env_id: int = 0) -> np.ndarray:
     """Read one RGB frame from an Isaac camera sensor for a given env."""
     rgb = camera.data.output["rgb"][env_id]
@@ -515,6 +545,7 @@ def main():
         n_episodes = int(eval_cfg.get("num_episodes", 10))
         spawn_cfg = SpawnCfg(poses=[], num_trials=n_episodes)
 
+
     # Output dir: logs/eval/<eval_config_stem>/<checkpoint_basename>/
     if args_cli.output_dir or eval_cfg.get("output_dir"):
         output_dir = args_cli.output_dir or eval_cfg["output_dir"]
@@ -548,12 +579,39 @@ def main():
     episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length))
 
     reset_ee_positions = []  # collect first-step EE pos per episode for reset scatter plot
+    reset_joint_obs: dict[str, list] = {}  # key → list of (num_envs, D) arrays across episodes
 
     with torch.inference_mode():
         for ep_idx, (spawn_name_ep, spawn_pose) in enumerate(episodes):
             obs_raw, _ = env.reset()
+
             policy_obs = obs_raw["policy"]
             formatter.reset()  # clear obs history at episode boundary
+
+            for key in ("arm_joint_pos", "hand_joint_pos", "ee_pose"):
+                if key in policy_obs:
+                    val = policy_obs[key]
+                    arr = val.detach().cpu().numpy() if isinstance(val, torch.Tensor) else np.asarray(val)
+                    reset_joint_obs.setdefault(key, []).append(arr)
+
+            try:
+                fixed_camera = isaac_env.scene["fixed_camera"]
+                frames = [_rgb_frame_from_camera(fixed_camera, env_id=i) for i in range(num_envs)]
+                n_cols = min(4, num_envs)
+                n_rows = (num_envs + n_cols - 1) // n_cols
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), squeeze=False)
+                for i, frame in enumerate(frames):
+                    axes[i // n_cols][i % n_cols].imshow(frame)
+                    axes[i // n_cols][i % n_cols].set_title(f"env {i}", fontsize=8)
+                    axes[i // n_cols][i % n_cols].axis("off")
+                for j in range(len(frames), n_rows * n_cols):
+                    axes[j // n_cols][j % n_cols].set_visible(False)
+                fig.suptitle(f"Reset observation — episode {ep_idx}", fontsize=10)
+                fig.tight_layout()
+                fig.savefig(os.path.join(output_dir, f"reset_obs_ep{ep_idx:03d}.png"), dpi=150)
+                plt.close(fig)
+            except KeyError:
+                pass
 
             # Override object pose if spawn pose specified
             if spawn_pose is not None:
@@ -619,6 +677,11 @@ def main():
                 # stale policy actions after their auto-reset.
                 if per_env_done.any():
                     action_step[per_env_done] = warmup_act[per_env_done]
+
+                if step < 3:
+                    cur_joints = isaac_env.scene["robot"].data.joint_pos[0, :7].cpu().tolist()
+                    print(f"[DEBUG step {step}] current arm joints: {[f'{v:.3f}' for v in cur_joints]}")
+                    print(f"[DEBUG step {step}] action arm joints:  {[f'{v:.3f}' for v in action_step[0, :7].cpu().tolist()]}")
 
                 # Check metrics on current state BEFORE stepping to avoid
                 # reading the auto-reset state when the episode truncates.
@@ -709,6 +772,9 @@ def main():
 
     if reset_ee_positions:
         _plot_reset_positions(reset_ee_positions, output_dir)
+
+    if reset_joint_obs:
+        _plot_reset_joint_distributions(reset_joint_obs, output_dir)
 
     results = logger.finalize()
     extra = results.get("extra_metric_rates", {})

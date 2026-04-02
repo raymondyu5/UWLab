@@ -346,5 +346,4 @@ class FrankaLeapGraspEnv(ManagerBasedRLEnv):
             # are updated exactly as in normal interaction.
             obs, _, terminated, truncated, info = super().step(warmup_action)
 
-
         return obs, info
