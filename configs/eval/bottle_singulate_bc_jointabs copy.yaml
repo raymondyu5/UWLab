@@ -1,0 +1,9 @@
+task_id: UW-FrankaLeap-SingulateBottle-JointAbs-v0
+checkpoint: null
+num_inference_steps: 5
+device: cuda:0
+num_envs: 1
+action_horizon: 16
+spawn: random_1_trial
+record_video: true
+record_plots: true

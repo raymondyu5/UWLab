@@ -15,12 +15,11 @@ from .observations import (
 from .events import (
     apply_sysid_params_on_reset,
     reset_robot_joints,
+    reset_robot_joints_ee_box,
     reset_object_pose,
     reset_bottle_and_box,
     reset_table_block,
     reset_camera_pose,
     set_fixed_camera_view,
-    log_object_mass,
-    log_object_scales,
 )
 from .terminations import capture_bottle_reset_height, bottle_dropped, bottle_too_far, cup_toppled

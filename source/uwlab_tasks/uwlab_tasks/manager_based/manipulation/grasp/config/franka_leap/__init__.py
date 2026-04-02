@@ -95,6 +95,15 @@ gym.register(
 ########## Bottle Pour #########
 
 gym.register(
+    id="UW-FrankaLeap-PourBottle-EeBox-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapEeBoxJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
     id="UW-FrankaLeap-PourBottle-JointAbs-v0",
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={

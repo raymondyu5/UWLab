@@ -24,7 +24,7 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from .... import mdp
-from ....mdp import CachedSamplePC, reset_object_pose, reset_table_block, bottle_too_far, log_object_mass, log_object_scales
+from ....mdp import CachedSamplePC, reset_object_pose, reset_table_block, bottle_too_far
 from .rewards.grasp_rewards import SimpleGraspReward
 from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
@@ -229,19 +229,6 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "asset_cfg": SceneEntityCfg("grasp_object"),
                 "scale_range": (0.8, 1.2),
             },
-        )
-
-        self.events.log_object_mass = EventTerm(
-            func=log_object_mass,
-            mode="reset",
-            min_step_count_between_reset=800,
-            params={"asset_cfg": SceneEntityCfg("grasp_object")},
-        )
-
-        self.events.log_object_scales = EventTerm(
-            func=log_object_scales,
-            mode="reset",
-            params={"asset_cfg": SceneEntityCfg("grasp_object")},
         )
 
         self.terminations.cup_too_far = DoneTerm(

@@ -42,6 +42,7 @@ from .rewards.pour_rewards import (
 from ....mdp import (
     CachedSamplePC,
     reset_object_pose,
+    reset_robot_joints_ee_box,
     reset_table_block,
     capture_bottle_reset_height,
     bottle_dropped,
@@ -326,6 +327,56 @@ class PourBottleFrankaLeapJointAbsCfg(PourBottleFrankaLeapCfg):
     def warmup_action(self, env) -> torch.Tensor:
         reset = torch.tensor(ARM_RESET + HAND_RESET, device=env.device, dtype=torch.float32)
         return reset.unsqueeze(0).repeat(env.num_envs, 1)
+
+
+@configclass
+class PourBottleFrankaLeapEeBoxCfg(PourBottleFrankaLeapCfg):
+    """PourBottle variant that resets the arm to a random EE position within a bounding box.
+
+    Inherits all rewards, observations, and object resets from PourBottleFrankaLeapCfg.
+    Only the arm reset event and JointAbs warmup differ.
+
+    Set ee_pos_box in env-local coordinates (env origin added automatically).
+    To find ee_default_quat_w: reset the base env once and print
+        obs["policy"]["ee_pose"][:, 3:7][0].tolist()
+    """
+
+    # EE bounding box for arm reset (env-local, metres).
+    ee_pos_box: dict = {
+        "x": (0.35, 0.65),
+        "y": (-0.15, 0.15),
+        "z": (0.25, 0.55),
+    }
+    # World-frame EE orientation to hold fixed. None = preserve current per-env orientation.
+    ee_default_quat_w: list | None = None
+    # Number of DLS IK iterations at reset.
+    ee_box_ik_iters: int = 20
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.reset_robot = EventTerm(
+            func=reset_robot_joints_ee_box,
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "arm_joint_pos": ARM_RESET,
+                "hand_joint_pos": HAND_RESET,
+                "ee_pos_box": self.ee_pos_box,
+                "ee_default_quat_w": self.ee_default_quat_w,
+                "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
+                "num_ik_iters": self.ee_box_ik_iters,
+            },
+        )
+
+
+@configclass
+class PourBottleFrankaLeapEeBoxJointAbsCfg(PourBottleFrankaLeapEeBoxCfg):
+    actions = franka_leap.FrankaLeapJointPositionAction()
+
+    def warmup_action(self, env) -> torch.Tensor:
+        # Hold IK-solved joint positions so warmup doesn't drive back to ARM_RESET.
+        robot = env.scene["robot"]
+        return robot.data.joint_pos.clone()
 
 
 @configclass

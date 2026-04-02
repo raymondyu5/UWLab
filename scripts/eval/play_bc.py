@@ -3,11 +3,11 @@ Evaluate a BC (CFM) policy inside the Isaac Sim environment.
 
 Usage (inside container):
     ./isaaclab.sh -p scripts/play_bc.py \\
-        --eval_cfg configs/eval/pink_cup_bc_joint_abs.yaml \\
-        checkpoint=/path/to/outputs/2026-03-04/12-00-00 \\
-        record_video=true
+        --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml \\
+        checkpoint=logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise \\
+        record_video=true --num_envs 64
 
-./uwlab.sh -p scripts/eval/play_bc.py --eval_cfg configs/eval/bottle_pour_bc.yaml --enable_cameras --record_video --checkpoint logs/bc_cfm_pcd_bourbon_0312 --headless
+isaacpy scripts/play_bc.py --eval_cfg configs/eval/bottle_pour_bc_jointabs.yaml checkpoint=logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise record_video=true --num_envs 4 --sim_type rl
 
 The checkpoint dir must contain:
     .hydra/config.yaml   (saved by Hydra at train time)
@@ -405,6 +405,38 @@ def _plot_debug_rewards(
     plt.close(fig_rew)
 
 
+def _plot_reset_positions(reset_ee_positions: list, output_dir: str):
+    """Scatter plot of EE positions at reset across all episodes and envs.
+
+    reset_ee_positions: list of (num_envs, 3) arrays, one per episode.
+    Positions are in env-local frame (env origin already subtracted by ee_pose obs).
+    """
+    all_pos = np.concatenate(reset_ee_positions, axis=0)  # (N, 3)
+    x, y, z = all_pos[:, 0], all_pos[:, 1], all_pos[:, 2]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+
+    axes[0].scatter(x, y, s=18, alpha=0.6, color="#2E8B57")
+    axes[0].set_xlabel("x (m)")
+    axes[0].set_ylabel("y (m)")
+    axes[0].set_title(f"Reset EE positions — XY  (n={len(x)})")
+    axes[0].set_aspect("equal")
+    axes[0].grid(alpha=0.3)
+
+    axes[1].scatter(x, z, s=18, alpha=0.6, color="#2E5EA8")
+    axes[1].set_xlabel("x (m)")
+    axes[1].set_ylabel("z (m)")
+    axes[1].set_title(f"Reset EE positions — XZ  (n={len(x)})")
+    axes[1].set_aspect("equal")
+    axes[1].grid(alpha=0.3)
+
+    fig.tight_layout()
+    path = os.path.join(output_dir, "reset_ee_positions.png")
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    print(f"[play_bc] Reset EE scatter saved to: {path}")
+
+
 def _rgb_frame_from_camera(camera, env_id: int = 0) -> np.ndarray:
     """Read one RGB frame from an Isaac camera sensor for a given env."""
     rgb = camera.data.output["rgb"][env_id]
@@ -514,6 +546,8 @@ def main():
 
     isaac_env = env.unwrapped
     episode_steps = int(eval_cfg.get("episode_steps", isaac_env.max_episode_length))
+
+    reset_ee_positions = []  # collect first-step EE pos per episode for reset scatter plot
 
     with torch.inference_mode():
         for ep_idx, (spawn_name_ep, spawn_pose) in enumerate(episodes):
@@ -644,12 +678,15 @@ def main():
                 if per_env_done.all():
                     break
 
+            if len(ee_pos_traj) > 0:
+                reset_ee_positions.append(ee_pos_traj[0])  # (num_envs, 3) env-local
+
             n_success = int(last_success.sum())
             n_grasped = int(last_grasped.sum())
             n_lifted = int(last_lifted.sum())
             n_near_miss = int(last_near_miss.sum())
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
-                               n_grasped=n_grasped, n_lifted=n_lifted, n_near_miss=n_near_miss)
+                               extra_metrics={"n_grasped": n_grasped, "n_lifted": n_lifted, "n_near_miss": n_near_miss})
             if len(bottle_pos_traj) > 0 and args_cli.sim_type == "eval":
                 _plot_debug_poses(
                     ee_traj=np.stack(ee_pos_traj, axis=0),
@@ -670,11 +707,18 @@ def main():
                   f"({n_success}/{num_envs} success, {n_near_miss}/{num_envs} near_miss, {n_lifted}/{num_envs} lifted, {n_grasped}/{num_envs} grasped)"
                   + (f" (spawn={spawn_name_ep})" if spawn_name_ep else ""))
 
+    if reset_ee_positions:
+        _plot_reset_positions(reset_ee_positions, output_dir)
+
     results = logger.finalize()
-    print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{results['n_total']})")
-    print(f"[play_bc] Near miss: {results['near_miss_rate']:.1%} ({results['n_near_miss']}/{results['n_total']})")
-    print(f"[play_bc] Lifted: {results['lifted_rate']:.1%} ({results['n_lifted']}/{results['n_total']})")
-    print(f"[play_bc] Grasped: {results['grasped_rate']:.1%} ({results['n_grasped']}/{results['n_total']})")
+    extra = results.get("extra_metric_rates", {})
+    n_total = results["n_total"]
+    print(f"\n[play_bc] Done. Success rate: {results['success_rate']:.1%} ({results['n_success']}/{n_total})")
+    for key in ("n_near_miss", "n_lifted", "n_grasped"):
+        label = key.removeprefix("n_").replace("_", " ").title()
+        rate = extra.get(key, 0.0)
+        n = round(rate * n_total)
+        print(f"[play_bc] {label}: {rate:.1%} ({n}/{n_total})")
     print(f"[play_bc] Results saved to: {output_dir}")
 
     env.close()
