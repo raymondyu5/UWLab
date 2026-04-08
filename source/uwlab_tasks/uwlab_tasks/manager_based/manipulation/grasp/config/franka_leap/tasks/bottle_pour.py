@@ -335,12 +335,15 @@ class PourBottleFrankaLeapJointAbsStateCfg(PourBottleFrankaLeapJointAbsCfg):
       joint_pos (23), arm_joint_pos (7), ee_pose (7), hand_joint_pos (16),
       cup_pose (3), manipulated_object_pose (7), target_object_pose (7)
     """
+    run_mode: str = "rl_mode"
 
     def __post_init__(self):
         super().__post_init__()
         self.observations.policy.seg_pc = None
         # rsl_rl ActorCritic requires a single flat observation vector
         self.observations.policy.concatenate_terms = True
+        # metrics_spec contains callables; clear for training (eval-only)
+        self.metrics_spec = {}
 
 
 @configclass

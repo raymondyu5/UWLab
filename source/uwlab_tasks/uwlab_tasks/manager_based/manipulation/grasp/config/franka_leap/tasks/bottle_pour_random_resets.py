@@ -49,3 +49,15 @@ class PourBottleRandomResetsFrankaLeapJointAbsCfg(PourBottleRandomResetsFrankaLe
 
     def warmup_action(self, env) -> torch.Tensor:
         return env.scene["robot"].data.joint_pos.clone()
+
+
+@configclass
+class PourBottleRandomResetsFrankaLeapJointAbsStateCfg(PourBottleRandomResetsFrankaLeapJointAbsCfg):
+    """PPO-friendly variant: GT object poses only, no seg_pc. Concatenated flat obs."""
+    run_mode: str = "rl_mode"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.policy.seg_pc = None
+        self.observations.policy.concatenate_terms = True
+        self.metrics_spec = {}

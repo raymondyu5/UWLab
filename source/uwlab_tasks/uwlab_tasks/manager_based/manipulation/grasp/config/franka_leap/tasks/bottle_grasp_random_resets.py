@@ -11,6 +11,8 @@ import json
 import torch
 import isaaclab.utils.math as math_utils
 from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
@@ -18,7 +20,62 @@ import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import reset_robot_joints_from_poses
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
-from .bottle import GraspBottleFrankaLeapCfg
+from .bottle import BOTTLE_SPAWN_POS, BOTTLE_TARGET_POS, GraspBottleFrankaLeapCfg
+
+# ---------------------------------------------------------------------------
+# Standalone module-level obs/rew functions for Hydra-compatible PPO config.
+# These replace SimpleGraspReward bound methods which cannot survive the
+# Hydra serialize → deserialize round-trip (bound method __module__ points to
+# grasp_rewards, but the method is not a module-level attribute there).
+# ---------------------------------------------------------------------------
+
+_GRASP_GRASPED_Z = 0.12
+_GRASP_LIFTED_Z_LOW = 0.20
+_GRASP_LIFTED_Z_HIGH = 0.50
+_GRASP_SUCCESS_DIST = 0.15
+
+
+def _grasp_obs_object_pose(env) -> torch.Tensor:
+    """Bottle pose (7D) in env-relative frame."""
+    state = env.scene["grasp_object"]._data.root_state_w[:, :7].clone()
+    state[:, :3] -= env.scene.env_origins
+    return state
+
+
+def _grasp_obs_target_pose(env) -> torch.Tensor:
+    """Fixed target pose (7D): BOTTLE_TARGET_POS xyz + object's default rotation."""
+    target = torch.tensor([list(BOTTLE_TARGET_POS)], device=env.device, dtype=torch.float32).expand(env.num_envs, -1)
+    default_quat = env.scene["grasp_object"]._data.default_root_state[:, 3:7].clone()
+    return torch.cat([target, default_quat], dim=1)
+
+
+def _grasp_rew_grasped(env) -> torch.Tensor:
+    """Sparse +1 when object z >= BOTTLE_SPAWN_POS[2] + 0.12 m."""
+    pos = env.scene["grasp_object"]._data.root_state_w[:, :3] - env.scene.env_origins
+    return (pos[:, 2] - BOTTLE_SPAWN_POS[2] >= _GRASP_GRASPED_Z).float()
+
+
+def _grasp_rew_lifted(env) -> torch.Tensor:
+    """Sparse +1 when object z in [BOTTLE_SPAWN_POS[2] + 0.20, + 0.50] m."""
+    pos = env.scene["grasp_object"]._data.root_state_w[:, :3] - env.scene.env_origins
+    z_above = pos[:, 2] - BOTTLE_SPAWN_POS[2]
+    return ((z_above >= _GRASP_LIFTED_Z_LOW) & (z_above <= _GRASP_LIFTED_Z_HIGH)).float()
+
+
+def _grasp_rew_success(env) -> torch.Tensor:
+    """Sparse +1 when 3D distance to BOTTLE_TARGET_POS <= 0.15 m."""
+    pos = env.scene["grasp_object"]._data.root_state_w[:, :3] - env.scene.env_origins
+    target = torch.tensor(list(BOTTLE_TARGET_POS), device=env.device, dtype=torch.float32)
+    dist = torch.linalg.norm(pos - target.unsqueeze(0), dim=1)
+    return (dist <= _GRASP_SUCCESS_DIST).float()
+
+
+def _grasp_rew_joint_vel(env) -> torch.Tensor:
+    return torch.sum(env.scene["robot"].data.joint_vel ** 2, dim=1)
+
+
+def _grasp_rew_action_rate(env) -> torch.Tensor:
+    return torch.sum((env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
 
 RESET_POSES_PATH = "/workspace/uwlab/assets/reset_poses.json"
 
@@ -51,6 +108,38 @@ class GraspBottleRandomResetsFrankaLeapJointAbsCfg(GraspBottleRandomResetsFranka
     def warmup_action(self, env) -> torch.Tensor:
         # Hold the randomly sampled reset pose, not the default ARM_RESET.
         return env.scene["robot"].data.joint_pos.clone()
+
+
+@configclass
+class GraspBottleRandomResetsFrankaLeapJointAbsStateCfg(GraspBottleRandomResetsFrankaLeapJointAbsCfg):
+    """PPO-friendly variant: module-level obs/rew functions only (Hydra-safe), no seg_pc.
+
+    Replaces all SimpleGraspReward bound methods with standalone module-level functions
+    so the config survives the Hydra serialize → deserialize round-trip.
+    Observation space: joint_pos (23) + arm_joint_pos (7) + ee_pose (7) +
+                       hand_joint_pos (16) + object_pose (7) + target_pose (7) = 67D flat.
+    """
+    run_mode: str = "rl_mode"
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Replace bound method obs terms with module-level equivalents
+        self.observations.policy.target_object_pose = ObsTerm(func=_grasp_obs_target_pose)
+        self.observations.policy.manipulated_object_pose = ObsTerm(func=_grasp_obs_object_pose)
+        self.observations.policy.contact_obs = None
+        self.observations.policy.object_in_tip = None
+        self.observations.policy.seg_pc = None
+        self.observations.policy.concatenate_terms = True
+        # Replace bound method reward terms with module-level equivalents
+        self.rewards.grasped = RewTerm(func=_grasp_rew_grasped, weight=1.0)
+        self.rewards.lifted = RewTerm(func=_grasp_rew_lifted, weight=5.0)
+        self.rewards.success = RewTerm(func=_grasp_rew_success, weight=10.0)
+        self.rewards.wrist = None  # requires bound method sensor — removed
+        self.rewards.joint_vel = RewTerm(func=_grasp_rew_joint_vel, weight=-1e-3)
+        self.rewards.action_rate = RewTerm(func=_grasp_rew_action_rate, weight=-5e-3)
+        # Remove bound method event; clear metrics (eval-only, not needed for training)
+        self.events.capture_reset_height = None
+        self.metrics_spec = {}
 
 
 @configclass

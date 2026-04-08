@@ -172,6 +172,17 @@ gym.register(
     disable_env_checker=True,
 )
 
+gym.register(
+    id="UW-FrankaLeap-PourBottleRandomResets-JointAbs-PPO-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour_random_resets:PourBottleRandomResetsFrankaLeapJointAbsStateCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
 
 ########## Cube Grasp #########
 
@@ -210,6 +221,17 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapJointAbsStateCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
     },
     disable_env_checker=True,
 )

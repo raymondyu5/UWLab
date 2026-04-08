@@ -27,7 +27,8 @@ parser.add_argument(
     "--agent", type=str, default="sb3_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument("--log_interval", type=int, default=100_000, help="Log data every n timesteps.")
+parser.add_argument("--log_interval", type=int, default=100_000, help="Log training stats every n timesteps (via LogEveryNTimesteps callback).")
+parser.add_argument("--sb3_log_interval", type=int, default=10, help="SB3 internal log_interval passed to agent.learn(): log after every N PPO updates (default 10 = every 10 rollouts).")
 parser.add_argument("--checkpoint", type=str, default=None, help="Continue the training from checkpoint.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
@@ -238,7 +239,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             total_timesteps=n_timesteps,
             callback=callbacks,
             progress_bar=True,
-            log_interval=None,
+            log_interval=args_cli.sb3_log_interval,
         )
     # save the final model
     agent.save(os.path.join(log_dir, "model"))
