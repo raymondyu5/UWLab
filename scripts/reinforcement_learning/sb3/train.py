@@ -40,6 +40,8 @@ parser.add_argument(
 parser.add_argument(
     "--ray-proc-id", "-rid", type=int, default=None, help="Automatically configured by Ray integration, otherwise None."
 )
+parser.add_argument("--wandb_project", type=str, default=None, help="Wandb project name. If set, enables wandb logging.")
+parser.add_argument("--wandb_run_name", type=str, default=None, help="Wandb run name override.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -79,8 +81,10 @@ import gymnasium as gym
 import logging
 import numpy as np
 import os
+import re
 import random
 from datetime import datetime
+from uuid import uuid4
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, LogEveryNTimesteps
@@ -126,13 +130,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg["seed"]
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
-    # directory for logging into
-    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3", args_cli.task))
+    # generate uwlab-style run name: VanillaPPO-{short_task}_{MMDD}_{HHMM}_{uuid6}
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+    short_task = re.sub(r"-v\d+$", "", args_cli.task or "ppo")
+    short_task = re.sub(r"^UW-[^-]+-", "", short_task)  # strip "UW-FrankaLeap-"
+    run_name = args_cli.wandb_run_name or f"VanillaPPO-{short_task}_{timestamp}_{uuid4().hex[:6]}"
+    log_root_path = os.path.abspath(os.path.join("logs", "ppo"))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
-    print(f"Exact experiment name requested from command line: {run_info}")
-    log_dir = os.path.join(log_root_path, run_info)
+    print(f"Exact experiment name requested from command line: {run_name}")
+    log_dir = os.path.join(log_root_path, run_name)
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
@@ -200,6 +207,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             clip_reward=np.inf,
         )
 
+    # wandb setup
+    if args_cli.wandb_project:
+        import wandb
+        from wandb.integration.sb3 import WandbCallback
+        command = " ".join(sys.orig_argv)
+        wandb.init(
+            project=args_cli.wandb_project,
+            name=run_name,
+            config={"command": command, **agent_cfg},
+            sync_tensorboard=True,
+            save_code=False,
+        )
+        print(f"[INFO] Wandb run: {wandb.run.get_url()}")
+
     # create agent from stable baselines
     agent = PPO(policy_arch, env, verbose=1, tensorboard_log=log_dir, **agent_cfg)
     if args_cli.checkpoint is not None:
@@ -208,6 +229,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # callbacks for agent
     checkpoint_callback = CheckpointCallback(save_freq=1000, save_path=log_dir, name_prefix="model", verbose=2)
     callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval)]
+    if args_cli.wandb_project:
+        callbacks.append(WandbCallback(verbose=2))
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):
@@ -225,6 +248,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env, VecNormalize):
         print("Saving normalization")
         env.save(os.path.join(log_dir, "model_vecnormalize.pkl"))
+
+    if args_cli.wandb_project:
+        wandb.finish()
 
     # close the simulator
     env.close()

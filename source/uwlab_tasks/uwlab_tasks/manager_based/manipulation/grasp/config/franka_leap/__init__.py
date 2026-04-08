@@ -5,6 +5,7 @@
 
 import gymnasium as gym
 
+from . import agents
 from .grasp_franka_leap import (
     EVAL_MODE,
     DISTILL_MODE,
@@ -117,6 +118,17 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-PourBottle-JointAbs-PPO-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour:PourBottleFrankaLeapJointAbsStateCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
     },
     disable_env_checker=True,
 )

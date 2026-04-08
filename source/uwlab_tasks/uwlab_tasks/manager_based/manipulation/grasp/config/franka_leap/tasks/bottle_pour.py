@@ -331,6 +331,22 @@ class PourBottleFrankaLeapJointAbsCfg(PourBottleFrankaLeapCfg):
 
 
 @configclass
+class PourBottleFrankaLeapJointAbsStateCfg(PourBottleFrankaLeapJointAbsCfg):
+    """PPO-friendly variant: GT object poses only, no seg_pc.
+
+    Observation space (~70D flat):
+      joint_pos (23), arm_joint_pos (7), ee_pose (7), hand_joint_pos (16),
+      cup_pose (3), manipulated_object_pose (7), target_object_pose (7)
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.policy.seg_pc = None
+        # rsl_rl ActorCritic requires a single flat observation vector
+        self.observations.policy.concatenate_terms = True
+
+
+@configclass
 class PourBottleFrankaLeapEeBoxCfg(PourBottleFrankaLeapCfg):
     """PourBottle variant that resets the arm to a random EE position within a bounding box.
 

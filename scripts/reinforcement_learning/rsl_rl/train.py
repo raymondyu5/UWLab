@@ -78,8 +78,10 @@ if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
 import gymnasium as gym
 import logging
 import os
+import re
 import torch
 from datetime import datetime
+from uuid import uuid4
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
@@ -143,15 +145,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg.seed = seed
 
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.join("logs", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    # specify directory for logging runs: {time-stamp}_{run_name}
-    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # generate uwlab-style run name: VanillaPPO-{short_task}_{MMDD}_{HHMM}_{uuid6}
+    if agent_cfg.run_name:
+        log_dir = agent_cfg.run_name
+    else:
+        timestamp = datetime.now().strftime("%m%d_%H%M")
+        short_task = re.sub(r"-v\d+$", "", args_cli.task or agent_cfg.experiment_name)
+        short_task = re.sub(r"^UW-[^-]+-", "", short_task)  # strip "UW-FrankaLeap-"
+        log_dir = f"VanillaPPO-{short_task}_{timestamp}_{uuid4().hex[:6]}"
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
-    if agent_cfg.run_name:
-        log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
 
     # set the IO descriptors export flag if requested
