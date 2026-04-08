@@ -31,8 +31,9 @@ from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_
 from .shared_params import ARM_MESH_DIR, HAND_MESH_DIR, FINGERS_NAME_LIST
 
 # Cup origin is at the bottom of the mesh (~15cm tall), so spawn z=0.11 places the bottom on the table.
-# Spawn center: x=0.525 (midpoint of real-world x∈[0.45,0.60]), y=0.1
-# pose_range: x ±0.075 covers [0.45, 0.60]; y ±0.02
+# Spawn center: x=0.525, y=0.1
+# pose_range: x in [-0.075, +0.175] around default; y in [-0.10, +0.10]
+# => absolute reset range: x in [0.45, 0.70], y in [0.00, 0.20]
 
 PINK_CUP_HORIZON = 128
 PINK_CUP_TARGET_POS = (0.55, 0.10, 0.35)
@@ -144,7 +145,7 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.rewards.success     = RewTerm(func=simple_rew.rew_success,       weight=10.0)
         self.rewards.wrist       = RewTerm(func=simple_rew.rew_wrist_penalty, weight=-2.0)
         self.rewards.joint_vel   = RewTerm(func=simple_rew.rew_joint_vel,     weight=-1e-3)
-        self.rewards.action_rate = RewTerm(func=simple_rew.rew_action_rate,   weight=-5e-3)
+        self.rewards.action_rate = RewTerm(func=simple_rew.rew_action_rate,   weight=-0.5)
         self.metrics_spec = {"is_success": simple_rew.rew_success, "is_lifted": simple_rew.rew_lifted, "is_grasped": simple_rew.rew_grasped}
 
         self.events.capture_reset_height = EventTerm(
@@ -185,8 +186,8 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "default_pos": PINK_CUP_SPAWN_POS,
                 "default_rot_quat": PINK_CUP_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.075, 0.075),
-                    "y": (-0.02, 0.02),
+                    "x": (-0.075, 0.175),
+                    "y": (-0.10, 0.10),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
@@ -203,8 +204,8 @@ class GraspPinkCupFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             min_step_count_between_reset=800, # expensive to run everytie, so just do it every 800 steps
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "static_friction_range": (0.3, 1.5),
-                "dynamic_friction_range": (0.3, 1.2),
+                "static_friction_range": (0.3, 0.7),
+                "dynamic_friction_range": (0.3, 0.7),
                 "restitution_range": (0.0, 0.0),
                 "num_buckets": 64,
             },

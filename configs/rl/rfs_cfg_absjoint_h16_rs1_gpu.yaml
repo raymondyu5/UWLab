@@ -1,0 +1,55 @@
+# RFS config for CFM checkpoint trained with:
+#   action space: absolute joint positions (23D: 7 arm + 16 hand)
+#   horizon: 16   (CFM denoises 16-step chunks)
+#   n_obs_steps: 4  (CFM conditions on 4-frame history)
+#   use_action_history: true
+#
+# Task: UW-FrankaLeap-PourBottle-JointAbs-v0
+# Checkpoint: logs/bc_cfm_pcd_bourbon_0325_absjoint_h16_hist4_extnoise_dropout
+#
+# Variant: residual_step=1 — execute one env step per PPO step.
+# GPU buffer: ON (GpuSb3VecEnvWrapper + GpuDictRolloutBuffer, zero CPU<->GPU per step)
+
+gpu_buffer: true
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  learning_rate: 0.0003
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+rfs:
+  noise_dims: "0:23"
+  residual_dims: "7:23"
+  residual_step: 1
+  residual_scale: 0.01
+  clip_actions: false
+  finger_smooth_alpha: 1.0
+  finger_start_dim: 7
+  ppo_history: true
+
+eval:
+  interval: 50
+  spawn: "bottle_pour_narrow"
+  record_video: true
+  record_plots: true
+
+reg:
+  real_dataset_path: /gscratch/weirdlab/will/UWLab_Docker/data_storage/datasets/03_24_bourbon_pour
+  reg_coef: 0.05
+  reg_batch_size: 256
+  n_augmentations: 10
+  pcd_noise: 0.02
+  noise_extrinsic: false
+  noise_extrinsic_parameter: [0.05, 0.2]

@@ -357,7 +357,7 @@ def main():
 
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
-            total_timesteps=200_000_000,
+            total_timesteps=600_000_000,
             callback=[reward_term_cb, noise_pred_cb, eval_cb],
             progress_bar=True,
             log_interval=1,
