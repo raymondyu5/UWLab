@@ -386,6 +386,7 @@ def reset_object_pose(
     pose_range: dict,
     reset_height: float,
     table_block_name: str | None = None,
+    discrete_yaw_choices: list | None = None,
 ):
     asset = env.scene[asset_cfg.name]
 
@@ -404,6 +405,11 @@ def reset_object_pose(
     ranges = torch.tensor(range_list, device=env.device)
     rand_samples = math_utils.sample_uniform(
         ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=asset.device)
+
+    if discrete_yaw_choices is not None:
+        choices = torch.tensor(discrete_yaw_choices, device=env.device, dtype=torch.float32)
+        idx = torch.randint(len(choices), (len(env_ids),), device=env.device)
+        rand_samples[:, 5] = choices[idx]
 
     positions = root_states[:, 0:3] + env.scene.env_origins[env_ids] + rand_samples[:, 0:3]
 
@@ -506,3 +512,75 @@ def reset_bottle_and_box(
     box = env.scene[box_cfg.name]
     box.write_root_pose_to_sim(torch.cat([box_pos, box_quat], dim=-1), env_ids=env_ids)
     box.write_root_velocity_to_sim(torch.zeros(n, 6, device=device), env_ids=env_ids)
+
+
+def reset_robot_joints_from_poses(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    arm_joint_poses: list,
+    hand_joint_pos: list,
+    arm_joint_limits: dict | None = None,
+):
+    """Reset robot joints to a pose sampled uniformly at random from arm_joint_poses.
+
+    Each env in env_ids independently draws one pose. arm_joint_poses is a list of
+    N arm joint position vectors (each 7D for Franka). hand_joint_pos is fixed for
+    all envs.
+    """
+    robot = env.scene[asset_cfg.name]
+    num_reset = len(env_ids)
+
+    poses_tensor = torch.tensor(arm_joint_poses, device=env.device, dtype=torch.float32)
+    indices = torch.randint(len(arm_joint_poses), (num_reset,), device=env.device)
+    arm_pos = poses_tensor[indices]  # (num_reset, 7)
+
+    if arm_joint_limits is not None:
+        order = [f"panda_joint{i}" for i in range(1, 8)]
+        low = torch.tensor(
+            [arm_joint_limits[j][0] for j in order], device=env.device, dtype=torch.float32
+        )
+        high = torch.tensor(
+            [arm_joint_limits[j][1] for j in order], device=env.device, dtype=torch.float32
+        )
+        arm_pos = arm_pos.clamp(low, high)
+
+    hand_pos = torch.tensor(hand_joint_pos, device=env.device, dtype=torch.float32)
+    hand_pos = hand_pos.unsqueeze(0).expand(num_reset, -1)
+
+    joint_pos = torch.cat([arm_pos, hand_pos], dim=1)
+    joint_vel = torch.zeros_like(joint_pos)
+
+    robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+_scales_logged: set = set()
+
+
+def log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
+    asset = env.scene[asset_cfg.name]
+    masses = asset.root_physx_view.get_masses()
+    print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
+
+
+def log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
+    global _scales_logged
+    if asset_cfg.name in _scales_logged:
+        return
+    _scales_logged.add(asset_cfg.name)
+    try:
+        import isaaclab.sim as sim_utils
+        from pxr import UsdGeom
+        stage = sim_utils.get_current_stage()
+        prim_path_template = env.scene[asset_cfg.name].cfg.prim_path
+        paths = sim_utils.find_matching_prim_paths(prim_path_template)[:4]
+        scales = []
+        for p in paths:
+            prim = stage.GetPrimAtPath(p)
+            for op in UsdGeom.Xformable(prim).GetOrderedXformOps():
+                if "scale" in op.GetOpName():
+                    scales.append(tuple(round(v, 3) for v in op.Get()))
+                    break
+        print(f"[DR] {asset_cfg.name} scales (first {len(scales)} envs): {scales}")
+    except Exception as e:
+        print(f"[DR] scale logging failed: {e}")

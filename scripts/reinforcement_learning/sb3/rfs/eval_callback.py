@@ -481,7 +481,7 @@ class RFSEvalCallback(BaseCallback):
                 if active.any():
                     metrics_np = isaac_env.metrics.get_metrics()
                     m_success = torch.from_numpy(metrics_np["is_success"]).to(device).bool()
-                    m_grasped = torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()
+                    m_grasped = torch.from_numpy(metrics_np.get("is_grasped", np.zeros(num_envs, dtype=bool))).to(device).bool()
                     last_success[active]  = m_success[active]
                     ever_success[active] |= m_success[active]
                     ever_grasped[active] |= m_grasped[active]
@@ -590,7 +590,7 @@ class RFSEvalCallback(BaseCallback):
                 if active.any():
                     metrics_np = isaac_env.metrics.get_metrics()
                     m_success = torch.from_numpy(metrics_np["is_success"]).to(device).bool()
-                    m_grasped = torch.from_numpy(metrics_np["is_grasped"]).to(device).bool()
+                    m_grasped = torch.from_numpy(metrics_np.get("is_grasped", np.zeros(num_envs, dtype=bool))).to(device).bool()
                     last_success[active]  = m_success[active]
                     ever_success[active] |= m_success[active]
                     ever_grasped[active] |= m_grasped[active]

@@ -27,7 +27,6 @@ from .rewards.pour_rewards import (
     PourReward,
     pour_action_rate_l2,
     pour_cup_topple,
-    pour_finger_table_contact,
     pour_grasped,
     pour_joint_pos_limits,
     pour_joint_vel_l2,
@@ -35,8 +34,6 @@ from .rewards.pour_rewards import (
     pour_precise_success,
     pour_xy_healthy,
     pour_xy_near_miss,
-    _FINGER_SENSOR_LINK,
-    _FINGERS_NAME_LIST,
 )
 
 from ....mdp import (
@@ -162,20 +159,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             weight=-6.0e-1,
             params={"asset_name": "robot"},
         )
-        self.rewards.action_rate = RewTerm(func=pour_action_rate_l2, weight=-5.0e-3)
-        self.rewards.finger_table_contact = RewTerm(func=pour_finger_table_contact, weight=-1.0)
-
-        from isaaclab.sensors.contact_sensor import ContactSensorCfg
-        for link_name in _FINGERS_NAME_LIST:
-            sensor_link = _FINGER_SENSOR_LINK[link_name]
-            sensor = ContactSensorCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/right_hand/" + sensor_link,
-                update_period=0.0,
-                history_length=3,
-                filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
-                debug_vis=False,
-            )
-            setattr(self.scene, f"{link_name}_table_contact", sensor)
+        self.rewards.action_rate = RewTerm(func=pour_action_rate_l2, weight=-0.05)
 
         # Task-defined boolean-ish metrics used by eval scripts.
         self.metrics_spec = {
@@ -261,6 +245,19 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             params={"object_name": "grasp_object"},
         )
 
+
+        self.events.randomize_object_material = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_material,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "static_friction_range": (0.3, 0.9),
+                "dynamic_friction_range": (0.3, 0.9),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 64,
+            },
+        )
 
         self.events.randomize_object_mass = EventTerm(
             func=isaac_mdp.randomize_rigid_body_mass,

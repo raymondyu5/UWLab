@@ -149,6 +149,108 @@ gym.register(
 )
 
 
+########## Bottle Pour (random arm resets from JSON) #########
+
+gym.register(
+    id="UW-FrankaLeap-PourBottleRandomResets-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_pour_random_resets:PourBottleRandomResetsFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Cube Grasp #########
+
+gym.register(
+    id="UW-FrankaLeap-GraspCube-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube:GraspCubeFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspCube-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube:GraspCubeFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspCube-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube:GraspCubeFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Bottle Grasp (random arm resets from JSON) #########
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottleRandomResets-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottleRandomResets-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottleRandomResets-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Cube Push #########
+
+gym.register(
+    id="UW-FrankaLeap-PushCubeToPoptart-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube_push:PushCubeToPoptartFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-PushCubeToPoptart-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube_push:PushCubeToPoptartFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-PushCubeToPoptart-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube_push:PushCubeToPoptartFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Bottle Singulate #########
 
 gym.register(
