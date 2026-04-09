@@ -43,6 +43,10 @@ parser.add_argument(
 )
 parser.add_argument("--wandb_project", type=str, default=None, help="Wandb project name. If set, enables wandb logging.")
 parser.add_argument("--wandb_run_name", type=str, default=None, help="Wandb run name override.")
+parser.add_argument("--eval_interval", type=int, default=50, help="Run eval every N rollouts (PPO updates).")
+parser.add_argument("--eval_spawn", type=str, default=None, help="Spawn config name (from configs/eval/spawns/). If not set, uses random eval with 1 trial.")
+parser.add_argument("--eval_spawn_dir", type=str, default=None, help="Directory containing spawn YAML files. Defaults to configs/eval/spawns relative to script.")
+parser.add_argument("--eval_video", action="store_true", default=False, help="Record eval rollout videos via viewport (no per-env cameras needed, compatible with rl_mode).")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -131,6 +135,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg["seed"]
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
+
     # generate uwlab-style run name: VanillaPPO-{short_task}_{MMDD}_{HHMM}_{uuid6}
     timestamp = datetime.now().strftime("%m%d_%H%M")
     short_task = re.sub(r"-v\d+$", "", args_cli.task or "ppo")
@@ -167,11 +172,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    need_render = args_cli.video or args_cli.eval_video
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if need_render else None)
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
+
+    # capture references before any wrappers (needed for PPOEvalCallback)
+    isaac_env = env.unwrapped
+    gym_env = env  # gym env with viewport render() support
 
     # wrap for video recording
     control_hz = 1 / (env_cfg.sim.dt * env_cfg.decimation) 
@@ -232,6 +242,33 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     callbacks = [checkpoint_callback, LogEveryNTimesteps(n_steps=args_cli.log_interval)]
     if args_cli.wandb_project:
         callbacks.append(WandbCallback(verbose=2))
+
+    # reward term + eval callbacks
+    from ppo_eval_callback import PPOEvalCallback, WandbRewardTermCallback
+    from uwlab.eval.spawn import SpawnCfg, load_spawn_cfg
+
+    if args_cli.wandb_project:
+        callbacks.append(WandbRewardTermCallback(isaac_env, verbose=0))
+
+    if args_cli.eval_spawn is not None:
+        spawn_dir = args_cli.eval_spawn_dir or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "configs", "eval", "spawns"
+        )
+        spawn_cfg = load_spawn_cfg(args_cli.eval_spawn, spawn_dir)
+    else:
+        spawn_cfg = SpawnCfg(poses=[], num_trials=1)
+
+    eval_callback = PPOEvalCallback(
+        isaac_env=isaac_env,
+        gym_env=gym_env,
+        spawn_cfg=spawn_cfg,
+        log_dir=log_dir,
+        eval_interval=args_cli.eval_interval,
+        record_scatter=True,
+        record_video=args_cli.eval_video,
+        verbose=1,
+    )
+    callbacks.append(eval_callback)
 
     # train the agent
     with contextlib.suppress(KeyboardInterrupt):

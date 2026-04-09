@@ -60,4 +60,3 @@ class PourBottleRandomResetsFrankaLeapJointAbsStateCfg(PourBottleRandomResetsFra
         super().__post_init__()
         self.observations.policy.seg_pc = None
         self.observations.policy.concatenate_terms = True
-        self.metrics_spec = {}

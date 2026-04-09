@@ -22,16 +22,38 @@ from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import SpawnCfg
 
 
+class WandbRewardTermCallback(BaseCallback):
+    """Logs individual Isaac reward terms to wandb at the end of each rollout."""
+
+    def __init__(self, isaac_env, verbose=0):
+        super().__init__(verbose)
+        self._isaac_env = isaac_env
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if wandb.run is None:
+            return
+        mgr = self._isaac_env.reward_manager
+        term_means = {name: val.mean().item() for name, val in mgr._episode_sums.items()}
+        log_dict = {f"rewards/{name}": mean_val for name, mean_val in term_means.items()}
+        log_dict["rewards/total"] = sum(term_means.values())
+        wandb.log(log_dict, step=self.num_timesteps)
+
+
 class PPOEvalCallback(BaseCallback):
     """
     SB3 callback that periodically runs deterministic PPO rollouts for evaluation.
 
     Args:
         isaac_env: FrankaLeapGraspEnv (raw Isaac env) for direct metrics access.
+        gym_env: Gym-wrapped Isaac env (pre-SB3). Required for render() when record_video=True.
         spawn_cfg: SpawnCfg defining eval poses (random if no poses defined).
         log_dir: Root log dir; eval output goes to log_dir/eval/step_XXXXXXXXXX/.
         eval_interval: Fire every this many rollouts (PPO updates).
         record_scatter: Save scatter_success PNG via EvalLogger.
+        record_video: Save per-episode MP4s via viewport render (works in rl_mode; requires render_mode="rgb_array" in gym.make).
         verbose: SB3 verbosity.
     """
 
@@ -40,16 +62,20 @@ class PPOEvalCallback(BaseCallback):
         isaac_env,
         spawn_cfg: SpawnCfg,
         log_dir: str,
+        gym_env=None,
         eval_interval: int = 50,
         record_scatter: bool = True,
+        record_video: bool = False,
         verbose: int = 1,
     ):
         super().__init__(verbose=verbose)
         self._isaac_env = isaac_env
+        self._gym_env = gym_env
         self.spawn_cfg = spawn_cfg
         self.log_dir = log_dir
         self.eval_interval = eval_interval
         self.record_scatter = record_scatter
+        self.record_video = record_video
 
         self._rollout_count = 0
 
@@ -78,10 +104,17 @@ class PPOEvalCallback(BaseCallback):
                 print(f"[PPOEvalCallback] Saved checkpoint: {ckpt_path}.zip")
             self._run_eval()
 
+    def _has_metrics(self) -> bool:
+        """Return True if the env has any metrics_spec configured."""
+        return bool(getattr(self._isaac_env, "metrics", None) and self._isaac_env.metrics._specs)
+
     def _on_step(self) -> bool:
         """Update rolling training success rate on every env step."""
         dones = self.locals.get("dones")
         if dones is None:
+            return True
+
+        if not self._has_metrics():
             return True
 
         # Current metrics: correct for active envs; wrong for just-reset envs.
@@ -130,7 +163,7 @@ class PPOEvalCallback(BaseCallback):
 
         logger = EvalLogger(
             output_dir,
-            record_video=False,   # cameras disabled in rl_mode
+            record_video=self.record_video,
             record_plots=self.record_scatter,
             video_fps=video_fps,
         )
@@ -200,7 +233,7 @@ class PPOEvalCallback(BaseCallback):
             for step_idx in range(episode_steps):
                 # Read metrics before step (T-1 approximation for terminated envs).
                 active = [not recorded[i] for i in range(num_envs)]
-                if any(active):
+                if any(active) and self._has_metrics():
                     metrics = self._isaac_env.metrics.get_metrics()
                     m_success = torch.tensor(metrics.get("is_success", np.zeros(num_envs)), device=device).bool()
                     active_t = torch.tensor(active, device=device)
@@ -233,7 +266,8 @@ class PPOEvalCallback(BaseCallback):
                 # Log object pose for first env (trajectory tracking).
                 obj_pos = self._isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
                 ee_pose_np = self._get_ee_pose_np(obs_dict)
-                logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action_np[0])
+                frame = self._gym_env.render() if self.record_video and self._gym_env is not None else None
+                logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action_np[0], frame=frame)
 
                 if all(recorded):
                     break
@@ -290,7 +324,7 @@ class PPOEvalCallback(BaseCallback):
             for step_idx in range(episode_steps):
                 # Read metrics before step.
                 active_t = torch.tensor([not recorded[i] for i in range(num_envs)], device=device)
-                if active_t.any():
+                if active_t.any() and self._has_metrics():
                     metrics = self._isaac_env.metrics.get_metrics()
                     m_success = torch.tensor(metrics.get("is_success", np.zeros(num_envs)), device=device).bool()
                     last_success[active_t] = m_success[active_t]
@@ -322,7 +356,8 @@ class PPOEvalCallback(BaseCallback):
 
                 obj_pos = self._isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
                 ee_pose_np = self._get_ee_pose_np(obs_dict)
-                logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action_np[0])
+                frame = self._gym_env.render() if self.record_video and self._gym_env is not None else None
+                logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action_np[0], frame=frame)
 
                 if all(recorded):
                     break

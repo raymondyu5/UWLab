@@ -137,9 +137,13 @@ class GraspBottleRandomResetsFrankaLeapJointAbsStateCfg(GraspBottleRandomResetsF
         self.rewards.wrist = None  # requires bound method sensor — removed
         self.rewards.joint_vel = RewTerm(func=_grasp_rew_joint_vel, weight=-1e-3)
         self.rewards.action_rate = RewTerm(func=_grasp_rew_action_rate, weight=-5e-3)
-        # Remove bound method event; clear metrics (eval-only, not needed for training)
+        # Remove bound method event; replace metrics_spec with module-level equivalents
         self.events.capture_reset_height = None
-        self.metrics_spec = {}
+        self.metrics_spec = {
+            "is_success": _grasp_rew_success,
+            "is_lifted": _grasp_rew_lifted,
+            "is_grasped": _grasp_rew_grasped,
+        }
 
 
 @configclass

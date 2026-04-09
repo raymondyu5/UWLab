@@ -342,8 +342,6 @@ class PourBottleFrankaLeapJointAbsStateCfg(PourBottleFrankaLeapJointAbsCfg):
         self.observations.policy.seg_pc = None
         # rsl_rl ActorCritic requires a single flat observation vector
         self.observations.policy.concatenate_terms = True
-        # metrics_spec contains callables; clear for training (eval-only)
-        self.metrics_spec = {}
 
 
 @configclass
