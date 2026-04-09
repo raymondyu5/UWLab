@@ -24,6 +24,6 @@ from .events import (
     reset_camera_pose,
     set_fixed_camera_view,
     log_object_mass,
-    log_object_scales
+    log_object_scales,
 )
 from .terminations import capture_bottle_reset_height, bottle_dropped, bottle_too_far, cup_toppled
