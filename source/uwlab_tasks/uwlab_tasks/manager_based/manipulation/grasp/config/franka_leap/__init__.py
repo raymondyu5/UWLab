@@ -54,6 +54,18 @@ gym.register(
 )
 
 
+########## Pink Cup (random arm resets from JSON) #########
+
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cup_grasp_random_resets:GraspPinkCupRandomResetsFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Bottle Grasp #########
 
 gym.register(
@@ -255,6 +267,18 @@ gym.register(
 )
 
 
+########## Cube Grasp (random arm resets from JSON) #########
+
+gym.register(
+    id="UW-FrankaLeap-GraspCubeRandomResets-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube_grasp_random_resets:GraspCubeRandomResetsFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Cube Push #########
 
 gym.register(
@@ -280,6 +304,18 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.cube_push:PushCubeToPoptartFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Cube Push (random arm resets from JSON) #########
+
+gym.register(
+    id="UW-FrankaLeap-PushCubeToPoptartRandomResets-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube_push_random_resets:PushCubeToPoptartRandomResetsFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
