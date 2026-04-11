@@ -97,6 +97,8 @@ class GraspBottleRandomResetsFrankaLeapCfg(GraspBottleFrankaLeapCfg):
                 "arm_joint_poses": arm_joint_poses,
                 "hand_joint_pos": HAND_RESET,
                 "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
+                "canonical_arm_joint_pos": ARM_RESET,
+                "canonical_reset_prob": 0.70,
             },
         )
 

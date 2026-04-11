@@ -16,7 +16,7 @@ from isaaclab.utils import configclass
 import uwlab_assets.robots.franka_leap as franka_leap
 
 from ....mdp import reset_robot_joints_from_poses
-from ..grasp_franka_leap import HAND_RESET
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET
 from .cube import GraspCubeFrankaLeapCfg
 
 RESET_POSES_PATH = "/workspace/uwlab/assets/reset_poses_cube_grasp.json"
@@ -39,6 +39,8 @@ class GraspCubeRandomResetsFrankaLeapCfg(GraspCubeFrankaLeapCfg):
                 "arm_joint_poses": arm_joint_poses,
                 "hand_joint_pos": HAND_RESET,
                 "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
+                "canonical_arm_joint_pos": ARM_RESET,
+                "canonical_reset_prob": 0.70,
             },
         )
 

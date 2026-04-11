@@ -147,11 +147,16 @@ class CFMPCDPolicy(BaseImagePolicy):
         return F.mse_loss(pred, ut)
 
     @torch.no_grad()
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor], noise=None) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], noise=None, do_profile=False) -> Dict[str, torch.Tensor]:
         nobs = self.normalizer.normalize(obs_dict)
 
         B = next(iter(nobs.values())).shape[0]
+
+        if do_profile:
+            _e0 = torch.cuda.Event(enable_timing=True); _e0.record()
         global_cond, pcd_feat = self._encode_obs(nobs, B)
+        if do_profile:
+            _e1 = torch.cuda.Event(enable_timing=True); _e1.record()
 
         if noise is not None:
             trajectory = noise.to(device=self.device, dtype=self.dtype)
@@ -169,6 +174,14 @@ class CFMPCDPolicy(BaseImagePolicy):
             local_cond=None,
             global_cond=global_cond,
         )
+
+        if do_profile:
+            _e2 = torch.cuda.Event(enable_timing=True); _e2.record()
+            torch.cuda.synchronize()
+            self._last_profile = {
+                "encode_obs_ms": _e0.elapsed_time(_e1),
+                "rk2_ms": _e1.elapsed_time(_e2),
+            }
 
         action_pred = self.normalizer["action"].unnormalize(trajectory)
         action = action_pred[:, : self.n_action_steps]

@@ -521,12 +521,18 @@ def reset_robot_joints_from_poses(
     arm_joint_poses: list,
     hand_joint_pos: list,
     arm_joint_limits: dict | None = None,
+    canonical_arm_joint_pos: list | None = None,
+    canonical_reset_prob: float = 0.0,
 ):
     """Reset robot joints to a pose sampled uniformly at random from arm_joint_poses.
 
     Each env in env_ids independently draws one pose. arm_joint_poses is a list of
     N arm joint position vectors (each 7D for Franka). hand_joint_pos is fixed for
     all envs.
+
+    If canonical_arm_joint_pos is provided and canonical_reset_prob > 0, each env
+    independently uses the canonical pose with that probability instead of sampling
+    from arm_joint_poses.
     """
     robot = env.scene[asset_cfg.name]
     num_reset = len(env_ids)
@@ -534,6 +540,11 @@ def reset_robot_joints_from_poses(
     poses_tensor = torch.tensor(arm_joint_poses, device=env.device, dtype=torch.float32)
     indices = torch.randint(len(arm_joint_poses), (num_reset,), device=env.device)
     arm_pos = poses_tensor[indices]  # (num_reset, 7)
+
+    if canonical_arm_joint_pos is not None and canonical_reset_prob > 0.0:
+        canonical = torch.tensor(canonical_arm_joint_pos, device=env.device, dtype=torch.float32)
+        use_canonical = torch.rand(num_reset, device=env.device) < canonical_reset_prob
+        arm_pos[use_canonical] = canonical
 
     if arm_joint_limits is not None:
         order = [f"panda_joint{i}" for i in range(1, 8)]

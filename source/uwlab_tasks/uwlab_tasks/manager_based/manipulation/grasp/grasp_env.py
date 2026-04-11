@@ -198,8 +198,8 @@ class GraspEnvCfg(ManagerBasedRLEnvCfg):
             ),
             physx=PhysxCfg(
                 bounce_threshold_velocity=0.2,
-                gpu_max_rigid_contact_count=2**20,
-                gpu_max_rigid_patch_count=2**23,
+                gpu_max_rigid_contact_count=2**23,
+                gpu_max_rigid_patch_count=2**25,
             ),
         )
 

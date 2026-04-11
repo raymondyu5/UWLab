@@ -1,0 +1,44 @@
+# DSRL config for JointRel h16 policy.
+# Noise-space RL only — no residual on top of the base diffusion action.
+# Action space: 23D [7D delta arm | 16D abs hand], horizon=16.
+# PPO noise space: 23 * 16 = 368 dims.
+# Tuned for 4096 envs per GPU (vs arm_rfs_joint_cfg.yaml which was tuned for 1024 envs).
+# n_steps=128, batch_size=8192 → 64 minibatches × 8 epochs = 512 grad steps per rollout.
+
+ppo:
+  n_steps: 128
+  batch_size: 8192
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  learning_rate: 0.0003
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+rfs:
+  noise_dims: "0:23"
+  residual_dims: "0:23"  # full residual
+
+  residual_step: 1
+
+  residual_scale: 0.01      # unused when residual_dims is empty
+
+  # BoundedRelativeJointPositionAction clamps joint positions to arm limits.
+  clip_actions: false
+
+  finger_smooth_alpha: 1.0
+
+  num_warmup_steps: 5
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true
+  record_plots: false

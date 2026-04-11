@@ -22,6 +22,9 @@ def build_zarr_dataset(cfg: DictConfig) -> Union[ZarrDataset, CotrainZarrDataset
         return CotrainZarrDataset(
             sim_dataset=sim_dataset, real_dataset=real_dataset, sim_ratio=sim_ratio
         )
+    data_paths = cfg.dataset.get("data_paths", None)
+    if data_paths is not None:
+        return _one_zarr(cfg, list(data_paths), cfg.training.seed)
     return _one_zarr(cfg, cfg.dataset.data_path, cfg.training.seed)
 
 

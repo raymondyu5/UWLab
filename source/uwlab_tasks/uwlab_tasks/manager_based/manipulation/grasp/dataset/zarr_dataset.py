@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import os
 import copy
 import numpy as np
@@ -141,7 +141,7 @@ class ZarrDataset(Dataset):
 
     def __init__(
         self,
-        data_path: str,
+        data_path: Union[str, List[str]],
         load_list: List[str],
         num_demo: Optional[int] = None,
         obs_keys: List[str] = None,
@@ -191,37 +191,42 @@ class ZarrDataset(Dataset):
         self._window_size = n_obs_steps - 1 + horizon
 
         # --- resolve episode list ---
-        if "all" in load_list:
-            entries = sorted(os.listdir(data_path))
-        else:
-            entries = sorted(load_list)
+        data_paths = [data_path] if isinstance(data_path, str) else list(data_path)
 
-        # Flat format: data_path/episode_0.zarr, episode_2.zarr, ...
-        zarr_paths = [
-            os.path.join(data_path, e) for e in entries
-            if e.endswith('.zarr') and os.path.isdir(os.path.join(data_path, e))
-        ]
+        zarr_paths = []
+        for dp in data_paths:
+            if "all" in load_list:
+                entries = sorted(os.listdir(dp))
+            else:
+                entries = sorted(load_list)
 
-        # Nested format: data_path/episode_0/episode_0.zarr, episode_2/episode_2.zarr, ...
-        nested_paths = []
-        for e in entries:
-            subdir = os.path.join(data_path, e)
-            nested = os.path.join(subdir, f"{e}.zarr")
-            if os.path.isdir(subdir) and os.path.isdir(nested):
-                nested_paths.append(nested)
-        nested_paths = sorted(nested_paths)
-        if len(zarr_paths) == 0 or (len(nested_paths) > len(zarr_paths)):
-            zarr_paths = nested_paths
+            # Flat format: dp/episode_0.zarr, ...
+            flat = [
+                os.path.join(dp, e) for e in entries
+                if e.endswith('.zarr') and os.path.isdir(os.path.join(dp, e))
+            ]
+
+            # Nested format: dp/episode_0/episode_0.zarr, ...
+            nested = []
+            for e in entries:
+                subdir = os.path.join(dp, e)
+                candidate = os.path.join(subdir, f"{e}.zarr")
+                if os.path.isdir(subdir) and os.path.isdir(candidate):
+                    nested.append(candidate)
+            nested = sorted(nested)
+
+            zarr_paths += nested if (len(flat) == 0 or len(nested) > len(flat)) else flat
 
         if num_demo is not None:
             zarr_paths = zarr_paths[:num_demo]
 
         if len(zarr_paths) == 0:
-            raise ValueError(f"No .zarr episodes found in {data_path}")
+            raise ValueError(f"No .zarr episodes found in {data_paths}")
 
         # --- load into RAM ---
         replay_buffer = _ReplayBuffer()
-        for ep_path in tqdm.tqdm(zarr_paths, desc=f"Loading episodes from {os.path.basename(data_path)}"):
+        _desc = os.path.basename(data_paths[0]) if isinstance(data_paths, list) else os.path.basename(data_path)
+        for ep_path in tqdm.tqdm(zarr_paths, desc=f"Loading episodes from {_desc}"):
             try:
                 store = _open_zarr(ep_path)
             except Exception as e:
@@ -262,7 +267,7 @@ class ZarrDataset(Dataset):
         print(
             f"Loaded {replay_buffer.n_episodes} episodes, "
             f"{replay_buffer.episode_ends[-1]} total steps "
-            f"from {data_path} "
+            f"from {data_paths} "
             f"(action_dim={self.action_dim}, obs_dim={self.low_obs_dim})"
         )
 

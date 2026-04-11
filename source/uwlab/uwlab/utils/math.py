@@ -30,17 +30,13 @@ def crop_points_to_bounds(
         & (points[..., 1] >= ylow) & (points[..., 1] <= yhigh)
         & (points[..., 2] >= zlow) & (points[..., 2] <= zhigh)
     )
-    batch_size, num_points, _ = points.shape
-    cropped_list = []
-    for i in range(batch_size):
-        pts = points[i][mask[i]]
-        if pts.shape[0] < num_points:
-            pad = torch.zeros(num_points - pts.shape[0], 3, device=points.device, dtype=points.dtype)
-            pts = torch.cat([pts, pad], dim=0)
-        else:
-            pts = pts[:num_points]
-        cropped_list.append(pts)
-    return torch.stack(cropped_list, dim=0)
+    # Vectorized: sort in-bounds points to the front (out-of-bounds → ~mask=1 sorts last),
+    # then zero-fill the out-of-bounds tail. Avoids a Python loop over batch_size.
+    sorted_idx = (~mask).long().argsort(dim=1, stable=True)          # (B, N)
+    cropped = points.gather(1, sorted_idx.unsqueeze(-1).expand_as(points))
+    valid = mask.gather(1, sorted_idx)                                # (B, N) bool
+    cropped = cropped * valid.unsqueeze(-1)
+    return cropped
 
 
 def fps_points(point_clouds: torch.Tensor, downsample_points: int = 1024) -> torch.Tensor:

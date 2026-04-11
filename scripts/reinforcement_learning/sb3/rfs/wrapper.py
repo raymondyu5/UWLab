@@ -162,14 +162,21 @@ def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
         n_action_steps = int(train_cfg.get("n_action_steps", 8))
         n_obs_steps = int(train_cfg.get("n_obs_steps", 1))
         down_dims = tuple(pol["down_dims"])
+        pnet_cfg = train_cfg.get("pointnet", {})
 
     use_action_history = "normalizer.params_dict.past_actions.scale" in state_dict
 
+    # PointNet architecture: read from checkpoint cfg (Format B) with fallback to
+    # legacy hardcoded defaults so old checkpoints continue to load correctly.
+    _default_local  = (64, 64, 64, 128, 1024)
+    _default_global = (512, 256)
+    if "pnet_cfg" not in dir():
+        pnet_cfg = {}  # Format A checkpoint — use defaults
     pcd_model = PointNet(
         in_channels=3,
-        local_channels=(64, 64, 64, 128, 1024),
-        global_channels=(512, 256),
-        use_bn=False,
+        local_channels=tuple(pnet_cfg.get("local_channels", _default_local)),
+        global_channels=tuple(pnet_cfg.get("global_channels", _default_global)),
+        use_bn=bool(pnet_cfg.get("use_bn", False)),
     )
     obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
     noise_scheduler = ConditionalFlowMatcher(sigma=sigma)
@@ -300,6 +307,7 @@ class RFSWrapper:
         self._collect_substep_frames: bool = False
 
         self.policy, metadata = _load_cfm_checkpoint(diffusion_path, self.device)
+        self.policy.model = torch.compile(self.policy.model)
         self.policy_horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
 
@@ -385,6 +393,13 @@ class RFSWrapper:
 
         self.num_warmup_steps = num_warmup_steps
         self.last_obs = None
+
+        # Step profiling. Set profile_interval > 0 to enable.
+        # Every `profile_interval` steps, prints mean±std of each phase in ms.
+        self.profile_interval: int = 0
+        self._prof_step: int = 0
+        self._prof_accum: dict = {}
+        self._pcd_terms: list = []  # CachedSamplePC instances, set by train.py when profiling
 
     _SKIP_PPO_KEYS = {"seg_pc", "rgb"}
 
@@ -545,7 +560,7 @@ class RFSWrapper:
             # normalizer expects (B, 1, 3, N); index back to (B, 3, N) after
             nobs_pcd = self.policy.normalizer[key].normalize(pcd.unsqueeze(1))
             pcd_obs = {key: nobs_pcd[:, 0]}
-        with torch.no_grad():
+        with torch.inference_mode():
             return self.policy.obs_encoder.encode_pcd_only(pcd_obs).detach()
 
     def _asymmetric_ppo_obs(self, obs: dict) -> dict:
@@ -608,7 +623,7 @@ class RFSWrapper:
             )
 
         diffusion_obs = self.formatter.format(self.last_obs["policy"])
-        with torch.no_grad():
+        with torch.inference_mode():
             cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
         base_actions = cfm_result["action_pred"]
 
@@ -707,8 +722,51 @@ class RFSWrapper:
         self._ppo_history_buf = None
         self._ppo_past_action_buf = None
 
+    def _evt(self) -> "torch.cuda.Event":
+        e = torch.cuda.Event(enable_timing=True)
+        e.record()
+        return e
+
+    def _prof_record(self, timings: dict, mem: dict):
+        """Accumulate one step's timings and memory; print summary every profile_interval steps."""
+        for k, v in timings.items():
+            if k not in self._prof_accum:
+                self._prof_accum[k] = []
+            self._prof_accum[k].append(v)
+        for k, v in mem.items():
+            mkey = f"mem_{k}"
+            if mkey not in self._prof_accum:
+                self._prof_accum[mkey] = []
+            self._prof_accum[mkey].append(v)
+        self._prof_step += 1
+        if self._prof_step % self.profile_interval == 0:
+            import statistics
+            timing_keys = [k for k in self._prof_accum if not k.startswith("mem_")]
+            mem_keys    = [k for k in self._prof_accum if k.startswith("mem_")]
+            lines = [f"[PROFILE] RFSWrapper.step — mean over {self.profile_interval} steps:"]
+            lines.append("  --- timing (ms) ---")
+            for k in timing_keys:
+                vals = self._prof_accum[k]
+                mean = statistics.mean(vals)
+                stdev = statistics.stdev(vals) if len(vals) > 1 else 0.0
+                lines.append(f"  {k:35s} {mean:7.2f} ± {stdev:5.2f} ms")
+            lines.append("  --- peak GPU memory (MB) ---")
+            for k in mem_keys:
+                vals = self._prof_accum[k]
+                mean = statistics.mean(vals)
+                lines.append(f"  {k:35s} {mean:7.0f} MB")
+            print("\n".join(lines))
+            self._prof_accum.clear()
+
     def step(self, ppo_actions: torch.Tensor):
-        #ppo_out = ppo_actions.clamp(-1.0, 1.0) 
+        profiling = self.profile_interval > 0
+        if profiling:
+            e_step_start = self._evt()
+            torch.cuda.reset_peak_memory_stats()
+            _mb = 1 / (1024 ** 2)
+            mem_baseline = torch.cuda.memory_allocated() * _mb
+
+        #ppo_out = ppo_actions.clamp(-1.0, 1.0)
         ppo_out = ppo_actions.clamp(-3.0, 3.0)
 
         residual_flat = ppo_out[:, : self.n_residual_flat]
@@ -728,9 +786,19 @@ class RFSWrapper:
         if self.noise_slice is not None and self.n_noise > 0:
             noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.policy_horizon, self.n_noise)
 
+        if profiling:
+            e_format_start = self._evt()
         diffusion_obs = self.formatter.format(self.last_obs["policy"])
-        with torch.no_grad():
-            cfm_result = self.policy.predict_action(diffusion_obs, noise=noise)
+        if profiling:
+            e_format_end = self._evt()
+            torch.cuda.reset_peak_memory_stats()
+
+        with torch.inference_mode():
+            cfm_result = self.policy.predict_action(diffusion_obs, noise=noise, do_profile=profiling)
+        if profiling:
+            e_cfm_end = self._evt()
+            mem_cfm_peak = torch.cuda.max_memory_allocated() * _mb
+            torch.cuda.reset_peak_memory_stats()
         base_actions = cfm_result["action_pred"]
 
         rewards = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -751,6 +819,8 @@ class RFSWrapper:
         else:
             self.last_substep_frames = None
 
+        if profiling:
+            e_physics_start = self._evt()
         for substep in range(self.residual_step):
             action = base_actions[:, substep].clone()
 
@@ -777,6 +847,10 @@ class RFSWrapper:
             discount *= self.gamma
             self.last_obs = obs
             any_reset |= terminated | truncated
+        if profiling:
+            e_physics_end = self._evt()
+            mem_physics_peak = torch.cuda.max_memory_allocated() * _mb
+            torch.cuda.reset_peak_memory_stats()
 
         # Publish cached metrics for downstream logging/eval.
         self._metrics_seen = metrics_seen
@@ -806,10 +880,14 @@ class RFSWrapper:
                 ppo_action[any_reset] = 0.0
             self._update_ppo_past_actions(ppo_action)
 
-        # Update pcd embedding from the final obs so it is consistent with the
-        # state returned to the agent — no lag between pcd_emb and state.
+        # Update pcd embedding: reuse the pcd_feat already computed inside predict_action
+        # rather than running a second PointNet forward pass via _compute_pcd_embedding().
         if self.asymmetric_ac:
-            self.last_pcd_embedding = self._compute_pcd_embedding()
+            if profiling:
+                e_pcd_emb_start = self._evt()
+            self.last_pcd_embedding = cfm_result["pcd_feat"].detach()
+            if profiling:
+                e_pcd_emb_end = self._evt()
 
         self._ep_rewards += rewards
         # Use any_reset (not just last-substep dones) so mid-chunk resets are logged.
@@ -828,6 +906,36 @@ class RFSWrapper:
         # Ensure termination flags align with any mid-chunk resets.
         terminated = any_reset
         truncated = torch.zeros_like(any_reset)
+
+        if profiling:
+            e_step_end = self._evt()
+            torch.cuda.synchronize()
+            mem_total_peak = torch.cuda.max_memory_allocated() * _mb
+            timings = {
+                "formatter_format_ms":  e_format_start.elapsed_time(e_format_end),
+                "cfm_predict_ms":       e_format_end.elapsed_time(e_cfm_end),
+                "physics_step_ms":      e_physics_start.elapsed_time(e_physics_end),
+                "total_step_ms":        e_step_start.elapsed_time(e_step_end),
+            }
+            if self.asymmetric_ac:
+                timings["pcd_emb_ms"] = e_pcd_emb_start.elapsed_time(e_pcd_emb_end)
+            # CFM breakdown: PointNet encode vs UNet denoising
+            if hasattr(self.policy, "_last_profile"):
+                for k, v in self.policy._last_profile.items():
+                    timings[f"cfm_{k}"] = v
+            # PCD breakdown: per-phase timings from CachedSamplePC
+            for pcd_term in self._pcd_terms:
+                if pcd_term._last_timing:
+                    for k, v in pcd_term._last_timing.items():
+                        timings[f"pcd_{k}"] = v
+                    break  # only report once (all terms share same timing)
+            mem = {
+                "baseline_MB":     mem_baseline,
+                "cfm_peak_MB":     mem_cfm_peak,
+                "physics_peak_MB": mem_physics_peak,
+                "total_peak_MB":   mem_total_peak,
+            }
+            self._prof_record(timings, mem)
 
         return self._strip_ppo_obs(self.last_obs), rewards, terminated, truncated, info
 

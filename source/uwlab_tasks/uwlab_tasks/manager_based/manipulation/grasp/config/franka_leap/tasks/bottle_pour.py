@@ -252,8 +252,8 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             min_step_count_between_reset=800,
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "static_friction_range": (0.3, 0.9),
-                "dynamic_friction_range": (0.3, 0.9),
+                "static_friction_range": (0.5, 0.9),
+                "dynamic_friction_range": (0.5, 0.9),
                 "restitution_range": (0.0, 0.0),
                 "num_buckets": 64,
             },
@@ -265,7 +265,7 @@ class PourBottleFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             min_step_count_between_reset=800,
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "mass_distribution_params": (0.2, 1.0),
+                "mass_distribution_params": (0.6, 1.0),
                 "operation": "scale",
                 "distribution": "uniform",
             },

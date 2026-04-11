@@ -112,13 +112,21 @@ class CachedSamplePC:
         self._printed_msg = False
         self.pcd_crop_region = pcd_crop_region
         self.pcd_noise = pcd_noise
+        # Set to True to enable per-call CUDA-event timing (printed every call).
+        self.do_benchmark = False
+        self._last_timing: dict = {}
 
     def get_seg_pc(self, env):
         if not self.mesh_init:
             self.init_mesh(env)
 
-        do_benchmark = False
-        timings = {}
+        def _evt():
+            e = torch.cuda.Event(enable_timing=True)
+            e.record()
+            return e
+
+        if self.do_benchmark:
+            e0 = _evt()
 
         robot_link_state = env.scene[self.asset_name]._data.body_pose_w.clone()
         robot_link_state[:, :, :3] -= env.scene.env_origins.unsqueeze(1).repeat_interleave(
@@ -127,20 +135,14 @@ class CachedSamplePC:
         arm_link_state = robot_link_state[:, : len(self.arm_names)]
         hand_link_state = robot_link_state[:, len(self.arm_names) : len(self.arm_names) + len(self._hand_prim_patterns)]
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            t0 = time.perf_counter()
-
         arm_vertices = math_utils.transform_points(
             self._arm_mesh.reshape(-1, self._arm_mesh.shape[-2], 3),
             arm_link_state[..., :3].reshape(-1, 3),
             arm_link_state[..., 3:7].reshape(-1, 4))
         arm_vertices = arm_vertices.reshape(env.num_envs, -1, 3)
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["arm_transform_ms"] = (time.perf_counter() - t0) * 1000
-            t0 = time.perf_counter()
+        if self.do_benchmark:
+            e1 = _evt()
 
         hand_vertices = math_utils.transform_points(
             self._hand_mesh.reshape(-1, self._hand_mesh.shape[-2], 3),
@@ -148,10 +150,8 @@ class CachedSamplePC:
             hand_link_state[..., 3:7].reshape(-1, 4))
         hand_vertices = hand_vertices.reshape(env.num_envs, -1, 3)
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["hand_transform_ms"] = (time.perf_counter() - t0) * 1000
-            t0 = time.perf_counter()
+        if self.do_benchmark:
+            e2 = _evt()
 
         object_parts = []
         for k in range(len(self.object_names)):
@@ -161,10 +161,8 @@ class CachedSamplePC:
                 self._object_meshes[k], object_state[..., :3], object_state[..., 3:7])
             object_parts.append(object_vertices)
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["object_transform_ms"] = (time.perf_counter() - t0) * 1000
-            t0 = time.perf_counter()
+        if self.do_benchmark:
+            e3 = _evt()
 
         if object_parts:
             object_vertices_all = torch.cat(object_parts, dim=1)
@@ -176,29 +174,34 @@ class CachedSamplePC:
         points_index = torch.randperm(all_pcd.shape[1]).to(env.device)
         sampled_pcd = all_pcd[:, points_index[: self.num_downsample_points * 10]]
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["subsample_pcd_ms"] = (time.perf_counter() - t0) * 1000
-            t0 = time.perf_counter()
+        if self.do_benchmark:
+            e4 = _evt()
 
         if self.pcd_crop_region is not None:
             sampled_pcd = crop_points_to_bounds(sampled_pcd, self.pcd_crop_region)
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["crop_pcd_ms"] = (time.perf_counter() - t0) * 1000
-            t0 = time.perf_counter()
+        if self.do_benchmark:
+            e5 = _evt()
 
-        sampled_pcd = fps_points(sampled_pcd[None], self.num_downsample_points)
+        perm = torch.randperm(sampled_pcd.shape[1], device=env.device)[:self.num_downsample_points]
+        sampled_pcd = sampled_pcd[:, perm]
 
         if self.pcd_noise > 0:
             sampled_pcd = sampled_pcd + (torch.rand_like(sampled_pcd) * 2 - 1) * self.pcd_noise
 
-        if do_benchmark:
-            _benchmark_sync(env)
-            timings["fps_pcd_ms"] = (time.perf_counter() - t0) * 1000
-            timings["total_ms"] = sum(timings.values())
-            print("[INFO] CachedSamplePC get_seg_pc timings (ms):", timings)
+        if self.do_benchmark:
+            e6 = _evt()
+            torch.cuda.synchronize()
+            self._last_timing = {
+                "arm_transform_ms":    e0.elapsed_time(e1),
+                "hand_transform_ms":   e1.elapsed_time(e2),
+                "obj_transform_ms":    e2.elapsed_time(e3),
+                "subsample_ms":        e3.elapsed_time(e4),
+                "crop_ms":             e4.elapsed_time(e5),
+                "randperm_ms":         e5.elapsed_time(e6),
+                "total_ms":            e0.elapsed_time(e6),
+            }
+            print("[PROFILE] CachedSamplePC.get_seg_pc (ms):", {k: f"{v:.2f}" for k, v in self._last_timing.items()})
 
         if not self._printed_msg:
             print("[INFO] Using cached sampled pointcloud (arm/hand/object from USD)")

@@ -1,0 +1,17 @@
+defaults:
+  - train_cfm_pcd_absjoint
+  - _self_
+
+horizon: 16
+n_obs_steps: 4
+dataset:
+  pad_after: 15
+  downsample_points: 512
+policy:
+  use_action_history: true
+
+pointnet:
+  in_channels: 3
+  local_channels: [64, 128]
+  global_channels: [64]
+  use_bn: false

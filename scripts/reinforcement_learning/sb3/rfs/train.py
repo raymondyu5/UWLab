@@ -64,8 +64,14 @@ parser.add_argument("--asymmetric_ac", action="store_true", default=False,
                     help="Asymmetric AC: actor sees CFM embedding only; critic sees privileged sim state.")
 
 # Wandb
+parser.add_argument("--profile_interval", type=int, default=0,
+                    help="Print step-timing summary every N steps (0=disabled). Also enables CachedSamplePC timing.")
 parser.add_argument("--wandb_project", type=str, default=None)
 parser.add_argument("--wandb_run_name", type=str, default=None)
+
+# Distributed
+parser.add_argument("--distributed", action="store_true", default=False,
+                    help="Run training with multiple GPUs via torch.distributed.")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -129,6 +135,22 @@ from buffers import GpuDictRolloutBuffer
 from uwlab.eval.spawn import load_spawn_cfg
 
 
+# TF32: use tensor cores for matmul/conv, ~3x throughput with negligible precision loss.
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+# Distributed init: must happen after AppLauncher (CUDA context exists) and after torch import.
+# Reads WORLD_SIZE/RANK/LOCAL_RANK set by torch.distributed.run — same pattern as rsl_rl.
+if args_cli.distributed:
+    _local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    _global_rank = int(os.environ.get("RANK", 0))
+    _world_size = int(os.environ.get("WORLD_SIZE", 1))
+    if not torch.distributed.is_initialized():
+        torch.distributed.init_process_group(backend="nccl", rank=_global_rank, world_size=_world_size)
+    torch.cuda.set_device(_local_rank)
+    print(f"[rank {_global_rank}/{_world_size}] distributed initialized={torch.distributed.is_initialized()}, device=cuda:{_local_rank}")
+
+
 _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
 
 
@@ -190,7 +212,11 @@ def main():
     eval_spawn = args_cli.eval_spawn or eval_cfg["spawn"]
 
     timestamp = datetime.now().strftime("%m%d_%H%M")
-    run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}_{uuid4().hex[:6]}"
+    if args_cli.distributed:
+        job_id = os.environ.get("SLURM_JOB_ID", uuid4().hex[:6])
+        run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{job_id}"
+    else:
+        run_name = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}_{uuid4().hex[:6]}"
     log_dir = os.path.abspath(os.path.join("logs", "rfs", run_name))
     print(f"[INFO] Run: {run_name}")
     print(f"[INFO] Logging to: {log_dir}")
@@ -198,13 +224,17 @@ def main():
     command = " ".join(sys.orig_argv)
     (Path(log_dir) / "command.txt").write_text(command)
 
+    if args_cli.distributed:
+        device = f"cuda:{app_launcher.local_rank}"
+    else:
+        device = args_cli.device if args_cli.device else "cuda:0"
     env_cfg = parse_env_cfg(
         args_cli.task,
-        device=args_cli.device if args_cli.device else "cuda:0",
+        device=device,
         num_envs=args_cli.num_envs,
     )
     env_cfg.run_mode = "rl_mode"
-    env_cfg.seed = args_cli.seed
+    env_cfg.seed = args_cli.seed + (app_launcher.local_rank if args_cli.distributed else 0)
     if hasattr(env_cfg, "table_z_range"):
         env_cfg.table_z_range = (0.0, 0.0)
 
@@ -244,6 +274,24 @@ def main():
         gamma=ppo_cfg["gamma"],
         ppo_history=rfs_cfg.get("ppo_history", False),
     )
+    if args_cli.profile_interval > 0:
+        rfs_env.profile_interval = args_cli.profile_interval
+        # Walk observation term callables looking for CachedSamplePC instances.
+        try:
+            pcd_terms = []
+            obs_mgr = env.unwrapped.observation_manager
+            for group_terms in obs_mgr._group_obs_term_cfgs.values():
+                for term_cfg in group_terms:
+                    fn = term_cfg.func
+                    obj = getattr(fn, "__self__", None)
+                    if obj is not None and hasattr(obj, "do_benchmark"):
+                        obj.do_benchmark = True
+                        pcd_terms.append(obj)
+                        print(f"[PROFILE] Enabled CachedSamplePC timing on {type(obj).__name__}")
+            rfs_env._pcd_terms = pcd_terms
+        except Exception as _e:
+            print(f"[PROFILE] Could not auto-enable CachedSamplePC timing: {_e}")
+
     ckpt_path = getattr(rfs_env, "diffusion_ckpt_path", None)
     ckpt_resolved_path = getattr(rfs_env, "diffusion_ckpt_resolved_path", None)
     ckpt_meta = getattr(rfs_env, "diffusion_ckpt_meta", {})
@@ -258,7 +306,9 @@ def main():
     print(f"[INFO] PPO observation space: {sb3_env.observation_space}")
     print(f"[INFO] PPO action space: {sb3_env.action_space}")
 
-    if args_cli.wandb_project:
+    is_rank0 = not args_cli.distributed or app_launcher.local_rank == 0
+
+    if args_cli.wandb_project and is_rank0:
         ckpt_note_lines = [
             f"diffusion_ckpt={ckpt_path}",
             f"diffusion_ckpt_resolved={ckpt_resolved_path or ckpt_path}",
@@ -310,6 +360,12 @@ def main():
     if args_cli.checkpoint is not None:
         agent = RegularizedPPO.load(args_cli.checkpoint, env=sb3_env, print_system_info=True)
 
+    if args_cli.distributed:
+        for param in agent.policy.parameters():
+            torch.distributed.broadcast(param.data, src=0)
+        if is_rank0:
+            print("[distributed] policy weights broadcast from rank 0 to all ranks")
+
     if reg_cfg is not None:
         real_loader = RealDatasetLoader(
             dataset_path=reg_cfg["real_dataset_path"],
@@ -355,16 +411,21 @@ def main():
     reward_term_cb = WandbRewardTermCallback(env)
     noise_pred_cb = WandbNoisePredCallback(rfs_env)
 
+    callbacks = [reward_term_cb, noise_pred_cb]
+    if is_rank0:
+        callbacks.append(eval_cb)
+
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
             total_timesteps=600_000_000,
-            callback=[reward_term_cb, noise_pred_cb, eval_cb],
+            callback=callbacks,
             progress_bar=True,
             log_interval=1,
         )
 
-    agent.save(os.path.join(log_dir, "model"))
-    print(f"[INFO] Model saved to {os.path.join(log_dir, 'model.zip')}")
+    if is_rank0:
+        agent.save(os.path.join(log_dir, "model"))
+        print(f"[INFO] Model saved to {os.path.join(log_dir, 'model.zip')}")
 
     if wandb.run is not None:
         wandb.finish()

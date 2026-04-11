@@ -118,7 +118,7 @@ class RegularizedPPO(PPO):
             if self.use_sde and self.sde_sample_freq > 0 and n_steps % self.sde_sample_freq == 0:
                 self.policy.reset_noise(env.num_envs)
 
-            with th.no_grad():
+            with th.inference_mode():
                 # _last_obs is already a dict of GPU tensors from GpuSb3VecEnvWrapper.
                 actions, values, log_probs = self.policy(self._last_obs)
 
@@ -222,6 +222,7 @@ class RegularizedPPO(PPO):
         real-data pool (GPU indexing only, zero PointNet overhead).
         """
         use_reg = self._real_loader is not None and self._reg_coef > 0.0
+        _t_update_start = time.perf_counter()
 
         # --- Exact replica of PPO.train() from here, with KL injection ---
 
@@ -292,12 +293,23 @@ class RegularizedPPO(PPO):
 
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                     continue_training = False
+
+                if th.distributed.is_initialized():
+                    ct = th.tensor(int(continue_training), device=self.device)
+                    th.distributed.all_reduce(ct, op=th.distributed.ReduceOp.MIN)
+                    continue_training = bool(ct.item())
+
+                if not continue_training:
                     if self.verbose >= 1:
                         print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")
                     break
 
                 self.policy.optimizer.zero_grad()
                 loss.backward()
+                if th.distributed.is_initialized():
+                    for p in self.policy.parameters():
+                        if p.grad is not None:
+                            th.distributed.all_reduce(p.grad, op=th.distributed.ReduceOp.AVG)
                 th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
@@ -330,3 +342,6 @@ class RegularizedPPO(PPO):
 
         if use_reg and reg_losses and wandb.run is not None:
             wandb.log({"train/real_kl_reg": np.mean(reg_losses)}, step=self.num_timesteps)
+
+        _update_secs = time.perf_counter() - _t_update_start
+        print(f"[train] update {_update_secs:.2f}s  ({self._n_updates} updates total)")
