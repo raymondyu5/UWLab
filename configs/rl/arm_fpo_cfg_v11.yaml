@@ -1,0 +1,33 @@
+# FPO v11: 1024 envs + n_cfm_samples=4 + batch_size=1024.
+# Fewer envs frees VRAM for 4 CFM samples during update.
+# More stable ratio estimate to prevent late-stage collapse.
+# clip_range=0.01 from v9.
+
+fpo:
+  num_warmup_steps: 5
+  critic_warmup_iters: 10
+  n_cfm_samples: 4
+
+ppo:
+  n_steps: 200
+  batch_size: 1024
+  n_epochs: 1
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.01
+  learning_rate: 0.00003
+  actor_lr: 0.00003
+  critic_lr: 0.001
+  vf_coef: 0.25
+  ent_coef: 0.0
+  target_kl: 0.5
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true

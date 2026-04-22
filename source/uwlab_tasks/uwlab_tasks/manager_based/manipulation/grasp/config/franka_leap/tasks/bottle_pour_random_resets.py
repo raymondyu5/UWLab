@@ -15,8 +15,10 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import reset_robot_joints_from_poses
+from ....mdp import reset_robot_joints_from_poses, apply_force_after_step, clear_external_force
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET
+from isaaclab.envs import mdp as isaac_mdp
+
 from .bottle_pour import PourBottleFrankaLeapCfg
 
 RESET_POSES_PATH = "/workspace/uwlab/assets/reset_poses_bottle_pour.json"
@@ -24,9 +26,39 @@ RESET_POSES_PATH = "/workspace/uwlab/assets/reset_poses_bottle_pour.json"
 
 @configclass
 class PourBottleRandomResetsFrankaLeapCfg(PourBottleFrankaLeapCfg):
+    table_z_range: tuple = (0.0, 0.05)
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Wider bottle scale range
+        self.events.randomize_object_scale = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_scale,
+            mode="prestartup",
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "scale_range": (0.8, 1.1),
+            },
+        )
+
+        self.events.clear_force_on_bottle = EventTerm(
+            func=clear_external_force,
+            mode="reset",
+            params={"asset_cfg": SceneEntityCfg("grasp_object")},
+        )
+
+        # Force perturbation applied after step 30 (bottle should be grasped by then)
+        self.events.apply_force_to_bottle = EventTerm(
+            func=apply_force_after_step,
+            mode="interval",
+            interval_range_s=(1.0, 3.0),
+            params={
+                "asset_cfg": SceneEntityCfg("grasp_object"),
+                "force_range": (-0.2, 0.2),
+                "torque_range": (0.0, 0.0),
+                "min_episode_step": 30,
+            },
+        )
 
         with open(RESET_POSES_PATH) as f:
             arm_joint_poses = json.load(f)["poses"]
@@ -40,7 +72,7 @@ class PourBottleRandomResetsFrankaLeapCfg(PourBottleFrankaLeapCfg):
                 "hand_joint_pos": HAND_RESET,
                 "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
                 "canonical_arm_joint_pos": ARM_RESET,
-                "canonical_reset_prob": 0.70,
+                "canonical_reset_prob": 1.0,
             },
         )
 

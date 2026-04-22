@@ -437,9 +437,9 @@ def reset_object_pose(
             - env.scene.env_origins[env_ids, 2]
             - block.data.default_root_state[env_ids, 2]
         )
-        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height + block_z_offset
+        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height + rand_samples[:, 2] + block_z_offset
     else:
-        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height
+        target_state[:, 2] = env.scene.env_origins[env_ids, 2] + reset_height + rand_samples[:, 2]
 
     asset.write_root_pose_to_sim(target_state[:, :7], env_ids=env_ids)
     asset.write_root_velocity_to_sim(target_state[:, 7:], env_ids=env_ids)
@@ -566,9 +566,14 @@ def reset_robot_joints_from_poses(
 
 
 _scales_logged: set = set()
+_mass_logged: set = set()
 
 
 def log_object_mass(env, env_ids, asset_cfg: SceneEntityCfg):
+    global _mass_logged
+    if asset_cfg.name in _mass_logged:
+        return
+    _mass_logged.add(asset_cfg.name)
     asset = env.scene[asset_cfg.name]
     masses = asset.root_physx_view.get_masses()
     print(f"[DR] {asset_cfg.name} mass: min={masses.min():.3f}  max={masses.max():.3f}  mean={masses.mean():.3f} kg")
@@ -595,3 +600,51 @@ def log_object_scales(env, env_ids, asset_cfg: SceneEntityCfg):
         print(f"[DR] {asset_cfg.name} scales (first {len(scales)} envs): {scales}")
     except Exception as e:
         print(f"[DR] scale logging failed: {e}")
+
+
+def reset_articulation_joint_state(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    joint_pos: float = 0.0,
+):
+    asset = env.scene[asset_cfg.name]
+    n_joints = asset.num_joints
+    pos = torch.full((len(env_ids), n_joints), joint_pos, device=env.device, dtype=torch.float32)
+    vel = torch.zeros_like(pos)
+    asset.write_joint_state_to_sim(pos, vel, env_ids=env_ids)
+
+
+def clear_external_force(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+):
+    import warnings
+    asset = env.scene[asset_cfg.name]
+    forces = torch.zeros(len(env_ids), asset.num_bodies, 3, device=asset.device)
+    torques = torch.zeros(len(env_ids), asset.num_bodies, 3, device=asset.device)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        asset.set_external_force_and_torque(forces, torques, env_ids=env_ids)
+
+
+def apply_force_after_step(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    force_range: tuple[float, float],
+    torque_range: tuple[float, float],
+    min_episode_step: int = 0,
+):
+    import warnings
+    active = env_ids[env.episode_length_buf[env_ids] >= min_episode_step]
+    if len(active) == 0:
+        return
+    asset = env.scene[asset_cfg.name]
+    size = (len(active), asset.num_bodies, 3)
+    forces = math_utils.sample_uniform(*force_range, size, asset.device)
+    torques = math_utils.sample_uniform(*torque_range, size, asset.device)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        asset.set_external_force_and_torque(forces, torques, env_ids=active)

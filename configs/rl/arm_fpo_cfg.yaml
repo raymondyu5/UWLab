@@ -1,0 +1,31 @@
+# FPO config for CFM checkpoints trained with:
+#   action space: absolute joint positions (23D: 7 arm + 16 hand)
+#   horizon: 16, n_obs_steps: 4, use_action_history: true
+#
+# Key difference from RFS: the flow model (UNet) is trained end-to-end.
+# PointNet obs encoder is frozen. No residual or noise injection.
+
+fpo:
+  num_warmup_steps: 5
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.05
+  learning_rate: 0.0001   # lower than RFS (3e-4) — UNet is much larger than the RFS MLP
+  vf_coef: 0.0001
+  ent_coef: 0.0
+  target_kl: 6.0
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]   # unused (actor is UNet), kept for schema consistency
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true

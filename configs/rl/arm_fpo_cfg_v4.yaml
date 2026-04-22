@@ -1,0 +1,30 @@
+# FPO v4: actor_lr=1e-6 (very slow actor).
+
+fpo:
+  num_warmup_steps: 5
+  critic_warmup_iters: 10
+  n_cfm_samples: 1
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 1
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.05
+  learning_rate: 0.000001
+  actor_lr: 0.000001
+  critic_lr: 0.001
+  vf_coef: 0.25
+  ent_coef: 0.0
+  target_kl: 0.5
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true

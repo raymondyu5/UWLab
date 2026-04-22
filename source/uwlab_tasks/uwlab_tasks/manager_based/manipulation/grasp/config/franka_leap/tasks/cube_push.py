@@ -190,8 +190,8 @@ class PushCubeToPoptartFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "default_pos": CUBE_PUSH_SPAWN_POS,
                 "default_rot_quat": CUBE_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.11, 0.11),
-                    "y": (-0.095, 0.095),
+                    "x": (-0.14, 0.11),
+                    "y": (-0.15, 0.20),
                     "z": (0.0, 0.0),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
@@ -241,8 +241,8 @@ class PushCubeToPoptartFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             min_step_count_between_reset=800,
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "static_friction_range": (0.3, 0.6),
-                "dynamic_friction_range": (0.3, 0.6),
+                "static_friction_range": (0.5, 1.0),
+                "dynamic_friction_range": (0.5, 1.0),
                 "restitution_range": (0.0, 0.0),
                 "num_buckets": 64,
             },
@@ -272,7 +272,7 @@ class PushCubeToPoptartFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             mode="prestartup",
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "scale_range": (1.0, 1.3),
+                "scale_range": (0.8, 1.1),
             },
         )
 

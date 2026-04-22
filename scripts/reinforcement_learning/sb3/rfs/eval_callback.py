@@ -509,7 +509,7 @@ class RFSEvalCallback(BaseCallback):
                         recorded[i] = True
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
-                obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
+                obj_pos = isaac_env.scene[_obj_key].data.root_pos_w[0].cpu().numpy()
                 ee_pose_np = ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7)
                 for frame in (self.rfs_env.last_substep_frames or [None]):
                     logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action[0], frame=frame)
@@ -541,6 +541,12 @@ class RFSEvalCallback(BaseCallback):
     def _run_random_eval(self, logger, isaac_env, device, num_envs, output_dir):
         num_trials = self.spawn_cfg.num_trials if self.spawn_cfg.num_trials > 0 else 1
         record_first = self.record_video
+        _scene_keys = isaac_env.scene.keys()
+        _obj_key = "grasp_object" if "grasp_object" in _scene_keys else next(
+            k for k in _scene_keys
+            if k not in ("terrain", "robot", "table", "ground", "dome_light")
+            and not k.endswith("_contact")
+        )
 
         for trial_idx in range(num_trials):
             if self.verbose:
@@ -558,7 +564,7 @@ class RFSEvalCallback(BaseCallback):
             progress_every = max(1, episode_steps // 10)
 
             # Capture per-env initial object positions (local, relative to env origins).
-            init_pos_w = isaac_env.scene["grasp_object"].data.root_pos_w.clone()  # (N, 3)
+            init_pos_w = isaac_env.scene[_obj_key].data.root_pos_w.clone()  # (N, 3)
             init_pos_local = (init_pos_w - isaac_env.scene.env_origins).cpu().numpy()  # (N, 3)
 
             logger.begin_episode(f"random_trial_{trial_idx}", None)
@@ -638,7 +644,7 @@ class RFSEvalCallback(BaseCallback):
                         done_steps[i] = step_idx
 
                 ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
-                obj_pos = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
+                obj_pos = isaac_env.scene[_obj_key].data.root_pos_w[0].cpu().numpy()
                 ee_pose_np = ee_pose[0].cpu().numpy() if ee_pose is not None else np.zeros(7)
                 for frame in (self.rfs_env.last_substep_frames or [None]):
                     logger.record_step(ee_pose=ee_pose_np, object_pose=obj_pos, action=action[0], frame=frame)

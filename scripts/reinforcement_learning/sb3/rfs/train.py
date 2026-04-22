@@ -155,6 +155,8 @@ _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
 
 
 def _parse_dims(s: str):
+    if s is None:
+        return None
     s = s.strip()
     if not s:
         return None

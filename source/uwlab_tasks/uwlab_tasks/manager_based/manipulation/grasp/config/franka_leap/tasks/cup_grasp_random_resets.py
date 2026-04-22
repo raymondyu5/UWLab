@@ -40,13 +40,29 @@ class GraspPinkCupRandomResetsFrankaLeapCfg(GraspPinkCupFrankaLeapCfg):
                 "hand_joint_pos": HAND_RESET,
                 "arm_joint_limits": franka_leap.FRANKA_LEAP_ARM_JOINT_LIMITS,
                 "canonical_arm_joint_pos": ARM_RESET,
-                "canonical_reset_prob": 0.70,
+                "canonical_reset_prob": 1.0,
             },
         )
 
 
 @configclass
 class GraspPinkCupRandomResetsFrankaLeapJointAbsCfg(GraspPinkCupRandomResetsFrankaLeapCfg):
+    actions = franka_leap.FrankaLeapJointPositionAction()
+
+    def warmup_action(self, env) -> torch.Tensor:
+        return env.scene["robot"].data.joint_pos.clone()
+
+
+@configclass
+class GraspPinkCupRandomResets7030FrankaLeapCfg(GraspPinkCupRandomResetsFrankaLeapCfg):
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.reset_robot.params["canonical_reset_prob"] = 0.70
+
+
+@configclass
+class GraspPinkCupRandomResets7030FrankaLeapJointAbsCfg(GraspPinkCupRandomResets7030FrankaLeapCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:

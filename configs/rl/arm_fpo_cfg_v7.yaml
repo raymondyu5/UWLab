@@ -1,0 +1,35 @@
+# FPO v7: Official FPO++ hyperparameters.
+# Key changes from v2:
+#   clip_range: 0.05 -> 0.01  (official uses 0.01)
+#   critic_warmup_iters: 10 -> 1  (avoid advantage collapse from over-converged critic)
+#   critic_lr: 1e-3 -> 1e-4  (official uses 1e-4, prevents critic converging too fast)
+# actor_lr=3e-5 kept from v2 (our only recovering run).
+
+fpo:
+  num_warmup_steps: 5
+  critic_warmup_iters: 1
+  n_cfm_samples: 1
+
+ppo:
+  n_steps: 200
+  batch_size: 4096
+  n_epochs: 1
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.01
+  learning_rate: 0.00003   # fallback if actor_lr/critic_lr not read
+  actor_lr: 0.00003
+  critic_lr: 0.0001
+  vf_coef: 0.25
+  ent_coef: 0.0
+  target_kl: 0.5
+  max_grad_norm: 1.0
+  net_arch:
+    pi: [256, 128, 64]
+    vf: [256, 128, 64]
+  activation_fn: elu
+
+eval:
+  interval: 50
+  spawn: "random_1_trial"
+  record_video: true

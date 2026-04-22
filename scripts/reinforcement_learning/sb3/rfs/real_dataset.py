@@ -59,6 +59,8 @@ class RealDatasetLoader:
         action_dim:        Action dimension (23 for JointAbs).
         downsample_points: PCD points to keep after random downsampling (2048).
         device:            Torch device for output tensors.
+        horizon:           If set, also precompute normalized action chunks (H, A)
+                           for each valid window. Used by FPO BC regularization.
     """
 
     def __init__(
@@ -68,17 +70,20 @@ class RealDatasetLoader:
         action_dim: int,
         downsample_points: int,
         device: torch.device,
+        horizon: int | None = None,
     ):
         self.n_obs_steps = n_obs_steps
         self.action_dim = action_dim
         self.downsample_points = downsample_points
         self.device = device
+        self.horizon = horizon
         self.episodes: list[dict] = []
         self._load_episodes(dataset_path)
 
         self._pool_agent_pos: torch.Tensor | None = None
         self._pool_past_actions: torch.Tensor | None = None
         self._pool_pcd_emb: torch.Tensor | None = None
+        self._pool_chunk_norm: torch.Tensor | None = None
         self._pool_size: int = 0
 
     def _load_episodes(self, dataset_path: str) -> None:
@@ -147,23 +152,36 @@ class RealDatasetLoader:
         all_agent_pos = []
         all_past_actions = []
         all_pcd_embs = []
+        all_chunk_norms = []
 
         for ep_idx, ep in enumerate(self.episodes):
             print(f"\r[RealDatasetLoader] Encoding episode {ep_idx + 1}/{n_episodes} "
                   f"(T={ep['T']}, {n_augmentations} augs)...", end="", flush=True)
             T = ep["T"]
             valid_start = self.n_obs_steps - 1
+            # When horizon is set, restrict valid range so action[t:t+H] never overruns.
+            valid_end = T if self.horizon is None else max(valid_start, T - self.horizon + 1)
 
             ep_agent_pos = []
             ep_past_actions = []
-            for t in range(valid_start, T):
+            ep_chunks = []
+            for t in range(valid_start, valid_end):
                 window = ep["agent_pos"][t - self.n_obs_steps + 1 : t + 1]
                 ep_agent_pos.append(window.reshape(-1))
                 if self.n_obs_steps > 1:
                     pa = ep["action"][t - self.n_obs_steps + 1 : t]
                     ep_past_actions.append(pa.reshape(-1))
+                if self.horizon is not None:
+                    ep_chunks.append(ep["action"][t : t + self.horizon])  # (H, A)
 
-            seg_pc_raw = ep["seg_pc"][valid_start:]  # (valid_T, N, 3)
+            # Normalize action chunks once (same across augmentations — no PCD aug on actions).
+            ep_chunk_norm_np = None
+            if self.horizon is not None and ep_chunks:
+                chunks_t = torch.from_numpy(np.stack(ep_chunks)).to(self.device)  # (valid_T, H, A)
+                with torch.no_grad():
+                    ep_chunk_norm_np = rfs_env.policy.normalizer["action"].normalize(chunks_t).cpu().numpy()
+
+            seg_pc_raw = ep["seg_pc"][valid_start:valid_end]  # (valid_T, N, 3)
             N_raw = seg_pc_raw.shape[1]
             valid_T = len(seg_pc_raw)
 
@@ -171,6 +189,8 @@ class RealDatasetLoader:
                 all_agent_pos.extend(ep_agent_pos)
                 if ep_past_actions:
                     all_past_actions.extend(ep_past_actions)
+                if ep_chunk_norm_np is not None:
+                    all_chunk_norms.extend(ep_chunk_norm_np)
 
                 aug_frames = np.empty(
                     (valid_T, self.downsample_points, 3), dtype=np.float32
@@ -218,11 +238,19 @@ class RealDatasetLoader:
         else:
             self._pool_past_actions = None
         self._pool_pcd_emb = torch.cat(all_pcd_embs, dim=0)
+        if all_chunk_norms:
+            self._pool_chunk_norm = torch.from_numpy(
+                np.stack(all_chunk_norms)
+            ).to(self.device)
         self._pool_size = pool_size
 
         assert self._pool_pcd_emb.shape[0] == pool_size, (
             f"PCD pool size {self._pool_pcd_emb.shape[0]} != window count {pool_size}"
         )
+        if self._pool_chunk_norm is not None:
+            assert self._pool_chunk_norm.shape[0] == pool_size, (
+                f"chunk_norm pool size {self._pool_chunk_norm.shape[0]} != window count {pool_size}"
+            )
 
         elapsed = time.time() - t_start
         n_base = pool_size // n_augmentations
@@ -231,6 +259,8 @@ class RealDatasetLoader:
             + (self._pool_past_actions.nelement() * self._pool_past_actions.element_size()
                if self._pool_past_actions is not None else 0)
             + self._pool_pcd_emb.nelement() * self._pool_pcd_emb.element_size()
+            + (self._pool_chunk_norm.nelement() * self._pool_chunk_norm.element_size()
+               if self._pool_chunk_norm is not None else 0)
         )
         print(f"\n[RealDatasetLoader] Precomputed pool in {elapsed:.1f}s: "
               f"{n_base} windows × {n_augmentations} augmentations = {pool_size} entries, "
@@ -248,4 +278,6 @@ class RealDatasetLoader:
         }
         if self._pool_past_actions is not None:
             obs["actor_past_actions_history"] = self._pool_past_actions[idx]
+        if self._pool_chunk_norm is not None:
+            obs["chunk_norm"] = self._pool_chunk_norm[idx]
         return obs

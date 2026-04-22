@@ -65,6 +65,15 @@ gym.register(
     disable_env_checker=True,
 )
 
+gym.register(
+    id="UW-FrankaLeap-GraspPinkCupRandomResets7030-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cup_grasp_random_resets:GraspPinkCupRandomResets7030FrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
 
 ########## Bottle Grasp #########
 
@@ -385,6 +394,18 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.grasp_franka_leap:GraspFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Screw Lightbulb #########
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapJointAbsCfg",
     },
     disable_env_checker=True,
 )
