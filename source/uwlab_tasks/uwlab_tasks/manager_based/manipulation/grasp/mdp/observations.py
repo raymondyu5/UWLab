@@ -155,11 +155,38 @@ class CachedSamplePC:
 
         object_parts = []
         for k in range(len(self.object_names)):
-            object_state = env.scene[self.object_names[k]]._data.root_pose_w.clone()
-            object_state[:, :3] -= env.scene.env_origins
-            object_vertices = math_utils.transform_points(
-                self._object_meshes[k], object_state[..., :3], object_state[..., 3:7])
-            object_parts.append(object_vertices)
+            if self._object_is_articulation[k]:
+                obj = env.scene[self.object_names[k]]
+                body_pos_w = obj._data.body_pos_w.clone()  # (B, num_bodies, 3)
+                body_pos_w -= env.scene.env_origins.unsqueeze(1)
+                body_quat_w = obj._data.body_quat_w.clone()  # (B, num_bodies, 4)
+                # Root pose is well-defined regardless of fix_root_link body indexing.
+                root_pos = obj._data.root_pos_w.clone() - env.scene.env_origins
+                root_quat = obj._data.root_quat_w.clone()
+                body_parts = []
+                for local_idx, body_mesh in enumerate(self._object_meshes[k]):
+                    if body_mesh is None:
+                        continue
+                    if local_idx == 0:
+                        # whole-prim mesh: use root_pos_w so the base is always placed correctly
+                        verts = math_utils.transform_points(body_mesh, root_pos, root_quat)
+                    else:
+                        # non-root body: use that body's own pose (local_idx maps to body index)
+                        body_idx = min(local_idx, body_pos_w.shape[1] - 1)
+                        verts = math_utils.transform_points(
+                            body_mesh,
+                            body_pos_w[:, body_idx, :],
+                            body_quat_w[:, body_idx, :],
+                        )
+                    body_parts.append(verts)
+                if body_parts:
+                    object_parts.append(torch.cat(body_parts, dim=1))
+            else:
+                object_state = env.scene[self.object_names[k]]._data.root_pose_w.clone()
+                object_state[:, :3] -= env.scene.env_origins
+                object_vertices = math_utils.transform_points(
+                    self._object_meshes[k], object_state[..., :3], object_state[..., 3:7])
+                object_parts.append(object_vertices)
 
         if self.do_benchmark:
             e3 = _evt()
@@ -242,9 +269,14 @@ class CachedSamplePC:
             else:
                 self._hand_prim_patterns.append(None)
 
+        from isaaclab.assets import Articulation as IsaacArticulation
+        self._object_is_articulation = []
         for k, name in enumerate(self.object_names):
+            obj = env.scene[name]
+            is_art = isinstance(obj, IsaacArticulation)
+            self._object_is_articulation.append(is_art)
             if self._object_prim_path_patterns[k] is None:
-                self._object_prim_path_patterns[k] = env.scene[name].cfg.prim_path
+                self._object_prim_path_patterns[k] = obj.cfg.prim_path
 
         self._arm_mesh = torch.zeros(
             (env.num_envs, len(self.arm_names), self.num_arm_pcd, 3),
@@ -277,14 +309,53 @@ class CachedSamplePC:
                 self._hand_mesh[:, j] = pc
 
         self._object_meshes = []
-        for k in range(len(self.object_names)):
-            pc = reset_states_utils.sample_object_point_cloud(
-                num_envs=env.num_envs,
-                num_points=self.num_object_pcd[k],
-                prim_path_pattern=self._object_prim_path_patterns[k],
-                device=env.device,
-            )
-            self._object_meshes.append(pc)
+        for k, name in enumerate(self.object_names):
+            if self._object_is_articulation[k]:
+                obj = env.scene[name]
+                art_prim_env0 = obj.cfg.prim_path.replace(".*", "0", 1)
+                print(f"CachedSamplePC: articulation '{name}' body_names={obj.body_names}, num_bodies={len(obj.body_names)}")
+                print(f"CachedSamplePC: whole-prim path pattern = '{self._object_prim_path_patterns[k]}'")
+                # Body 0 (base/root): sample the whole articulation prim — guaranteed to find
+                # all colliders including the base, which often can't be found by name alone.
+                whole_pc = reset_states_utils.sample_object_point_cloud(
+                    num_envs=env.num_envs,
+                    num_points=self.num_object_pcd[k],
+                    prim_path_pattern=self._object_prim_path_patterns[k],
+                    device=env.device,
+                )
+                print(f"CachedSamplePC: whole_pc={'None (base will have no points!)' if whole_pc is None else f'shape {whole_pc.shape}'}")
+                # Non-root bodies: try per-body sampling so they track their own pose.
+                per_body_meshes = [whole_pc]  # index 0 = whole prim, transformed by body 0 pose
+                for body_name in obj.body_names[1:]:
+                    body_prim = get_first_matching_child_prim(
+                        art_prim_env0,
+                        predicate=lambda p, bn=body_name: p.GetName() == bn and p.HasAPI(UsdPhysics.RigidBodyAPI),
+                    )
+                    if body_prim is None:
+                        print(f"CachedSamplePC: no prim found for articulation body '{body_name}', skipping")
+                        per_body_meshes.append(None)
+                        continue
+                    body_pattern = str(body_prim.GetPath()).replace("env_0", "env_.*", 1)
+                    pc = reset_states_utils.sample_object_point_cloud(
+                        num_envs=env.num_envs,
+                        num_points=self.num_object_pcd[k],
+                        prim_path_pattern=body_pattern,
+                        device=env.device,
+                    )
+                    per_body_meshes.append(pc)
+                    if pc is not None:
+                        print(f"CachedSamplePC: sampled {self.num_object_pcd[k]} pts from articulation body '{body_name}'")
+                    else:
+                        print(f"CachedSamplePC: no collider found for articulation body '{body_name}', skipping")
+                self._object_meshes.append(per_body_meshes)
+            else:
+                pc = reset_states_utils.sample_object_point_cloud(
+                    num_envs=env.num_envs,
+                    num_points=self.num_object_pcd[k],
+                    prim_path_pattern=self._object_prim_path_patterns[k],
+                    device=env.device,
+                )
+                self._object_meshes.append(pc)
 
         self.mesh_init = True
 

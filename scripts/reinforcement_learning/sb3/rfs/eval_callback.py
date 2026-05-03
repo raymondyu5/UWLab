@@ -489,10 +489,10 @@ class RFSEvalCallback(BaseCallback):
                         if key in ("is_success", "is_grasped"):
                             continue
                         if key not in ever_extra:
-                            ever_extra[key] = torch.zeros(num_envs, dtype=torch.bool, device=device)
+                            ever_extra[key] = torch.zeros(num_envs, dtype=torch.float32, device=device)
                             episode_extra[key] = []
-                        m = torch.from_numpy(arr).to(device).bool()
-                        ever_extra[key][active] |= m[active]
+                        m = torch.from_numpy(arr.astype(np.float32)).to(device)
+                        ever_extra[key][active] = torch.max(ever_extra[key][active], m[active])
 
                 action, _ = self.model.predict(obs_np, deterministic=False)
                 action_t = torch.tensor(action, dtype=torch.float32, device=device)
@@ -530,7 +530,7 @@ class RFSEvalCallback(BaseCallback):
             extra_metrics = {"n_grasped": sum(episode_grasps)}
             extra_metrics["n_success_ever"] = n_success_ever
             for key, vals in episode_extra.items():
-                extra_metrics[key] = int(sum(vals))
+                extra_metrics[key] = sum(vals) if vals else 0.0
             logger.end_episode(
                 n_success / n_total if n_total > 0 else False,
                 n_success=n_success, n_total=n_total,
@@ -604,10 +604,10 @@ class RFSEvalCallback(BaseCallback):
                         if key in ("is_success", "is_grasped"):
                             continue
                         if key not in ever_extra:
-                            ever_extra[key] = torch.zeros(num_envs, dtype=torch.bool, device=device)
-                            per_env_extra[key] = [False] * num_envs
-                        m = torch.from_numpy(arr).to(device).bool()
-                        ever_extra[key][active] |= m[active]
+                            ever_extra[key] = torch.zeros(num_envs, dtype=torch.float32, device=device)
+                            per_env_extra[key] = [0.0] * num_envs
+                        m = torch.from_numpy(arr.astype(np.float32)).to(device)
+                        ever_extra[key][active] = torch.max(ever_extra[key][active], m[active])
 
                 if self.record_debug_plots:
                     ee_pose = obs_dict["policy"].get("ee_pose", obs_dict["policy"].get("right_ee_pose"))
@@ -639,7 +639,7 @@ class RFSEvalCallback(BaseCallback):
                         per_env_success_ever[i] = bool(ever_success[i])
                         per_env_grasped[i]      = bool(ever_grasped[i])
                         for key in ever_extra:
-                            per_env_extra[key][i] = bool(ever_extra[key][i])
+                            per_env_extra[key][i] = float(ever_extra[key][i])
                         recorded[i] = True
                         done_steps[i] = step_idx
 
@@ -663,7 +663,7 @@ class RFSEvalCallback(BaseCallback):
             n_success_ever = sum(per_env_success_ever)
             extra_metrics = {"n_grasped": sum(per_env_grasped), "n_success_ever": n_success_ever}
             for key, vals in per_env_extra.items():
-                extra_metrics[key] = int(sum(vals))
+                extra_metrics[key] = sum(vals) if vals else 0.0
             logger.end_episode(
                 n_success / num_envs,
                 n_success=n_success, n_total=num_envs,

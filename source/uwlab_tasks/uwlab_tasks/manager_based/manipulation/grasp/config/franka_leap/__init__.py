@@ -399,6 +399,18 @@ gym.register(
 )
 
 
+########## Plate in Dishrack #########
+
+gym.register(
+    id="UW-FrankaLeap-PlateInDishRack-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.plate_in_dishrack:PlateInDishRackFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Screw Lightbulb #########
 
 gym.register(
@@ -406,6 +418,72 @@ gym.register(
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-HighFriction-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapHighFrictionJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-LightBulb-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapLightBulbJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-Unfixed-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapUnfixedJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-Curriculum-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapCurriculumJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Credit Card Grasp #########
+
+gym.register(
+    id="UW-FrankaLeap-GraspCreditCard-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.credit_card_grasp:GraspCreditCardFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspCreditCard-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.credit_card_grasp:GraspCreditCardFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspCreditCard-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.credit_card_grasp:GraspCreditCardFrankaLeapIkAbsCfg",
     },
     disable_env_checker=True,
 )

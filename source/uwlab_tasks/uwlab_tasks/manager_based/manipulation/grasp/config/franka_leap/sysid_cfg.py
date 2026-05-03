@@ -81,15 +81,15 @@ class GraspFrankaLeapSysidJointAbsCfg(GraspFrankaLeapJointAbsCfg):
         self.run_mode = RL_MODE
         self.episode_length_s = 99999.0
 
-        # synth_pc = mdp.CachedSamplePC(
-        #     asset_name="robot",
-        #     object_names=[],
-        #     num_arm_pcd=ARM_NUM_POINTS,
-        #     num_hand_pcd=HAND_NUM_POINTS,
-        #     num_object_pcd=[],
-        #     num_downsample_points=2048,
-        # )
-        # self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+        synth_pc = mdp.CachedSamplePC(
+            asset_name="robot",
+            object_names=[],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[],
+            num_downsample_points=2048,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
 
 
 @configclass

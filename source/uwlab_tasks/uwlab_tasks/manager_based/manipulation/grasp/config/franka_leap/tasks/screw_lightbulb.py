@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 import torch
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import ArticulationCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.envs import mdp as isaac_mdp
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -29,12 +29,13 @@ from .. import grasp_franka_leap
 from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
 from .shared_params import FINGERS_NAME_LIST
 
-SCREW_LAMP_HORIZON = 200
+SCREW_LAMP_HORIZON = 256
 SCREW_LAMP_OBJECT_NUM_POINTS = 128
 
-SCREW_LAMP_USD = "/workspace/uwlab/assets/screw_lamp/screw_lamp.usd"
-SCREW_LAMP_SPAWN_POS = (0.525, 0.1, 0.0)
+SCREW_LAMP_USD = "/workspace/uwlab/assets/screw_lamp_new/screw_lamp.usd"
+SCREW_LAMP_SPAWN_POS = (0.555, 0.05, 0.0)  # z ignored by reset_object_pose; use reset_height instead
 SCREW_LAMP_SPAWN_ROT = (1.0, 0.0, 0.0, 0.0)
+SCREW_LAMP_TABLE_BLOCK_Z = 0.02  # calibrated: lamp base settles at ~0.05 with this block z
 
 
 class AngleCounterCommand(CommandTerm):
@@ -84,7 +85,7 @@ class AngleCounterCommand(CommandTerm):
         self.last_angle[env_ids] = cur[env_ids].clone()
         self.delta[env_ids] = 0.0
         self.sum_angle[env_ids] = 0.0
-        self._prev_step[env_ids] = self._env.unwrapped.episode_length_buf[env_ids].clone()
+        self._prev_step[env_ids] = -1
 
     def _update_metrics(self): pass
     def _update_command(self): pass
@@ -153,7 +154,7 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
     def is_success(self, env) -> torch.Tensor:
         angle_counter = env.command_manager.get_command("angle_counter")
-        return (angle_counter[..., -1].reshape(-1) > 4 * math.pi).float()
+        return (angle_counter[..., -1].reshape(-1) > 2 * math.pi).float()
 
     def __post_init__(self):
         super().__post_init__()
@@ -173,12 +174,17 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         screw_rew.setup_finger_entities(self.scene)
         screw_rew.setup_finger_sensors(self.scene, object_prim_name="ScrewLamp")
 
-        self.rewards.rotation    = RewTerm(func=screw_rew.rew_rotation,      weight=1.0)
-        self.rewards.contact     = RewTerm(func=screw_rew.rew_contact,        weight=0.0)
-        self.rewards.proximity   = RewTerm(func=screw_rew.rew_proximity,      weight=0.0)
+        self.rewards.rotation    = RewTerm(func=screw_rew.rew_rotation,           weight=1.0)
+        self.rewards.contact     = RewTerm(func=screw_rew.rew_contact,           weight=0.0)
+
+        self.rewards.proximity   = RewTerm(func=screw_rew.rew_proximity,         weight=0.0)
         self.rewards.wrist       = RewTerm(func=screw_rew.rew_wrist_penalty,  weight=0.0)
-        self.rewards.joint_vel   = RewTerm(func=screw_rew.rew_joint_vel,      weight=-1e-3)
-        self.rewards.action_rate = RewTerm(func=screw_rew.rew_action_rate,    weight=-0.5)
+        self.rewards.joint_vel        = RewTerm(func=screw_rew.rew_joint_vel,         weight=-1e-3)
+        self.rewards.action_rate      = RewTerm(func=screw_rew.rew_action_rate,       weight=-0.1)
+        self.rewards.arm_action_rate  = RewTerm(func=screw_rew.rew_arm_action_rate,   weight=-5.0)
+
+        self.rewards.base_stability         = RewTerm(func=screw_rew.rew_base_stability,        weight=0.0)
+        self._screw_rew = screw_rew
         self.metrics_spec = {
             "is_success": screw_rew.rew_is_success,
             "success_2pi": screw_rew.metric_success_2pi,
@@ -219,15 +225,27 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
                 "default_pos": SCREW_LAMP_SPAWN_POS,
                 "default_rot_quat": SCREW_LAMP_SPAWN_ROT,
                 "pose_range": {
-                    "x": (-0.075, 0.075),
+                    "x": (-0.02, 0.02),
                     "y": (-0.03, 0.03),
-                    "z": (0.0, 0.07),
+                    "z": (-0.01, 0.02),
                     "roll": (0.0, 0.0),
                     "pitch": (0.0, 0.0),
                     "yaw": (0.0, 0.0),
                 },
                 "reset_height": 0.0,
                 "table_block_name": None,
+            },
+        )
+
+        self.events.randomize_bulb_mass = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_mass,
+            mode="reset",
+            min_step_count_between_reset=800,
+            params={
+                "asset_cfg": SceneEntityCfg("screw_lamp", body_names="body"),
+                "mass_distribution_params": (0.5, 1.5),
+                "operation": "abs",
+                "distribution": "uniform",
             },
         )
 
@@ -243,6 +261,18 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             },
         )
 
+        self.events.set_lamp_physics_material = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_material,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("screw_lamp", body_names="body"),
+                "static_friction_range": (0.3, 0.5),
+                "dynamic_friction_range": (0.3, 0.5),
+                "restitution_range": (0.0, 0.0),
+                "num_buckets": 64,
+            },
+        )
+
 
 @configclass
 class ScrewLightbulbFrankaLeapJointAbsCfg(ScrewLightbulbFrankaLeapCfg):
@@ -250,3 +280,83 @@ class ScrewLightbulbFrankaLeapJointAbsCfg(ScrewLightbulbFrankaLeapCfg):
 
     def warmup_action(self, env) -> torch.Tensor:
         return env.scene["robot"].data.joint_pos.clone()
+
+
+@configclass
+class ScrewLightbulbFrankaLeapHighFrictionJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant with higher contact friction (0.5, 0.8) — easier grip with less squeezing force."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.events.set_lamp_physics_material.params["static_friction_range"] = (0.5, 0.8)
+        self.events.set_lamp_physics_material.params["dynamic_friction_range"] = (0.5, 0.8)
+
+
+@configclass
+class ScrewLightbulbFrankaLeapLightBulbJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant with lighter bulb mass (0.5 kg) to encourage gentler grasping forces."""
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.events.set_bulb_mass = EventTerm(
+            func=isaac_mdp.randomize_rigid_body_mass,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("screw_lamp", body_names="body"),
+                "mass_distribution_params": (0.5, 0.5),
+                "operation": "abs",
+            },
+        )
+
+
+@configclass
+class ScrewLightbulbFrankaLeapUnfixedJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant with fix_root_link=False + table_block support + base stability penalty.
+
+    Joint friction increased to 2.0 to prevent gravity-induced screw unwinding.
+    Tune UNFIXED_JOINT_FRICTION if bulb still sinks under gravity (increase)
+    or robot can't rotate it (decrease).
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.scene.screw_lamp.spawn.articulation_props.fix_root_link = False
+        self.scene.screw_lamp.actuators["screw_lamp"].friction = 2.0
+
+        setattr(self.scene, "table_block", RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/TableBlock",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(SCREW_LAMP_SPAWN_POS[0], SCREW_LAMP_SPAWN_POS[1], SCREW_LAMP_TABLE_BLOCK_Z),
+                rot=(1.0, 0.0, 0.0, 0.0),
+            ),
+            spawn=sim_utils.UsdFileCfg(
+                usd_path="/workspace/uwlab/assets/table/table_block.usd",
+                scale=(1.2, 1.0, 0.10),
+                rigid_props=RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                    disable_gravity=False,
+                ),
+            ),
+        ))
+
+        self.rewards.gravity_compensation = RewTerm(func=self._screw_rew.apply_gravity_compensation, weight=1.0)
+        self.rewards.base_stability.weight = -5.0
+
+
+@configclass
+class ScrewLightbulbFrankaLeapCurriculumJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant with curriculum-scheduled arm action rate and joint velocity penalties.
+
+    Both penalties ramp linearly from their initial values up to a cap over 200M agent steps:
+      - arm_action_rate: scale 5 -> 200 (replaces fixed weight=-5.0)
+      - joint_vel:       scale 0.001 -> 0.025 (replaces fixed weight=-1e-3)
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.rewards.arm_action_rate = RewTerm(func=self._screw_rew.rew_arm_action_rate_curriculum, weight=-1.0)
+        self.rewards.joint_vel = RewTerm(func=self._screw_rew.rew_joint_vel_curriculum, weight=-1.0)

@@ -55,7 +55,7 @@ HAND_RESET = [
 
 # PCD crop region from real world. Replaced max z with .67 instead of .7
 # Because for this camera, the view angle doesn't allow for any points above .67
-PCD_CROP_REGION_CL8384200N1 = [-0.10, -0.50, 0.035, 0.85, 0.50, 0.67]
+PCD_CROP_REGION_CL8384200N1 = [-0.10, -0.50, 0.005, 0.85, 0.50, 0.70]
 
 # Number of points to sample from each mesh component for each part of the scene
 ARM_NUM_POINTS = 256

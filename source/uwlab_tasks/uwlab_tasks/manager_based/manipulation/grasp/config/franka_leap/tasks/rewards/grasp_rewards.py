@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import torch
 import isaaclab.utils.math as math_utils
+import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.sensors.contact_sensor import ContactSensorCfg
 
 
@@ -342,17 +344,20 @@ class SimpleGraspReward:
         self._object_pose = None    # (num_envs, 7) env-local
         self._contact_or_not = None # (num_envs, num_fingers)
         self._finger_object_dev = None  # (num_envs, num_fingers, 3)
+        self._target_marker: VisualizationMarkers | None = None
 
     # ------------------------------------------------------------------
     # Scene setup
     # ------------------------------------------------------------------
 
-    def setup_wrist_sensor(self, scene_cfg):
+    def setup_wrist_sensor(self, scene_cfg, filter_prim_paths=None):
+        if filter_prim_paths is None:
+            filter_prim_paths = ["{ENV_REGEX_NS}/Table"]
         sensor = ContactSensorCfg(
             prim_path="{ENV_REGEX_NS}/Robot/panda_link6",
             update_period=0.0,
             history_length=3,
-            filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],
+            filter_prim_paths_expr=filter_prim_paths,
             debug_vis=False,
         )
         setattr(scene_cfg, "panda_link6_contact", sensor)
@@ -392,6 +397,22 @@ class SimpleGraspReward:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _update_target_marker(self, env) -> None:
+        if self._target_marker is None:
+            cfg = VisualizationMarkersCfg(
+                prim_path="/Visuals/grasp_target",
+                markers={
+                    "sphere": sim_utils.SphereCfg(
+                        radius=0.03,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+                    ),
+                },
+            )
+            self._target_marker = VisualizationMarkers(cfg)
+        target_env_local = self._target_pos_tensor(env)
+        world_positions = target_env_local + env.scene.env_origins
+        self._target_marker.visualize(translations=world_positions)
+
     def _ensure_computed(self, env):
         if env.common_step_counter != self._cached_step:
             obj_state = env.scene[self.object_name]._data.root_state_w[:, :7].clone()
@@ -414,8 +435,11 @@ class SimpleGraspReward:
                     sensor._data.force_matrix_w.reshape(env.num_envs, 3), dim=1
                 ).unsqueeze(1)
                 sensor_data.append(force)
-            self._contact_or_not = (torch.cat(sensor_data, dim=1) > 4.0).int()
+            # 0.5N threshold (lowered from 4.0N): bowl release check in PlaceReward.rew_success
+            # requires detecting light finger contact; 4N was too high and always read as released.
+            self._contact_or_not = (torch.cat(sensor_data, dim=1) > 0.5).int()
 
+            self._update_target_marker(env)
             self._cached_step = env.common_step_counter
 
     def _init_height_tensor(self, env):
@@ -452,6 +476,13 @@ class SimpleGraspReward:
         )
         return (dist <= self.SUCCESS_DIST).float()
 
+    def rew_proximity(self, env) -> torch.Tensor:
+        """Dense reward for all fingers being close to the object."""
+        self._ensure_computed(env)
+        dist = torch.clip(torch.linalg.norm(self._finger_object_dev, dim=2), 0.02, 0.8)
+        reward = torch.clip((1.0 / (0.1 + dist)) - 2.0, 0.0, 4.5)
+        return torch.sum(reward, dim=1) / len(self.fingers_name_list)
+
     def rew_wrist_penalty(self, env) -> torch.Tensor:
         """Sparse -1 when panda_link6 contacts the table with > 4 N."""
         sensor = env.scene["panda_link6_contact"]
@@ -459,6 +490,19 @@ class SimpleGraspReward:
             sensor._data.net_forces_w.reshape(env.num_envs, 3), dim=1
         )
         return -(force > 4.0).float()
+
+    FINGER_FORCE_THRESHOLD = 15.0  # N
+
+    def rew_finger_force_penalty(self, env) -> torch.Tensor:
+        """Count of fingers exceeding FINGER_FORCE_THRESHOLD N net force (negated)."""
+        total = torch.zeros(env.num_envs, device=env.device)
+        for name in self.fingers_name_list:
+            sensor = env.scene[f"{name}_contact"]
+            force = torch.linalg.norm(
+                sensor._data.net_forces_w.reshape(env.num_envs, 3), dim=1
+            )
+            total += (force > self.FINGER_FORCE_THRESHOLD).float()
+        return -total
 
     def rew_joint_vel(self, env) -> torch.Tensor:
         robot = env.scene[self.asset_name]
