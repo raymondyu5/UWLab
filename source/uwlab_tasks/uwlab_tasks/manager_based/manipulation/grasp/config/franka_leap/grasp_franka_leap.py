@@ -89,6 +89,10 @@ class FrankaLeapGraspEnvCfg(grasp_env.GraspEnvCfg):
     # Scene entity names to include in instance-filtered seg_pc (robot + task objects, excludes table/ground).
     # Override in task config for multi-object tasks (e.g. bottle pour: add "pink_cup").
     distill_include_entity_names: tuple[str, ...] = ("robot", "grasp_object")
+    # Scene entity name of the primary task object for eval logging (scatter plots, obj_pose).
+    # Override in tasks that don't use "grasp_object" (e.g. screw_lightbulb uses "screw_lamp").
+    # Set to None to disable object pose logging in eval.
+    eval_object_name: str | None = "grasp_object"
 
     def warmup_action(self, env) -> torch.Tensor:
         """Hold at reset joint position — safe no-op for joint absolute control."""

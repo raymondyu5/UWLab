@@ -71,12 +71,14 @@ class EvalLogger:
 
     def end_episode(self, success: bool | float, n_success: int = None, n_total: int = None,
                     n_success_ever: int = None,
+                    steps_to_first_success: float | None = None,
                     extra_metrics: dict[str, int] | None = None):
         assert self._current is not None, "Call begin_episode first"
         self._current["success"] = success
         self._current["n_success"] = n_success
         self._current["n_total"] = n_total
         self._current["n_success_ever"] = n_success_ever
+        self._current["steps_to_first_success"] = steps_to_first_success
         self._current["extra_metrics"] = dict(extra_metrics) if extra_metrics else {}
         if self.record_video:
             self._write_episode_video(len(self._episodes), self._current)
@@ -161,6 +163,9 @@ class EvalLogger:
             n, rate = _sum_extra(k)
             extra_rates[k] = {"n": n, "rate": rate}
 
+        eps_with_steps = [e for e in self._episodes if e.get("steps_to_first_success") is not None]
+        avg_steps_to_success = float(np.mean([e["steps_to_first_success"] for e in eps_with_steps])) if eps_with_steps else None
+
         summary = {
             "n_episodes": n_episodes,
             "n_success": n_success,
@@ -168,6 +173,7 @@ class EvalLogger:
             "success_rate": success_rate,
             "n_success_ever": n_success_ever_total,
             "success_rate_ever": success_rate_ever,
+            "avg_steps_to_success": avg_steps_to_success,
             "extra_metric_rates": {k: v["rate"] for k, v in extra_rates.items()},
             "episodes": records,
         }
@@ -178,6 +184,8 @@ class EvalLogger:
 
         msg = f"[EvalLogger] {n_success}/{n_total} success_end ({100*success_rate:.1f}%)"
         msg += f", {n_success_ever_total}/{n_total} success_ever ({100*success_rate_ever:.1f}%)"
+        if avg_steps_to_success is not None:
+            msg += f", steps_to_success={avg_steps_to_success:.1f}"
         for k, v in extra_rates.items():
             msg += f", {v['n']}/{n_total} {k} ({100*v['rate']:.1f}%)"
         print(f"{msg} -> {out_path}")

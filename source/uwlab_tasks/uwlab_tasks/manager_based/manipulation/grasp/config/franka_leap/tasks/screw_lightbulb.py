@@ -159,6 +159,7 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
+        self.eval_object_name = "screw_lamp"
         self.events.reset_object = None
 
         self.setup_horizon(horizon=SCREW_LAMP_HORIZON)

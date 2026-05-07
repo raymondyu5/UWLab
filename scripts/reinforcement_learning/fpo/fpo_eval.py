@@ -118,6 +118,7 @@ def _run_fixed_pose_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         per_env_success_ever = [False] * num_envs
         per_env_grasped      = [False] * num_envs
         per_env_extra: dict[str, list] = {}
+        per_env_first_success_step: list[int | None] = [None] * num_envs
         recorded = [False] * num_envs
 
         for step_idx in range(episode_steps):
@@ -138,6 +139,9 @@ def _run_fixed_pose_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
                     last_success[active] = m_s[active]
                     ever_success[active] |= m_s[active]
                     ever_grasped[active] |= m_g[active]
+                    for i in range(num_envs):
+                        if active[i] and m_s[i] and per_env_first_success_step[i] is None:
+                            per_env_first_success_step[i] = step_idx
                     for key, arr in metrics_np.items():
                         if key in ("is_success", "is_grasped"):
                             continue
@@ -161,7 +165,8 @@ def _run_fixed_pose_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
 
             # Record step for logger (env 0 only for EE/obj pose).
             ee_pose  = _get_ee_pose(fpo_env)
-            obj_pose = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
+            _obj = _get_obj_pos_w(isaac_env)
+            obj_pose = _obj[0].cpu().numpy() if _obj is not None else np.zeros(3)
             action   = fpo_env.last_action[0].cpu().numpy() if fpo_env.last_action is not None else np.zeros(fpo_env.cfm_action_dim)
             frame    = fpo_env.last_substep_frames[0] if (fpo_env.last_substep_frames and len(fpo_env.last_substep_frames) > 0) else None
             logger.record_step(ee_pose=ee_pose, object_pose=obj_pose, action=action, frame=frame)
@@ -175,12 +180,15 @@ def _run_fixed_pose_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         extra_counts   = {k: int(sum(vals)) for k, vals in per_env_extra.items()}
         extra_counts["n_grasped"]      = n_grasped
         extra_counts["n_success_ever"] = n_success_ever
+        succ_steps = [s for s in per_env_first_success_step if s is not None]
+        steps_to_first_success = float(np.mean(succ_steps)) if succ_steps else None
 
         logger.end_episode(
             n_success / num_envs,
             n_success=n_success,
             n_total=num_envs,
             n_success_ever=n_success_ever,
+            steps_to_first_success=steps_to_first_success,
             extra_metrics=extra_counts,
         )
 
@@ -200,7 +208,11 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         episode_steps = _episode_steps(fpo_env)
 
         # Capture initial object positions for scatter plot.
-        init_pos_w     = isaac_env.scene["grasp_object"].data.root_pos_w.clone()
+        _obj_pos_w = _get_obj_pos_w(isaac_env)
+        if _obj_pos_w is not None:
+            init_pos_w = _obj_pos_w.clone()
+        else:
+            init_pos_w = torch.zeros(num_envs, 3, device=device)
         init_pos_local = (init_pos_w - isaac_env.scene.env_origins).cpu().numpy()
 
         logger.begin_episode(f"random_trial_{trial_idx}", None)
@@ -213,6 +225,7 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         per_env_success      = [False] * num_envs
         per_env_success_ever = [False] * num_envs
         per_env_grasped      = [False] * num_envs
+        per_env_first_success_step: list[int | None] = [None] * num_envs
         recorded   = [False] * num_envs
         done_steps: list[int | None] = [None] * num_envs
 
@@ -234,6 +247,9 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
                     last_success[active] = m_s[active]
                     ever_success[active] |= m_s[active]
                     ever_grasped[active] |= m_g[active]
+                    for i in range(num_envs):
+                        if active[i] and m_s[i] and per_env_first_success_step[i] is None:
+                            per_env_first_success_step[i] = step_idx
                     for key, arr in metrics_np.items():
                         if key in ("is_success", "is_grasped"):
                             continue
@@ -257,7 +273,8 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
 
             # Record step for logger (env 0 only for EE/obj pose).
             ee_pose  = _get_ee_pose(fpo_env)
-            obj_pose = isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
+            _obj = _get_obj_pos_w(isaac_env)
+            obj_pose = _obj[0].cpu().numpy() if _obj is not None else np.zeros(3)
             action   = fpo_env.last_action[0].cpu().numpy() if fpo_env.last_action is not None else np.zeros(fpo_env.cfm_action_dim)
             frame    = fpo_env.last_substep_frames[0] if (fpo_env.last_substep_frames and len(fpo_env.last_substep_frames) > 0) else None
             logger.record_step(ee_pose=ee_pose, object_pose=obj_pose, action=action, frame=frame)
@@ -271,12 +288,15 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         extra_counts   = {k: int(sum(vals)) for k, vals in per_env_extra.items()}
         extra_counts["n_grasped"]      = n_grasped
         extra_counts["n_success_ever"] = n_success_ever
+        succ_steps = [s for s in per_env_first_success_step if s is not None]
+        steps_to_first_success = float(np.mean(succ_steps)) if succ_steps else None
 
         logger.end_episode(
             n_success / num_envs,
             n_success=n_success,
             n_total=num_envs,
             n_success_ever=n_success_ever,
+            steps_to_first_success=steps_to_first_success,
             extra_metrics=extra_counts,
         )
 
@@ -290,6 +310,14 @@ def _run_random_eval(fpo_env, spawn_cfg, logger, isaac_env, record_video):
         )
 
     fpo_env._collect_substep_frames = False
+
+
+def _get_obj_pos_w(isaac_env) -> "torch.Tensor | None":
+    """Return the task object's world position tensor, or None if not configured."""
+    obj_name = getattr(isaac_env.cfg, "eval_object_name", "grasp_object")
+    if not obj_name:
+        return None
+    return isaac_env.scene[obj_name].data.root_pos_w
 
 
 def _safe_get_metrics(isaac_env) -> dict | None:
@@ -317,6 +345,8 @@ def _log_to_wandb(results: dict, output_dir: str, t_so_far: int):
         "eval/n_success":         results["n_success"],
         "eval/n_total":           results["n_total"],
     }
+    if results.get("avg_steps_to_success") is not None:
+        log_dict["eval/avg_steps_to_success"] = results["avg_steps_to_success"]
     for key, rate in results.get("extra_metric_rates", {}).items():
         log_dict[f"eval/{key}_rate"] = rate
 

@@ -1,0 +1,74 @@
+ppo:
+  # PPO hyperparameters — matched to rfs_cfg.yaml for fair comparison
+  n_steps: 200               # env steps (policy steps) per rollout per env
+  batch_size: 4096           # mini-batch size for gradient updates
+  update_epochs: 8           # PPO update epochs per rollout
+  gamma: 0.99                # discount factor
+  gae_lambda: 0.95           # GAE lambda
+  target_kl: 6.0             # approx KL threshold for early stopping
+  max_grad_norm: 1.0         # gradient clipping
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  actor_weight_decay: 1.0e-6
+  critic_weight_decay: 1.0e-6
+  actor_lr_scheduler:
+    first_cycle_steps: 10000
+    warmup_steps: 100
+    min_lr: 1.0e-5
+  critic_lr_scheduler:
+    first_cycle_steps: 10000
+    warmup_steps: 100
+    min_lr: 1.0e-5
+  n_critic_warmup_itr: 0     # train critic only for this many itr before updating actor
+  ent_coef: 0.0              # entropy regularization coefficient
+  vf_coef: 1.0e-4            # value loss coefficient
+  logprob_batch_size: 10000  # batch size when computing logprobs / values at rollout end
+  use_bc_loss: false         # BC regularization toward pretrained policy
+  reward_horizon: 4          # number of action steps to backprop through (set to act_steps)
+
+diffusion:
+  # Pretrained DDPM schedule (must match the pretraining run)
+  denoising_steps: 100       # total DDPM timesteps used during pretraining
+  predict_epsilon: true
+
+  # DDIM fine-tuning (faster than DDPM; ft_denoising_steps == ddim_steps here)
+  use_ddim: true
+  ddim_steps: 5              # total DDIM inference steps
+  ft_denoising_steps: 5      # how many of those to fine-tune (all of them)
+
+  # Action chunking
+  horizon_steps: 4           # number of actions predicted per forward pass (Ta)
+  act_steps: 4               # number of those actions executed per env step
+
+  # PPO-specific diffusion params
+  gamma_denoising: 0.99      # discount across denoising steps
+  clip_ploss_coef: 0.01      # PPO clip epsilon at late (low-noise) denoising steps
+  clip_ploss_coef_base: 1.0e-3  # PPO clip epsilon at early (high-noise) steps
+  clip_ploss_coef_rate: 3    # exponential interpolation rate
+  clip_vloss_coef: null      # value loss clipping (null = disabled)
+  norm_adv: true             # normalize advantages within batch
+
+  # Sampling noise floor (prevents degenerate deterministic sampling)
+  min_sampling_denoising_std: 0.1
+  min_logprob_denoising_std: 0.1
+  clip_advantage_lower_quantile: 0.0
+  clip_advantage_upper_quantile: 1.0
+
+  # Network architecture (DiffusionMLP actor + CriticObs)
+  actor_mlp_dims: [512, 512, 512]
+  actor_activation_type: Mish
+  actor_residual_style: true
+  actor_time_dim: 16
+
+  critic_mlp_dims: [256, 256, 256]
+  critic_activation_type: Mish
+
+  # Learnable DDIM stochasticity (eta)
+  eta_base: 1.0
+  eta_min: 0.1
+  eta_max: 1.0
+
+eval:
+  interval: 20000            # env steps between eval runs
+  record_video: true
+  n_eval_episode: 1          # episodes per env during eval

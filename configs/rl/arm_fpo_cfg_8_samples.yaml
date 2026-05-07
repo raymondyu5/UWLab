@@ -6,7 +6,7 @@
 fpo:
   num_warmup_steps: 5
   critic_warmup_iters: 10
-  n_cfm_samples: 1
+  n_cfm_samples: 8
 
 ppo:
   n_steps: 200
