@@ -65,7 +65,7 @@ class RealDatasetLoader:
 
     def __init__(
         self,
-        dataset_path: str,
+        dataset_path: str | list[str],
         n_obs_steps: int,
         action_dim: int,
         downsample_points: int,
@@ -78,7 +78,9 @@ class RealDatasetLoader:
         self.device = device
         self.horizon = horizon
         self.episodes: list[dict] = []
-        self._load_episodes(dataset_path)
+        paths = [dataset_path] if isinstance(dataset_path, str) else dataset_path
+        for path in paths:
+            self._load_episodes(path)
 
         self._pool_agent_pos: torch.Tensor | None = None
         self._pool_past_actions: torch.Tensor | None = None

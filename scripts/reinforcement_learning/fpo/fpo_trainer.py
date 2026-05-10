@@ -246,14 +246,24 @@ class FPOTrainer:
                     bc_losses.append(0.0)
                     continue
 
-                # FPO policy ratio: average over N samples before exp (more stable).
+                # FPO++ per-sample ratio: one ratio per (tau_i, eps_i) pair rather than
+                # averaging losses before exp, giving finer-grained trust region clipping.
                 cfm_loss_curr = self.env.compute_cfm_loss(mb_gc, mb_chunk, mb_eps, mb_t)
-                cfm_diff      = mb_init.mean(dim=-1) - cfm_loss_curr.mean(dim=-1)  # (B,)
-                rho           = torch.exp(cfm_diff)
+                cfm_diff      = mb_init - cfm_loss_curr                    # (B, N)
+                rho           = torch.exp(cfm_diff)                        # (B, N)
 
-                surr1 = rho * mb_adv
-                surr2 = torch.clamp(rho, 1 - self.clip_range, 1 + self.clip_range) * mb_adv
-                actor_loss = -torch.min(surr1, surr2).mean()
+                adv_n = mb_adv.unsqueeze(1)                                # (B, 1) → broadcasts over N
+                surr1 = rho * adv_n                                        # (B, N)
+                surr2 = torch.clamp(rho, 1 - self.clip_range, 1 + self.clip_range) * adv_n
+                ppo_obj = torch.min(surr1, surr2)
+
+                # ASPO: for negative-advantage samples outside the trust region (rho > 1+eps),
+                # replace the unclipped rho*adv with the log-ratio objective. This bounds the
+                # gradient amplitude to |adv| regardless of rho, preventing the ~100x gradient
+                # amplification observed when rho spikes during bad training runs.
+                neg_outside = (adv_n < 0) & (rho > 1 + self.clip_range)
+                aspo_obj = torch.where(neg_outside, cfm_diff * adv_n, ppo_obj)
+                actor_loss = -aspo_obj.mean()
 
                 # BC regularization: anchor UNet toward frozen BC weights on real data.
                 bc_loss_val = 0.0

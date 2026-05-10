@@ -42,10 +42,12 @@ parser.add_argument("--wandb_project", type=str, default=None)
 parser.add_argument("--wandb_run_name", type=str, default=None)
 
 # BC regularization
-parser.add_argument("--bc_dataset_path", type=str, default=None,
-                    help="Path to real robot zarr dataset for BC regularization.")
+parser.add_argument("--bc_dataset_path", type=str, action="append", default=None,
+                    help="Path to real robot zarr dataset for BC regularization. Repeat for multiple datasets.")
 parser.add_argument("--bc_coef", type=float, default=0.0,
                     help="Weight on BC regularization loss (0 = disabled).")
+parser.add_argument("--noise_extrinsic", action="store_true", default=False,
+                    help="Apply extrinsic noise augmentation to PCDs (match BC training for tasks trained with noise_extrinsic=true).")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -197,7 +199,11 @@ def main():
             device=torch.device(device),
             horizon=fpo_env.policy_horizon,
         )
-        bc_loader.precompute_pool(fpo_env)
+        bc_loader.precompute_pool(
+            fpo_env,
+            noise_extrinsic=args_cli.noise_extrinsic,
+            noise_extrinsic_parameter=[0.05, 0.2] if args_cli.noise_extrinsic else None,
+        )
         print(f"[INFO] BC regularization: coef={bc_coef}, dataset={args_cli.bc_dataset_path}")
 
     # Wandb setup.

@@ -118,16 +118,19 @@ class GraspBottleRandomResetsFrankaLeapJointAbsStateCfg(GraspBottleRandomResetsF
 
     Replaces all SimpleGraspReward bound methods with standalone module-level functions
     so the config survives the Hydra serialize → deserialize round-trip.
-    Observation space: joint_pos (23) + arm_joint_pos (7) + ee_pose (7) +
-                       hand_joint_pos (16) + object_pose (7) + target_pose (7) = 67D flat.
+    Observation space: arm_joint_pos (7) + hand_joint_pos (16) + object_pose (7) = 30D flat.
+    Matches the BC training obs keys so BC checkpoints transfer directly.
     """
     run_mode: str = "rl_mode"
 
     def __post_init__(self):
         super().__post_init__()
         # Replace bound method obs terms with module-level equivalents
-        self.observations.policy.target_object_pose = ObsTerm(func=_grasp_obs_target_pose)
         self.observations.policy.manipulated_object_pose = ObsTerm(func=_grasp_obs_object_pose)
+        # Drop terms not present in BC training data: arm_joint_pos (7) + hand_joint_pos (16) + object_pose (7) = 30D
+        self.observations.policy.joint_pos = None
+        self.observations.policy.ee_pose = None
+        self.observations.policy.target_object_pose = None
         self.observations.policy.contact_obs = None
         self.observations.policy.object_in_tip = None
         self.observations.policy.seg_pc = None
