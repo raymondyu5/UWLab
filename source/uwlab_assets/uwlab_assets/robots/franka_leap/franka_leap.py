@@ -274,7 +274,7 @@ FRANKA_LEAP_ARM_JOINT_LIMITS = {
     "panda_joint4": (-2.77, -0.37),
     "panda_joint5": (-2.60, 2.60),
     "panda_joint6": (0.28, 3.45),
-    "panda_joint7": (-2.60, 2.60),
+    "panda_joint7": (-0.28, 1.84),
 }
 
 ##

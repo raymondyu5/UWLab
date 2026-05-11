@@ -32,8 +32,8 @@ from .shared_params import FINGERS_NAME_LIST
 SCREW_LAMP_HORIZON = 256
 SCREW_LAMP_OBJECT_NUM_POINTS = 128
 
-SCREW_LAMP_USD = "/workspace/uwlab/assets/screw_lamp_new/screw_lamp.usd"
-SCREW_LAMP_SPAWN_POS = (0.555, 0.05, 0.0)  # z ignored by reset_object_pose; use reset_height instead
+SCREW_LAMP_USD = "/workspace/uwlab/assets/screw_lamp_tall_base/screw_lamp.usd"
+SCREW_LAMP_SPAWN_POS = (0.545, 0.13, 0.0)  # z ignored by reset_object_pose; use reset_height instead
 SCREW_LAMP_SPAWN_ROT = (1.0, 0.0, 0.0, 0.0)
 SCREW_LAMP_TABLE_BLOCK_Z = 0.02  # calibrated: lamp base settles at ~0.05 with this block z
 
@@ -178,12 +178,13 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.rewards.rotation    = RewTerm(func=screw_rew.rew_rotation,           weight=1.0)
         self.rewards.contact     = RewTerm(func=screw_rew.rew_contact,           weight=0.0)
 
-        self.rewards.proximity   = RewTerm(func=screw_rew.rew_proximity,         weight=0.0)
+        self.rewards.proximity   = RewTerm(func=screw_rew.rew_proximity,         weight=0.1)
         self.rewards.wrist       = RewTerm(func=screw_rew.rew_wrist_penalty,  weight=0.0)
         self.rewards.joint_vel        = RewTerm(func=screw_rew.rew_joint_vel,         weight=-1e-3)
         self.rewards.action_rate      = RewTerm(func=screw_rew.rew_action_rate,       weight=-0.1)
         self.rewards.arm_action_rate  = RewTerm(func=screw_rew.rew_arm_action_rate,   weight=-5.0)
 
+        self.rewards.joint_pos_limits        = RewTerm(func=screw_rew.rew_joint_pos_limits,      weight=-100.0)
         self.rewards.base_stability         = RewTerm(func=screw_rew.rew_base_stability,        weight=0.0)
         self._screw_rew = screw_rew
         self.metrics_spec = {
@@ -345,6 +346,60 @@ class ScrewLightbulbFrankaLeapUnfixedJointAbsCfg(ScrewLightbulbFrankaLeapJointAb
 
         self.rewards.gravity_compensation = RewTerm(func=self._screw_rew.apply_gravity_compensation, weight=1.0)
         self.rewards.base_stability.weight = -5.0
+
+
+@configclass
+class ScrewLightbulbFrankaLeapTallBigBaseJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant using the tall_big_base lightbulb asset."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.screw_lamp.spawn.usd_path = "/workspace/uwlab/assets/screw_lamp_tall_big_base/screw_lamp.usd"
+
+
+@configclass
+class ScrewLightbulbFrankaLeapRealLightbulbJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant using the real_lightbulb USD (physics baked in, Blender export).
+
+    Body names differ from screw_lamp_new: base=ObjectCapture, bulb=ObjectCapture_001.
+    Joint axis=Y in local frame but base has 90deg X rotation, so world-space rotation is Z (correct).
+    BULB_Z_OFFSET overridden to 0.115 (bulb translate Z from root).
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.screw_lamp.spawn.usd_path = "/workspace/uwlab/assets/real_lightbulb/real_lightbulb.usd"
+
+        # 90deg X rotation baked in USD (Blender Y-up -> Z-up) — must match spawn rot and reset rot
+        _rot_90x = (0.7071, 0.7071, 0.0, 0.0)  # (w, x, y, z)
+        self.scene.screw_lamp.init_state.rot = _rot_90x
+        self.events.reset_lamp_pose.params["default_rot_quat"] = _rot_90x
+
+        # Fix contact sensor filters: bulb body is ObjectCapture_001, not body
+        for link_name in FINGERS_NAME_LIST:
+            getattr(self.scene, f"{link_name}_contact").filter_prim_paths_expr = [
+                "{ENV_REGEX_NS}/ScrewLamp/ObjectCapture_001"
+            ]
+
+        # Fix mass randomization and material body name
+        self.events.randomize_bulb_mass.params["asset_cfg"] = SceneEntityCfg(
+            "screw_lamp", body_names="ObjectCapture_001"
+        )
+        self.events.set_lamp_physics_material.params["asset_cfg"] = SceneEntityCfg(
+            "screw_lamp", body_names="ObjectCapture_001"
+        )
+
+        # Fix bulb Z offset at instance level (bulb translate Z=0.115 from root)
+        self._screw_rew._bulb_z_offset = 0.085
+
+
+@configclass
+class ScrewLightbulbFrankaLeapHighContactJointAbsCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """Variant with higher contact reward weight (0.5) to encourage grasping."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.contact.weight = 0.5
 
 
 @configclass

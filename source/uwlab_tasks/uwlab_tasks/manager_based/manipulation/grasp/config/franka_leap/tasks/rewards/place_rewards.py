@@ -47,6 +47,7 @@ class PlaceReward(SimpleGraspReward):
         success_box_y_offset: float = 0.03,
         success_box_z_min: float = 0.05,
         success_box_z_max: float = 0.14,
+        home_joints: list | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -61,6 +62,8 @@ class PlaceReward(SimpleGraspReward):
         self.success_box_z_min = success_box_z_min
         self.success_box_z_max = success_box_z_max
         self._slot_marker: VisualizationMarkers | None = None
+        self._placed = None
+        self._home_joints = torch.tensor(home_joints, dtype=torch.float32) if home_joints is not None else None
 
     def _target_pos_tensor(self, env):
         if self.rack_name is not None and self.slot_offset is not None:
@@ -88,6 +91,16 @@ class PlaceReward(SimpleGraspReward):
         super()._ensure_computed(env)
         if needs_update:
             self._update_slot_marker(env)
+            self._update_placed_flag(env)
+
+    def _update_placed_flag(self, env) -> None:
+        if self._placed is None:
+            self._placed = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        self._placed |= self.rew_success(env).bool()
+
+    def reset_placed_flag(self, env, env_ids):
+        if self._placed is not None:
+            self._placed[env_ids] = False
 
     def _update_slot_marker(self, env) -> None:
         """Lazily create and update a green sphere marker at the target slot position (world frame)."""
@@ -180,6 +193,27 @@ class PlaceReward(SimpleGraspReward):
         self._ensure_computed(env)
         return (self._quat_similarity(env) >= self.ORIENT_THRESHOLD).float()
 
+
+    HOME_DIST_THRESHOLD = 0.2  # joint-space L2 distance to consider "at home"
+
+    def rew_return_home(self, env) -> torch.Tensor:
+        """Sparse +1: at home joints after placing, gated by placed flag."""
+        self._ensure_computed(env)
+        if self._placed is None or self._home_joints is None:
+            return torch.zeros(env.num_envs, device=env.device)
+        home = self._home_joints.to(env.device)
+        joint_pos = env.scene[self.asset_name].data.joint_pos
+        dist = torch.linalg.norm(joint_pos - home.unsqueeze(0), dim=1)
+        return self._placed.float() * (dist < self.HOME_DIST_THRESHOLD).float()
+
+    def is_done(self, env) -> torch.Tensor:
+        """True when placed AND joints within HOME_DIST_THRESHOLD of home."""
+        if self._placed is None or self._home_joints is None:
+            return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        home = self._home_joints.to(env.device)
+        joint_pos = env.scene[self.asset_name].data.joint_pos
+        dist = torch.linalg.norm(joint_pos - home.unsqueeze(0), dim=1)
+        return self._placed & (dist < self.HOME_DIST_THRESHOLD)
 
     def obs_target_object_pose(self, env) -> torch.Tensor:
         """Target pose (7D): slot position + target quaternion in world frame."""
