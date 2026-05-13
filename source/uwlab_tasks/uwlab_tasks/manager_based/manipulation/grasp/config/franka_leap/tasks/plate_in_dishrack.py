@@ -25,7 +25,7 @@ from .shared_params import FINGERS_NAME_LIST
 
 
 
-PLATE_HORIZON = 128
+PLATE_HORIZON = 160
 PLATE_OBJECT_NUM_POINTS = 512
 RACK_OBJECT_NUM_POINTS = 256
 
@@ -75,6 +75,7 @@ class PlateInDishRackSceneCfg(grasp_franka_leap.FrankaLeapGraspSceneCfg):
                 linear_damping=1.0,
                 angular_damping=2.0,
                 max_depenetration_velocity=1.0,
+                enable_gyroscopic_forces=True,
             ),
         ),
     )
@@ -98,7 +99,7 @@ class PlateInDishRackFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
     scene: PlateInDishRackSceneCfg = PlateInDishRackSceneCfg(num_envs=1, env_spacing=2.5)
 
     def is_success(self, env) -> torch.Tensor:
-        return self._place_rew.rew_success(env)
+        return self._place_rew.is_done(env).float()
 
     def __post_init__(self):
         # Lower z_min from 0.035 to -0.01 so bowl on table (z~0.02) is not cropped out
@@ -135,15 +136,17 @@ class PlateInDishRackFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             success_box_y_offset=SUCCESS_BOX_Y_OFFSET,
             success_box_z_min=SUCCESS_BOX_Z_MIN,
             success_box_z_max=SUCCESS_BOX_Z_MAX,
+            home_joints=ARM_RESET + HAND_RESET,
         )
         place_rew.setup_wrist_sensor(self.scene)
         place_rew.setup_finger_entities(self.scene)
         place_rew.setup_finger_sensors(self.scene, object_prim_name="Bowl")
         self._place_rew = place_rew
 
-        self.rewards.success     = RewTerm(func=place_rew.rew_success,       weight=50.0)
-        self.rewards.joint_vel   = RewTerm(func=place_rew.rew_joint_vel,     weight=-1e-3)
-        self.rewards.action_rate = RewTerm(func=place_rew.rew_action_rate,   weight=-5e-3)
+        self.rewards.success      = RewTerm(func=place_rew.rew_success,      weight=50.0)
+        self.rewards.return_home  = RewTerm(func=place_rew.rew_return_home,  weight=2.0)
+        self.rewards.joint_vel    = RewTerm(func=place_rew.rew_joint_vel,    weight=-1e-3)
+        self.rewards.action_rate  = RewTerm(func=place_rew.rew_action_rate,  weight=-5e-3)
 
         self.metrics_spec = {
             "is_success": place_rew.rew_success,
@@ -155,6 +158,9 @@ class PlateInDishRackFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
 
         self.events.capture_reset_height = EventTerm(
             func=place_rew.capture_reset_height, mode="reset", params={}
+        )
+        self.events.reset_placed_flag = EventTerm(
+            func=place_rew.reset_placed_flag, mode="reset", params={}
         )
 
         self.observations.policy.target_object_pose      = ObsTerm(func=place_rew.obs_target_object_pose)
@@ -251,6 +257,10 @@ class PlateInDishRackFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.terminations.plate_too_far = DoneTerm(
             func=bottle_too_far,
             params={"object_name": "grasp_object", "max_xy_dist": 1.0},
+            time_out=False,
+        )
+        self.terminations.placed_and_home = DoneTerm(
+            func=place_rew.is_done,
             time_out=False,
         )
 

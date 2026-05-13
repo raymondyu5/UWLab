@@ -10,7 +10,7 @@ from isaaclab.assets import RigidObjectCfg
 from isaaclab.sensors.contact_sensor import ContactSensorCfg
 
 BULB_BODY_NAME = "body"  # name of the bulb rigid body in the screw_lamp articulation
-BULB_Z_OFFSET = 0.18  # height of bulb above lamp base (updated for new real-scale lightbulb asset)
+BULB_Z_OFFSET = 0.245  # height of bulb above lamp base (updated for new real-scale lightbulb asset)
 
 
 class ScrewReward:
@@ -87,7 +87,7 @@ class ScrewReward:
 
         obj_state = lamp._data.root_state_w[:, :7].clone()
         obj_state[:, :3] -= env.scene.env_origins
-        obj_state[:, 2] += BULB_Z_OFFSET
+        obj_state[:, 2] += getattr(self, '_bulb_z_offset', BULB_Z_OFFSET)
         self._object_pose = obj_state
 
         finger_poses = []

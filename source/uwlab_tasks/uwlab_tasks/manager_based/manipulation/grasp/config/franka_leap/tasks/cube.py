@@ -207,7 +207,7 @@ class GraspCubeFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
             mode="prestartup",
             params={
                 "asset_cfg": SceneEntityCfg("grasp_object"),
-                "scale_range": (1.0, 1.3),
+                "scale_range": (0.9, 1.2),
             },
         )
 
