@@ -790,7 +790,7 @@ def main():
         verbose=0,
     )
     ckpt_cb = CheckpointCallback(
-        save_freq=max(50_000 // args_cli.num_envs, 1),
+        save_freq=max(50_000_000 // args_cli.num_envs, 1),
         save_path=log_dir,
         name_prefix="stage1",
         verbose=1,

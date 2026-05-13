@@ -48,6 +48,11 @@ parser.add_argument("--bc_coef", type=float, default=0.0,
                     help="Weight on BC regularization loss (0 = disabled).")
 parser.add_argument("--noise_extrinsic", action="store_true", default=False,
                     help="Apply extrinsic noise augmentation to PCDs (match BC training for tasks trained with noise_extrinsic=true).")
+parser.add_argument("--n_cfm_samples", type=int, default=None,
+                    help="CFM noise samples per step for FPO++ per-sample ratios. Overrides fpo.n_cfm_samples in the yaml.")
+parser.add_argument("--n_steps", type=int, default=None,
+                    help="PPO rollout steps per env per update. Overrides ppo.n_steps in the yaml. "
+                         "Scale down proportionally when increasing --n_cfm_samples to keep memory constant.")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -132,9 +137,14 @@ def build_critic(obs_dim: int, net_arch: list, activation_fn: type) -> nn.Module
 
 def main():
     cfg     = _load_cfg(args_cli.cfg)
-    fpo_cfg = cfg.get("fpo", {})
+    fpo_cfg = cfg.setdefault("fpo", {})
     ppo_cfg = cfg["ppo"]
     eval_cfg = cfg.get("eval", {})
+
+    if args_cli.n_cfm_samples is not None:
+        fpo_cfg["n_cfm_samples"] = args_cli.n_cfm_samples
+    if args_cli.n_steps is not None:
+        ppo_cfg["n_steps"] = args_cli.n_steps
 
     timestamp = datetime.now().strftime("%m%d_%H%M")
     run_name  = args_cli.wandb_run_name or f"{_short_task(args_cli.task)}_{timestamp}_{uuid4().hex[:6]}"
