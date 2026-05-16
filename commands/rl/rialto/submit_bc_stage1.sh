@@ -88,11 +88,11 @@ SBATCH_SCRIPT
 
 # ── Active tasks ───────────────────────────────────────────────────────────────
 GRASP_KEYS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose target_object_pose contact_obs object_in_tip"
-SCREW_KEYS="--obs_keys arm_joint_pos hand_joint_pos ee_pose object_pose rotate_angle contact_obs object_in_tip"
+SCREW_KEYS="--obs_keys arm_joint_pos hand_joint_pos object_pose rotate_angle contact_obs object_in_tip"
 
-submit bottle_grasp       bottle_grasp_privileged  $GRASP_KEYS
-submit cup_grasp          cup_grasp_privileged          $GRASP_KEYS
-submit cube_grasp         cube_grasp_privileged     $GRASP_KEYS
-submit credit_card_grasp  credit_card_grasp_privileged  $GRASP_KEYS
-submit plate_dishrack     plate_dishrack_privileged     $GRASP_KEYS
+# submit bottle_grasp       bottle_grasp_privileged  $GRASP_KEYS
+# submit cup_grasp          cup_grasp_privileged          $GRASP_KEYS
+# submit cube_grasp         cube_grasp_privileged     $GRASP_KEYS
+# submit credit_card_grasp  credit_card_grasp_privileged  $GRASP_KEYS
+# submit plate_dishrack     plate_dishrack_privileged     $GRASP_KEYS
 submit screw_lightbulb    screw_lightbulb_privileged    $SCREW_KEYS
