@@ -82,8 +82,6 @@ def load_zarr_episodes(data_path: str, obs_keys: list, action_key: str):
             if act is None:
                 print(f"  [warn] '{action_key}' missing in {zpath.name}, skipping episode.")
                 continue
-            min_T = min(arr.shape[0] for arr in obs_parts)
-            obs_parts = [arr[:min_T] for arr in obs_parts]
             obs = np.concatenate(obs_parts, axis=-1)
             T = min(len(obs), len(act))
             episodes.append((obs[:T], act[:T]))
