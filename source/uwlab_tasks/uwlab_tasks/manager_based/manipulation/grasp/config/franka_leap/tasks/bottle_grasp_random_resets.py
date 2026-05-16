@@ -49,6 +49,30 @@ def _grasp_obs_target_pose(env) -> torch.Tensor:
     return torch.cat([target, default_quat], dim=1)
 
 
+_FINGER_CONTACT_NAMES = [
+    "palm_lower_contact", "fingertip_contact", "thumb_fingertip_contact",
+    "fingertip_2_contact", "fingertip_3_contact",
+]
+_FINGER_BODY_NAMES = ["palm_lower", "fingertip", "thumb_fingertip", "fingertip_2", "fingertip_3"]
+
+
+def _grasp_obs_contact(env) -> torch.Tensor:
+    """Binary finger contact with object (5D)."""
+    parts = []
+    for name in _FINGER_CONTACT_NAMES:
+        force = torch.linalg.norm(
+            env.scene[name]._data.force_matrix_w.reshape(env.num_envs, 3), dim=1)
+        parts.append((force > 4.0).int().unsqueeze(1))
+    return torch.cat(parts, dim=1).float()
+
+
+def _grasp_obs_object_in_tip(env) -> torch.Tensor:
+    """Object-to-fingertip displacement vectors, flattened (15D)."""
+    obj_pos = env.scene["grasp_object"]._data.root_state_w[:, :3]
+    parts = [obj_pos - env.scene[name].data.root_pos_w for name in _FINGER_BODY_NAMES]
+    return torch.cat(parts, dim=1)
+
+
 def _grasp_rew_grasped(env) -> torch.Tensor:
     """Sparse +1 when object z >= BOTTLE_SPAWN_POS[2] + 0.12 m."""
     pos = env.scene["grasp_object"]._data.root_state_w[:, :3] - env.scene.env_origins
@@ -127,12 +151,11 @@ class GraspBottleRandomResetsFrankaLeapJointAbsStateCfg(GraspBottleRandomResetsF
         super().__post_init__()
         # Replace bound method obs terms with module-level equivalents
         self.observations.policy.manipulated_object_pose = ObsTerm(func=_grasp_obs_object_pose)
-        # Drop terms not present in BC training data: arm_joint_pos (7) + hand_joint_pos (16) + object_pose (7) = 30D
+        self.observations.policy.target_object_pose = ObsTerm(func=_grasp_obs_target_pose)
+        self.observations.policy.contact_obs = ObsTerm(func=_grasp_obs_contact)
+        self.observations.policy.object_in_tip = ObsTerm(func=_grasp_obs_object_in_tip)
         self.observations.policy.joint_pos = None
         self.observations.policy.ee_pose = None
-        self.observations.policy.target_object_pose = None
-        self.observations.policy.contact_obs = None
-        self.observations.policy.object_in_tip = None
         self.observations.policy.seg_pc = None
         self.observations.policy.concatenate_terms = True
         # Replace bound method reward terms with module-level equivalents

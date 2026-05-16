@@ -276,12 +276,129 @@ class ScrewLightbulbFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         )
 
 
+# ---------------------------------------------------------------------------
+# Module-level obs/rew functions for Hydra-compatible PPO config.
+# BC obs_keys for screw: arm_joint_pos + hand_joint_pos + ee_pose + object_pose
+#                        + rotate_angle + contact_obs + object_in_tip
+# ---------------------------------------------------------------------------
+
+_SCREW_BULB_Z_OFFSET = 0.245  # height of bulb above lamp base (matches ScrewReward default)
+
+_FINGER_CONTACT_NAMES = [
+    "palm_lower_contact", "fingertip_contact", "thumb_fingertip_contact",
+    "fingertip_2_contact", "fingertip_3_contact",
+]
+_FINGER_BODY_NAMES = ["palm_lower", "fingertip", "thumb_fingertip", "fingertip_2", "fingertip_3"]
+
+
+def _screw_obs_object_pose(env) -> torch.Tensor:
+    """Lamp root pose (7D) in env-local frame with bulb z offset."""
+    state = env.scene["screw_lamp"]._data.root_state_w[:, :7].clone()
+    state[:, :3] -= env.scene.env_origins
+    state[:, 2] += _SCREW_BULB_Z_OFFSET
+    return state
+
+
+def _screw_obs_rotate_angle(env) -> torch.Tensor:
+    """[current_joint_angle, per-step delta, cumulative_rotation] (3D)."""
+    return env.command_manager.get_command("angle_counter")
+
+
+def _screw_obs_contact(env) -> torch.Tensor:
+    """Binary finger contact with lamp (5D)."""
+    parts = []
+    for name in _FINGER_CONTACT_NAMES:
+        force = torch.linalg.norm(
+            env.scene[name]._data.force_matrix_w.reshape(env.num_envs, 3), dim=1)
+        parts.append((force > 4.0).int().unsqueeze(1))
+    return torch.cat(parts, dim=1).float()
+
+
+def _screw_obs_object_in_tip(env) -> torch.Tensor:
+    """Object-to-fingertip displacement vectors, flattened (15D)."""
+    obj_pos = env.scene["screw_lamp"]._data.root_state_w[:, :3] - env.scene.env_origins
+    obj_pos = obj_pos.clone()
+    obj_pos[:, 2] += _SCREW_BULB_Z_OFFSET
+    parts = [obj_pos - (env.scene[name].data.root_pos_w - env.scene.env_origins)
+             for name in _FINGER_BODY_NAMES]
+    return torch.cat(parts, dim=1)
+
+def _screw_rew_rotation(env) -> torch.Tensor:
+    angle_counter = env.command_manager.get_command("angle_counter")
+    delta = torch.clip(angle_counter[..., 1].reshape(-1), -0.5, 0.5)
+    reward = torch.where(delta > 0, delta * 100.0, delta * 30.0)
+    not_yet_done = (angle_counter[..., -1].reshape(-1) < 2 * math.pi).float()
+    return reward * not_yet_done
+
+
+def _screw_rew_joint_vel(env) -> torch.Tensor:
+    return torch.sum(env.scene["robot"].data.joint_vel ** 2, dim=1)
+
+
+def _screw_rew_action_rate(env) -> torch.Tensor:
+    return torch.sum((env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
+
+
+def _screw_rew_arm_action_rate(env, num_arm_joints: int = 7) -> torch.Tensor:
+    delta = env.action_manager.action - env.action_manager.prev_action
+    return torch.sum(delta[:, :num_arm_joints] ** 2, dim=1)
+
+
+def _screw_rew_joint_pos_limits(env, soft_ratio: float = 0.9) -> torch.Tensor:
+    robot = env.scene["robot"]
+    joint_pos = robot.data.joint_pos
+    lower = robot.data.soft_joint_pos_limits[:, :, 0]
+    upper = robot.data.soft_joint_pos_limits[:, :, 1]
+    lower_violation = torch.clamp(lower * soft_ratio - joint_pos, min=0.0)
+    upper_violation = torch.clamp(joint_pos - upper * soft_ratio, min=0.0)
+    return torch.nan_to_num(torch.sum(lower_violation + upper_violation, dim=1), nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _screw_metric_success(env) -> torch.Tensor:
+    angle_counter = env.command_manager.get_command("angle_counter")
+    return (angle_counter[..., -1].reshape(-1) > 2 * math.pi).float()
+
+
 @configclass
 class ScrewLightbulbFrankaLeapJointAbsCfg(ScrewLightbulbFrankaLeapCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
 
     def warmup_action(self, env) -> torch.Tensor:
         return env.scene["robot"].data.joint_pos.clone()
+
+
+@configclass
+class ScrewLightbulbFrankaLeapJointAbsStateCfg(ScrewLightbulbFrankaLeapJointAbsCfg):
+    """PPO-friendly variant: module-level obs/rew functions only (Hydra-safe), no seg_pc.
+
+    Observation space: arm_joint_pos (7) + hand_joint_pos (16) + ee_pose (7) = 30D flat.
+    Matches BC training obs keys (arm_joint_pos hand_joint_pos ee_pose).
+    """
+    run_mode: str = "rl_mode"
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Replace bound-method obs terms with module-level equivalents (Hydra-safe)
+        self.observations.policy.object_pose = ObsTerm(func=_screw_obs_object_pose)
+        self.observations.policy.rotate_angle = ObsTerm(func=_screw_obs_rotate_angle)
+        self.observations.policy.contact_obs = ObsTerm(func=_screw_obs_contact)
+        self.observations.policy.object_in_tip = ObsTerm(func=_screw_obs_object_in_tip)
+        self.observations.policy.joint_pos = None
+        self.observations.policy.seg_pc = None
+        self.observations.policy.concatenate_terms = True
+        # Replace bound-method reward terms with module-level equivalents
+        self.rewards.rotation = RewTerm(func=_screw_rew_rotation, weight=1.0)
+        self.rewards.contact = None
+        self.rewards.proximity = None
+        self.rewards.wrist = None
+        self.rewards.joint_vel = RewTerm(func=_screw_rew_joint_vel, weight=-1e-3)
+        self.rewards.action_rate = RewTerm(func=_screw_rew_action_rate, weight=-0.1)
+        self.rewards.arm_action_rate = RewTerm(func=_screw_rew_arm_action_rate, weight=-5.0)
+        self.rewards.joint_pos_limits = RewTerm(func=_screw_rew_joint_pos_limits, weight=-100.0)
+        self.rewards.base_stability = None
+        self.metrics_spec = {
+            "is_success": _screw_metric_success,
+        }
 
 
 @configclass

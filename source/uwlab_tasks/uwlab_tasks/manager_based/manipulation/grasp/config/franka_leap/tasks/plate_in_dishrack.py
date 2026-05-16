@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import torch
+import isaaclab.utils.math as math_utils
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.envs import mdp as isaac_mdp
@@ -265,6 +266,80 @@ class PlateInDishRackFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         )
 
 
+# ---------------------------------------------------------------------------
+# Module-level obs/rew functions for Hydra-compatible PPO config.
+# ---------------------------------------------------------------------------
+
+_PLATE_SLOT_OFFSET = (
+    SLOT_TARGET_POS[0] - RACK_SPAWN_POS[0],
+    SLOT_TARGET_POS[1] - RACK_SPAWN_POS[1],
+    SLOT_TARGET_POS[2] - RACK_SPAWN_POS[2],
+)
+
+_FINGER_CONTACT_NAMES = [
+    "palm_lower_contact", "fingertip_contact", "thumb_fingertip_contact",
+    "fingertip_2_contact", "fingertip_3_contact",
+]
+_FINGER_BODY_NAMES = ["palm_lower", "fingertip", "thumb_fingertip", "fingertip_2", "fingertip_3"]
+
+
+def _plate_obs_object_pose(env) -> torch.Tensor:
+    state = env.scene["grasp_object"]._data.root_state_w[:, :7].clone()
+    state[:, :3] -= env.scene.env_origins
+    return state
+
+
+def _plate_obs_target_pose(env) -> torch.Tensor:
+    """Dynamic rack slot target pose (7D): tracks rack position at reset."""
+    rack_pos = env.scene["plate_rack"].data.root_pos_w - env.scene.env_origins
+    offset = torch.tensor([list(_PLATE_SLOT_OFFSET)], device=env.device, dtype=torch.float32)
+    target_pos = rack_pos + offset
+    rack_quat = env.scene["plate_rack"].data.root_state_w[:, 3:7]
+    slot_rot_local = torch.tensor(
+        [list(SLOT_TARGET_ROT_LOCAL)], device=env.device, dtype=torch.float32
+    ).expand(env.num_envs, -1)
+    target_quat = math_utils.quat_mul(rack_quat, slot_rot_local)
+    return torch.cat([target_pos, target_quat], dim=1)
+
+
+def _plate_obs_contact(env) -> torch.Tensor:
+    """Binary finger contact with object (5D)."""
+    parts = []
+    for name in _FINGER_CONTACT_NAMES:
+        force = torch.linalg.norm(
+            env.scene[name]._data.force_matrix_w.reshape(env.num_envs, 3), dim=1)
+        parts.append((force > 4.0).int().unsqueeze(1))
+    return torch.cat(parts, dim=1).float()
+
+
+def _plate_obs_object_in_tip(env) -> torch.Tensor:
+    """Object-to-fingertip displacement vectors, flattened (15D)."""
+    obj_pos = env.scene["grasp_object"]._data.root_state_w[:, :3]
+    parts = [obj_pos - env.scene[name].data.root_pos_w for name in _FINGER_BODY_NAMES]
+    return torch.cat(parts, dim=1)
+
+
+def _plate_rew_success(env) -> torch.Tensor:
+    """Simplified success: bowl inside dishrack bounding box (position only)."""
+    rack_pos = env.scene["plate_rack"].data.root_pos_w - env.scene.env_origins
+    bowl = env.scene["grasp_object"]._data.root_state_w[:, :3] - env.scene.env_origins
+    cy = rack_pos[:, 1] + SUCCESS_BOX_Y_OFFSET
+    x_ok = (bowl[:, 0] >= rack_pos[:, 0] + SUCCESS_BOX_X_LO_OFFSET) & \
+            (bowl[:, 0] <= rack_pos[:, 0] + SUCCESS_BOX_X_HI_OFFSET)
+    y_ok = (bowl[:, 1] >= cy - SUCCESS_BOX_Y_FRONT) & \
+            (bowl[:, 1] <= cy + SUCCESS_BOX_Y_REAR)
+    z_ok = (bowl[:, 2] >= SUCCESS_BOX_Z_MIN) & (bowl[:, 2] <= SUCCESS_BOX_Z_MAX)
+    return (x_ok & y_ok & z_ok).float()
+
+
+def _plate_rew_joint_vel(env) -> torch.Tensor:
+    return torch.sum(env.scene["robot"].data.joint_vel ** 2, dim=1)
+
+
+def _plate_rew_action_rate(env) -> torch.Tensor:
+    return torch.sum((env.action_manager.action - env.action_manager.prev_action) ** 2, dim=1)
+
+
 @configclass
 class PlateInDishRackFrankaLeapJointAbsCfg(PlateInDishRackFrankaLeapCfg):
     actions = franka_leap.FrankaLeapJointPositionAction()
@@ -272,3 +347,32 @@ class PlateInDishRackFrankaLeapJointAbsCfg(PlateInDishRackFrankaLeapCfg):
     def warmup_action(self, env) -> torch.Tensor:
         reset = torch.tensor(ARM_RESET + HAND_RESET, device=env.device, dtype=torch.float32)
         return reset.unsqueeze(0).repeat(env.num_envs, 1)
+
+
+@configclass
+class PlateInDishRackFrankaLeapJointAbsStateCfg(PlateInDishRackFrankaLeapJointAbsCfg):
+    """PPO-friendly variant: module-level obs/rew functions only (Hydra-safe), no seg_pc.
+
+    Observation space: arm_joint_pos (7) + hand_joint_pos (16) + object_pose (7) = 30D flat.
+    Matches the BC training obs keys so BC checkpoints transfer directly.
+    """
+    run_mode: str = "rl_mode"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.observations.policy.manipulated_object_pose = ObsTerm(func=_plate_obs_object_pose)
+        self.observations.policy.target_object_pose = ObsTerm(func=_plate_obs_target_pose)
+        self.observations.policy.contact_obs = ObsTerm(func=_plate_obs_contact)
+        self.observations.policy.object_in_tip = ObsTerm(func=_plate_obs_object_in_tip)
+        self.observations.policy.joint_pos = None
+        self.observations.policy.ee_pose = None
+        self.observations.policy.seg_pc = None
+        self.observations.policy.concatenate_terms = True
+        self.rewards.success = RewTerm(func=_plate_rew_success, weight=50.0)
+        self.rewards.return_home = None
+        self.rewards.joint_vel = RewTerm(func=_plate_rew_joint_vel, weight=-1e-3)
+        self.rewards.action_rate = RewTerm(func=_plate_rew_action_rate, weight=-5e-3)
+        self.events.capture_reset_height = None
+        self.metrics_spec = {
+            "is_success": _plate_rew_success,
+        }

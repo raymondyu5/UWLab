@@ -79,6 +79,9 @@ parser.add_argument("--seed", type=int, default=42)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+if not args_cli.no_eval_video:
+    args_cli.enable_cameras = True
+
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 

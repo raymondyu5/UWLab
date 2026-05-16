@@ -36,6 +36,8 @@ parser.add_argument("--bc_lr", type=float, default=3e-4)
 parser.add_argument("--bc_batch_size", type=int, default=256)
 parser.add_argument("--net_arch", nargs="+", type=int, default=[512, 512, 512],
                     help="Hidden layer sizes for SimpleMLP.")
+parser.add_argument("--val_frac", type=float, default=0.1,
+                    help="Fraction of episodes held out for validation.")
 parser.add_argument("--log_dir", type=str, default="logs/rialto/bc")
 parser.add_argument("--wandb_project", type=str, default=None)
 parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -46,7 +48,8 @@ args = parser.parse_args()
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-def load_zarr_demos(data_path: str, obs_keys: list, action_key: str):
+def load_zarr_episodes(data_path: str, obs_keys: list, action_key: str):
+    """Return list of (obs_array, act_array) per valid episode."""
     root = Path(data_path)
     zarr_files = sorted(root.glob("episode_*/episode_*.zarr"))
     if not zarr_files:
@@ -54,8 +57,8 @@ def load_zarr_demos(data_path: str, obs_keys: list, action_key: str):
     if not zarr_files:
         raise FileNotFoundError(f"No zarr files found under {root}")
 
-    print(f"[BC] Loading {len(zarr_files)} episodes from {root}")
-    obs_list, act_list = [], []
+    print(f"[BC] Found {len(zarr_files)} episodes in {root}")
+    episodes = []
 
     for zpath in zarr_files:
         z = zarr.open(str(zpath), mode="r")
@@ -81,16 +84,17 @@ def load_zarr_demos(data_path: str, obs_keys: list, action_key: str):
                 continue
             obs = np.concatenate(obs_parts, axis=-1)
             T = min(len(obs), len(act))
-            obs_list.append(obs[:T])
-            act_list.append(act[:T])
+            episodes.append((obs[:T], act[:T]))
 
-    if not obs_list:
+    if not episodes:
         raise RuntimeError("No valid episodes loaded.")
+    return episodes
 
-    all_obs = np.concatenate(obs_list, axis=0)
-    all_acts = np.concatenate(act_list, axis=0)
-    print(f"[BC] {len(all_obs)} timesteps — obs {all_obs.shape}, acts {all_acts.shape}")
-    return all_obs, all_acts
+
+def episodes_to_tensors(episodes):
+    obs = np.concatenate([e[0] for e in episodes], axis=0)
+    acts = np.concatenate([e[1] for e in episodes], axis=0)
+    return torch.tensor(obs, dtype=torch.float32), torch.tensor(acts, dtype=torch.float32)
 
 
 # ── Policy network ────────────────────────────────────────────────────────────
@@ -109,6 +113,21 @@ class SimpleMLP(nn.Module):
         return self.action_net(self.shared_net(x))
 
 
+# ── Checkpoint helper ─────────────────────────────────────────────────────────
+
+def make_ckpt(net, obs_dim, action_dim, epoch, val_loss):
+    return {
+        "state_dict": net.state_dict(),
+        "obs_dim": obs_dim,
+        "action_dim": action_dim,
+        "net_arch": args.net_arch,
+        "obs_keys": args.obs_keys,
+        "action_key": args.action_key,
+        "epoch": epoch,
+        "val_loss": val_loss,
+    }
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -122,21 +141,33 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     print(f"[BC] Logging to {log_dir}")
 
-    demo_obs_np, demo_acts_np = load_zarr_demos(args.data_path, args.obs_keys, args.action_key)
-    obs_dim = demo_obs_np.shape[-1]
-    action_dim = demo_acts_np.shape[-1]
-    print(f"[BC] obs_dim={obs_dim}  action_dim={action_dim}  net_arch={args.net_arch}")
+    # ── Load and split by episode ──────────────────────────────────────────────
+    all_episodes = load_zarr_episodes(args.data_path, args.obs_keys, args.action_key)
+    random.shuffle(all_episodes)
+    n_val = max(1, int(len(all_episodes) * args.val_frac))
+    val_episodes = all_episodes[:n_val]
+    train_episodes = all_episodes[n_val:]
+    print(f"[BC] {len(train_episodes)} train episodes / {len(val_episodes)} val episodes")
 
-    demo_obs_t = torch.tensor(demo_obs_np, dtype=torch.float32)
-    demo_acts_t = torch.tensor(demo_acts_np, dtype=torch.float32)
+    train_obs_t, train_acts_t = episodes_to_tensors(train_episodes)
+    val_obs_t, val_acts_t = episodes_to_tensors(val_episodes)
+
+    obs_dim = train_obs_t.shape[-1]
+    action_dim = train_acts_t.shape[-1]
+    print(f"[BC] obs_dim={obs_dim}  action_dim={action_dim}  net_arch={args.net_arch}")
+    print(f"[BC] {len(train_obs_t)} train steps / {len(val_obs_t)} val steps")
 
     net = SimpleMLP(obs_dim, action_dim, hidden=tuple(args.net_arch)).to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=args.bc_lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.bc_epochs, eta_min=1e-5
     )
-    dataset = TensorDataset(demo_obs_t, demo_acts_t)
-    loader = DataLoader(dataset, batch_size=args.bc_batch_size, shuffle=True, drop_last=True)
+    train_loader = DataLoader(
+        TensorDataset(train_obs_t, train_acts_t),
+        batch_size=args.bc_batch_size, shuffle=True, drop_last=True, num_workers=4,
+    )
+    val_obs_dev = val_obs_t.to(device)
+    val_acts_dev = val_acts_t.to(device)
 
     import wandb
     if args.wandb_project:
@@ -148,11 +179,15 @@ def main():
         )
         print(f"[BC] wandb run: {wandb.run.get_url()}")
 
+    train_losses, val_losses = [], []
+    best_val_loss = float("inf")
+    best_epoch = 0
+
     print(f"[BC] Training for {args.bc_epochs} epochs ...")
     net.train()
     for epoch in range(1, args.bc_epochs + 1):
         total_loss = 0.0
-        for obs_b, act_b in loader:
+        for obs_b, act_b in train_loader:
             obs_b, act_b = obs_b.to(device), act_b.to(device)
             loss = F.mse_loss(net(obs_b), act_b)
             optimizer.zero_grad()
@@ -160,22 +195,57 @@ def main():
             optimizer.step()
             total_loss += loss.item()
         scheduler.step()
-        avg_loss = total_loss / len(loader)
-        if epoch % 50 == 0:
-            print(f"  epoch {epoch:4d}/{args.bc_epochs}  loss={avg_loss:.5f}")
-        if args.wandb_project and wandb.run is not None:
-            wandb.log({"bc/loss": avg_loss, "bc/lr": scheduler.get_last_lr()[0]}, step=epoch)
+        train_loss = total_loss / len(train_loader)
+        train_losses.append(train_loss)
 
-    bc_ckpt = os.path.join(log_dir, "bc_pretrained.pt")
-    torch.save({
-        "state_dict": net.state_dict(),
-        "obs_dim": obs_dim,
-        "action_dim": action_dim,
-        "net_arch": args.net_arch,
-        "obs_keys": args.obs_keys,
-        "action_key": args.action_key,
-    }, bc_ckpt)
-    print(f"[BC] Checkpoint saved → {bc_ckpt}")
+        net.eval()
+        with torch.no_grad():
+            val_loss = F.mse_loss(net(val_obs_dev), val_acts_dev).item()
+        net.train()
+        val_losses.append(val_loss)
+
+        if epoch % 50 == 0:
+            print(f"  epoch {epoch:4d}/{args.bc_epochs}  train={train_loss:.5f}  val={val_loss:.5f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            torch.save(make_ckpt(net, obs_dim, action_dim, epoch, val_loss),
+                       os.path.join(log_dir, "bc_best.pt"))
+
+        if args.wandb_project and wandb.run is not None:
+            wandb.log({"bc/train_loss": train_loss, "bc/val_loss": val_loss,
+                       "bc/lr": scheduler.get_last_lr()[0]}, step=epoch)
+
+    # ── Save final checkpoint ──────────────────────────────────────────────────
+    torch.save(make_ckpt(net, obs_dim, action_dim, args.bc_epochs, val_losses[-1]),
+               os.path.join(log_dir, "bc_final.pt"))
+    print(f"[BC] Final checkpoint → {log_dir}/bc_final.pt")
+    print(f"[BC] Best checkpoint  → {log_dir}/bc_best.pt  (val={best_val_loss:.5f} at epoch {best_epoch})")
+
+    # ── Plot loss curves ───────────────────────────────────────────────────────
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        epochs = list(range(1, args.bc_epochs + 1))
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(epochs, train_losses, label="train")
+        ax.plot(epochs, val_losses, label="val")
+        ax.axvline(best_epoch, color="gray", linestyle="--", linewidth=0.8, label=f"best val (ep {best_epoch})")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("MSE loss")
+        ax.set_title("BC pretraining loss")
+        ax.legend()
+        ax.set_yscale("log")
+        fig.tight_layout()
+        plot_path = os.path.join(log_dir, "loss_curve.png")
+        fig.savefig(plot_path, dpi=120)
+        plt.close(fig)
+        print(f"[BC] Loss curve → {plot_path}")
+    except Exception as e:
+        print(f"[BC] Could not save loss plot: {e}")
 
     if args.wandb_project and wandb.run is not None:
         wandb.finish()
