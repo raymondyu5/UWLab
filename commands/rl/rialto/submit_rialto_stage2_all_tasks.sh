@@ -117,15 +117,15 @@ SCREW_BC=logs/rialto/bc/screw_lightbulb/bc_0516_1551/bc_best.pt
 SCREW_DATA=data_storage/rialto/screw_lightbulb_privileged
 
 GRASP_OBS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose target_object_pose contact_obs object_in_tip"
-SCREW_OBS="--obs_keys arm_joint_pos hand_joint_pos ee_pose object_pose rotate_angle contact_obs object_in_tip"
+SCREW_OBS="--obs_keys arm_joint_pos hand_joint_pos object_pose rotate_angle contact_obs object_in_tip"
 
 # ── Config 2: vf01_cw30 (vf_coef=0.1, critic_warmup=30) ─────────────────────
 VF01_CW30_ARGS="--n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1 --critic_warmup_rollouts 30"
 
-submit bottle_grasp_vf01_cw30      "$BOTTLE_TASK" "$BOTTLE_BC" "$BOTTLE_DATA" $VF01_CW30_ARGS $GRASP_OBS
-submit cup_grasp_vf01_cw30         "$CUP_TASK"    "$CUP_BC"    "$CUP_DATA"    $VF01_CW30_ARGS $GRASP_OBS
+# submit bottle_grasp_vf01_cw30      "$BOTTLE_TASK" "$BOTTLE_BC" "$BOTTLE_DATA" $VF01_CW30_ARGS $GRASP_OBS
+# submit cup_grasp_vf01_cw30         "$CUP_TASK"    "$CUP_BC"    "$CUP_DATA"    $VF01_CW30_ARGS $GRASP_OBS
 
-submit cube_grasp_vf01_cw30        "$CUBE_TASK"   "$CUBE_BC"   "$CUBE_DATA"   $VF01_CW30_ARGS $GRASP_OBS
-submit credit_card_grasp_vf01_cw30 "$CARD_TASK"   "$CARD_BC"   "$CARD_DATA"   $VF01_CW30_ARGS $GRASP_OBS
-submit plate_dishrack_vf01_cw30    "$PLATE_TASK"  "$PLATE_BC"  "$PLATE_DATA"  $VF01_CW30_ARGS $GRASP_OBS
+# submit cube_grasp_vf01_cw30        "$CUBE_TASK"   "$CUBE_BC"   "$CUBE_DATA"   $VF01_CW30_ARGS $GRASP_OBS
+# submit credit_card_grasp_vf01_cw30 "$CARD_TASK"   "$CARD_BC"   "$CARD_DATA"   $VF01_CW30_ARGS $GRASP_OBS
+# submit plate_dishrack_vf01_cw30    "$PLATE_TASK"  "$PLATE_BC"  "$PLATE_DATA"  $VF01_CW30_ARGS $GRASP_OBS
 submit screw_lightbulb_vf01_cw30   "$SCREW_TASK"  "$SCREW_BC"  "$SCREW_DATA"  $VF01_CW30_ARGS $SCREW_OBS

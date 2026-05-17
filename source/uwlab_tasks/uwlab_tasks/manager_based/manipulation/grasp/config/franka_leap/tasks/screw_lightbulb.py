@@ -383,6 +383,7 @@ class ScrewLightbulbFrankaLeapJointAbsStateCfg(ScrewLightbulbFrankaLeapJointAbsC
         self.observations.policy.rotate_angle = ObsTerm(func=_screw_obs_rotate_angle)
         self.observations.policy.contact_obs = ObsTerm(func=_screw_obs_contact)
         self.observations.policy.object_in_tip = ObsTerm(func=_screw_obs_object_in_tip)
+        self.observations.policy.ee_pose = None
         self.observations.policy.joint_pos = None
         self.observations.policy.seg_pc = None
         self.observations.policy.concatenate_terms = True
