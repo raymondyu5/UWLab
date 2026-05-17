@@ -530,6 +530,57 @@ gym.register(
     disable_env_checker=True,
 )
 
+########## Soccer Push #########
+
+gym.register(
+    id="UW-FrankaLeap-SoccerPush-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.soccer_push:SoccerPushFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-SoccerPush-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.soccer_push:SoccerPushFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-SoccerPush-IkAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.soccer_push:SoccerPushFrankaLeapIkAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+
+########## Cup Pour #########
+
+gym.register(
+    id="UW-FrankaLeap-CupPour-JointAbs-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cup_pour:CupPourFrankaLeapJointAbsCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-CupPour-IkRel-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cup_pour:CupPourFrankaLeapIkRelCfg",
+    },
+    disable_env_checker=True,
+)
+
+
 ########## Credit Card Grasp #########
 
 gym.register(

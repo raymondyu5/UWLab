@@ -321,12 +321,15 @@ class RFSEvalCallback(BaseCallback):
         # Matches IsaacLab rl_cfm_pcd_wrapper.py success_buffer pattern.
         self._success_buffer = collections.deque(maxlen=400)
         self._grasped_buffer = collections.deque(maxlen=400)
+        self._steps_to_success_buffer = collections.deque(maxlen=400)
         # Extra metric buffers keyed by metric name — populated lazily from env's metrics_spec.
         self._extra_buffers: dict[str, collections.deque] = {}
         self._last_extra: dict[str, list] = {}
         self._last_success = [False] * rfs_env.num_envs
         self._last_grasped = [False] * rfs_env.num_envs
         self._cache_initialized = [False] * rfs_env.num_envs
+        self._ep_step_count = [0] * rfs_env.num_envs
+        self._first_success_step = [None] * rfs_env.num_envs
         self._rollout_count = 0
 
     def _episode_steps_after_reset(self) -> int:
@@ -371,15 +374,22 @@ class RFSEvalCallback(BaseCallback):
                 if done:
                     self._success_buffer.append(float(metrics_seen["is_success"][i]))
                     self._grasped_buffer.append(float(metrics_seen["is_grasped"][i]))
+                    if self._first_success_step[i] is not None:
+                        self._steps_to_success_buffer.append(self._first_success_step[i])
                     for key, buf in self._extra_buffers.items():
                         buf.append(float(metrics_seen[key][i]))
                         self._last_extra[key][i] = False
                     self._last_success[i] = False
                     self._last_grasped[i] = False
                     self._cache_initialized[i] = False
+                    self._ep_step_count[i] = 0
+                    self._first_success_step[i] = None
                 else:
+                    self._ep_step_count[i] += 1
                     self._last_success[i] = float(metrics_seen["is_success"][i])
                     self._last_grasped[i] = float(metrics_seen["is_grasped"][i])
+                    if self._first_success_step[i] is None and metrics_seen["is_success"][i]:
+                        self._first_success_step[i] = self._ep_step_count[i]
                     for key in self._extra_buffers:
                         self._last_extra[key][i] = float(metrics_seen[key][i])
                     self._cache_initialized[i] = True
@@ -388,6 +398,8 @@ class RFSEvalCallback(BaseCallback):
                     "train/success_rate": sum(self._success_buffer) / len(self._success_buffer),
                     "train/grasped_rate": sum(self._grasped_buffer) / len(self._grasped_buffer),
                 }
+                if len(self._steps_to_success_buffer) > 0:
+                    log_dict["train/steps_to_success"] = sum(self._steps_to_success_buffer) / len(self._steps_to_success_buffer)
                 for key, buf in self._extra_buffers.items():
                     if len(buf) == buf.maxlen:
                         log_dict[f"train/{key}_rate"] = sum(buf) / len(buf)

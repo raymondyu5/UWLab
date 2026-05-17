@@ -254,6 +254,7 @@ class RFSWrapper:
         finger_start_dim: int = 6,
         num_warmup_steps: int = 0,
         asymmetric_ac: bool = False,
+        symmetric_pcd: bool = False,
         gamma: float = 0.99,
         ppo_history: bool = False,
     ):
@@ -269,6 +270,7 @@ class RFSWrapper:
         self.finger_start_dim = finger_start_dim
 
         self.asymmetric_ac = asymmetric_ac
+        self.symmetric_pcd = symmetric_pcd
         self.noise_dims = noise_dims
         self.residual_dims = residual_dims
         self.noise_slice = slice(*noise_dims) if noise_dims else None
@@ -277,8 +279,8 @@ class RFSWrapper:
         self.n_residual = (residual_dims[1] - residual_dims[0]) if residual_dims else 0
 
         # Whether to maintain PPO history + past_action buffers.
-        # Always true for asymmetric_ac (actor must match BC obs); else follows ppo_history flag.
-        self._use_ppo_history: bool = ppo_history or asymmetric_ac
+        # Always true for asymmetric_ac / symmetric_pcd (must match BC obs); else follows ppo_history flag.
+        self._use_ppo_history: bool = ppo_history or asymmetric_ac or symmetric_pcd
 
         # PPO history buffers (separate from formatter's buffers, same update cadence).
         self._ppo_history_buf: deque | None = None       # agent_pos frames
@@ -359,6 +361,8 @@ class RFSWrapper:
         if isinstance(policy_obs_space, gym.spaces.Dict):
             if self.asymmetric_ac:
                 self._setup_asymmetric_obs_space(policy_obs_space)
+            elif self.symmetric_pcd:
+                self._setup_symmetric_pcd_obs_space(policy_obs_space)
             else:
                 # Symmetric (default): remove seg_pc/rgb, strip ee_pose to 3D.
                 for k in _SKIP_OBS_KEYS:
@@ -403,6 +407,10 @@ class RFSWrapper:
 
     _SKIP_PPO_KEYS = {"seg_pc", "rgb"}
 
+    @property
+    def _needs_pcd_embedding(self) -> bool:
+        return self.asymmetric_ac or self.symmetric_pcd
+
     def _setup_asymmetric_obs_space(self, policy_obs_space: gym.spaces.Dict):
         """Replace the policy obs space with actor_*/critic_* keys for asymmetric AC.
 
@@ -446,6 +454,36 @@ class RFSWrapper:
             critic_spaces[f"critic_{k}"] = space
         policy_obs_space.spaces.clear()
         policy_obs_space.spaces.update({**actor_spaces, **critic_spaces})
+
+    def _setup_symmetric_pcd_obs_space(self, policy_obs_space: gym.spaces.Dict):
+        """Replace the policy obs space with non-privileged keys only (no actor_/critic_ prefix).
+
+        Both actor and critic see the same obs:
+          - pcd_emb:              PointNet embedding of current seg_pc
+          - agent_pos_history:    flattened n_obs_steps joint-pos history
+          - past_actions_history: flattened (n_obs_steps-1) past action history (if checkpoint uses it)
+        """
+        spaces = {
+            "pcd_emb": gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.policy.pcd_feat_dim,),
+                dtype=np.float32,
+            ),
+            "agent_pos_history": gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self._agent_pos_flat_dim,),
+                dtype=np.float32,
+            ),
+        }
+        if self._use_action_history and self._ppo_n_obs_steps > 1:
+            past_dim = (self._ppo_n_obs_steps - 1) * self.cfm_action_dim
+            spaces["past_actions_history"] = gym.spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(past_dim,),
+                dtype=np.float32,
+            )
+        policy_obs_space.spaces.clear()
+        policy_obs_space.spaces.update(spaces)
 
     def _update_ppo_history(self, raw_policy_obs: dict):
         """Push current obs into the PPO history buffer.
@@ -529,13 +567,15 @@ class RFSWrapper:
 
     def _strip_ppo_obs(self, obs: dict) -> dict:
         """Return obs stripped for PPO: remove seg_pc/rgb, strip ee_pose to 3D xyz.
-        When ppo_history=True (symmetric) or asymmetric_ac: replaces raw obs_keys
+        When ppo_history=True (symmetric) or asymmetric_ac/symmetric_pcd: replaces raw obs_keys
         with flattened agent_pos_history and past_actions_history tensors.
         self.last_obs is NOT modified — CFM still reads the full obs including seg_pc."""
         if self._use_ppo_history:
             self._ensure_ppo_history_seeded(obs)
         if self.asymmetric_ac:
             return self._asymmetric_ppo_obs(obs)
+        if self.symmetric_pcd:
+            return self._symmetric_pcd_obs(obs)
         policy = obs["policy"]
         stripped = {k: v for k, v in policy.items() if k not in self._SKIP_PPO_KEYS}
         if "ee_pose" in stripped:
@@ -583,6 +623,18 @@ class RFSWrapper:
             result[f"critic_{k}"] = v
         return {"policy": result}
 
+    def _symmetric_pcd_obs(self, obs: dict) -> dict:
+        """Build non-privileged obs dict for symmetric PCD mode.
+        Both actor and critic see the same obs: PCD embedding + joint history + past actions.
+        """
+        result = {
+            "pcd_emb":             self.last_pcd_embedding,
+            "agent_pos_history":   self._get_ppo_agent_pos_history(),
+        }
+        if self._use_action_history and self._ppo_past_action_buf is not None:
+            result["past_actions_history"] = self._get_ppo_past_actions()
+        return {"policy": result}
+
     def decode_ppo_to_env_action(
         self, ppo_actions: torch.Tensor, substep: int = 0
     ) -> torch.Tensor:
@@ -616,11 +668,13 @@ class RFSWrapper:
             residual = None
             self.last_residual = None
 
-        noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
         if self.noise_slice is not None and self.n_noise > 0:
+            noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
             noise[:, :, self.noise_slice] = noise_flat.reshape(
                 self.num_envs, self.policy_horizon, self.n_noise
             )
+        else:
+            noise = None
 
         diffusion_obs = self.formatter.format(self.last_obs["policy"])
         with torch.inference_mode():
@@ -657,7 +711,7 @@ class RFSWrapper:
         """
         if roll_ppo_obs and self._use_ppo_history:
             self._update_ppo_history(self.last_obs["policy"])
-        if self.asymmetric_ac and roll_ppo_obs:
+        if self._needs_pcd_embedding and roll_ppo_obs:
             self.last_pcd_embedding = self._compute_pcd_embedding()
 
     def seed_ppo_past_actions_only(self, past_frames: Optional[List[torch.Tensor]]) -> None:
@@ -782,9 +836,11 @@ class RFSWrapper:
             residual = None
             self.last_residual = None
 
-        noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
         if self.noise_slice is not None and self.n_noise > 0:
+            noise = torch.zeros(self.num_envs, self.policy_horizon, self.cfm_action_dim, device=self.device)
             noise[:, :, self.noise_slice] = noise_flat.reshape(self.num_envs, self.policy_horizon, self.n_noise)
+        else:
+            noise = None
 
         if profiling:
             e_format_start = self._evt()
@@ -882,7 +938,7 @@ class RFSWrapper:
 
         # Update pcd embedding: reuse the pcd_feat already computed inside predict_action
         # rather than running a second PointNet forward pass via _compute_pcd_embedding().
-        if self.asymmetric_ac:
+        if self._needs_pcd_embedding:
             if profiling:
                 e_pcd_emb_start = self._evt()
             self.last_pcd_embedding = cfm_result["pcd_feat"].detach()
@@ -917,7 +973,7 @@ class RFSWrapper:
                 "physics_step_ms":      e_physics_start.elapsed_time(e_physics_end),
                 "total_step_ms":        e_step_start.elapsed_time(e_step_end),
             }
-            if self.asymmetric_ac:
+            if self._needs_pcd_embedding:
                 timings["pcd_emb_ms"] = e_pcd_emb_start.elapsed_time(e_pcd_emb_end)
             # CFM breakdown: PointNet encode vs UNet denoising
             if hasattr(self.policy, "_last_profile"):
@@ -962,7 +1018,7 @@ class RFSWrapper:
             self.finger_filter(current_finger)
 
         self._do_warmup()
-        if self.asymmetric_ac:
+        if self._needs_pcd_embedding:
             self.last_pcd_embedding = self._compute_pcd_embedding()
         # Initialize PPO history with post-warmup obs (fills all n_obs_steps frames).
         # Also initialize past_action_buf with zeros so _strip_ppo_obs always finds it.
@@ -1012,7 +1068,7 @@ class RFSWrapper:
                      for _ in range(n_past)],
                     maxlen=n_past,
                 )
-        if self.asymmetric_ac:
+        if self._needs_pcd_embedding:
             self.last_pcd_embedding = self._compute_pcd_embedding()
         return self._strip_ppo_obs(self.last_obs), info
 

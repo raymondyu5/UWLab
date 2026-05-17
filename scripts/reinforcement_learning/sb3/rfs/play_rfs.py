@@ -37,6 +37,7 @@ parser.add_argument("--eval_spawn", type=str, default=None,
                     help="Spawn config name in configs/eval/spawns/ (e.g. random_1_trial). "
                          "If omitted, uses random resets.")
 parser.add_argument("--asymmetric_ac", action="store_true", default=False)
+parser.add_argument("--symmetric_pcd", action="store_true", default=False)
 parser.add_argument("--record_video", action="store_true", default=False)
 parser.add_argument("--output_dir", type=str, default=None)
 AppLauncher.add_app_launcher_args(parser)
@@ -128,6 +129,7 @@ def main():
         finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=asymmetric_ac,
+        symmetric_pcd=args_cli.symmetric_pcd,
     )
     # Enable expensive metric caching only for evaluation success counting.
     rfs_env.enable_metrics_cache = True

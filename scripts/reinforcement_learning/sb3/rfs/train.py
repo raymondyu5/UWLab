@@ -62,6 +62,8 @@ parser.add_argument("--eval_debug_plots", action="store_true", default=False,
                     help="Enable heavy per-step debug plots (pose/reward).")
 parser.add_argument("--asymmetric_ac", action="store_true", default=False,
                     help="Asymmetric AC: actor sees CFM embedding only; critic sees privileged sim state.")
+parser.add_argument("--symmetric_pcd", action="store_true", default=False,
+                    help="Symmetric non-privileged: both actor and critic see PCD embedding + joint history only.")
 
 # Wandb
 parser.add_argument("--profile_interval", type=int, default=0,
@@ -273,9 +275,11 @@ def main():
         finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
         num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=args_cli.asymmetric_ac,
+        symmetric_pcd=args_cli.symmetric_pcd,
         gamma=ppo_cfg["gamma"],
         ppo_history=rfs_cfg.get("ppo_history", False),
     )
+    rfs_env.enable_metrics_cache = True
     if args_cli.profile_interval > 0:
         rfs_env.profile_interval = args_cli.profile_interval
         # Walk observation term callables looking for CachedSamplePC instances.
