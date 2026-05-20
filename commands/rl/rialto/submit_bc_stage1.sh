@@ -2,28 +2,25 @@
 # Submit BC stage-1 pretraining jobs for all active tasks.
 # Each job runs train_stage1_bc.py (standalone, no Isaac Sim) for 500 epochs.
 #
-# Usage: bash submit_bc_stage1.sh [gpu_type]
-#   gpu_type: l40s (default) or l40
+# Usage: bash submit_bc_stage1.sh [gpu_type|ckpt]
+#   (default) a40 — gpu-a40 partition with --gres=gpu:a40:1
+#   ckpt       — ckpt partition with --gpus-per-node=a40:1
 
-GPU=${1:-a40}
+if [ "${1:-}" = "ckpt" ]; then
+    GPU=a40
+    PARTITION=ckpt
+    GPU_ARGS="--gpus-per-node=a40:1"
+else
+    GPU=${1:-a40}
+    PARTITION=gpu-${GPU}
+    GPU_ARGS="--gres=gpu:${GPU}:1"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 UWLAB_BASE=/gscratch/weirdlab/will/UWLab_Docker
-
-# --partition=ckpt \
-# --nodes=1 \
-# --ntasks-per-node=1 \
-# --cpus-per-task=8 \
-# --gpus-per-node=a40:1 \
-
-# --partition=gpu-${GPU} \
-# --nodes=1 \
-# --ntasks-per-node=1 \
-# --cpus-per-task=8 \
-# --gres=gpu:${GPU}:1 \
 
 
 submit() {
@@ -33,11 +30,11 @@ submit() {
   sbatch \
     --job-name="bc_stage1_${slug}" \
     --account=weirdlab \
-    --partition=gpu-${GPU} \
+    --partition=${PARTITION} \
     --nodes=1 \
     --ntasks-per-node=1 \
     --cpus-per-task=4 \
-    --gres=gpu:${GPU}:1 \
+    ${GPU_ARGS} \
     --mem=32G \
     --time=2:00:00 \
     --output="${LOG_DIR}/bc_stage1_${slug}_%j.out" \
@@ -89,10 +86,14 @@ SBATCH_SCRIPT
 # ── Active tasks ───────────────────────────────────────────────────────────────
 GRASP_KEYS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose target_object_pose contact_obs object_in_tip"
 SCREW_KEYS="--obs_keys arm_joint_pos hand_joint_pos object_pose rotate_angle contact_obs object_in_tip"
+SOCCER_KEYS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose goal_pose ball_velocity"
+CUP_POUR_KEYS="--obs_keys arm_joint_pos hand_joint_pos big_cup_pose ball_pose manipulated_object_pose ball_velocity"
 
 # submit bottle_grasp       bottle_grasp_privileged  $GRASP_KEYS
 # submit cup_grasp          cup_grasp_privileged          $GRASP_KEYS
 # submit cube_grasp         cube_grasp_privileged     $GRASP_KEYS
 # submit credit_card_grasp  credit_card_grasp_privileged  $GRASP_KEYS
 # submit plate_dishrack     plate_dishrack_privileged     $GRASP_KEYS
-submit screw_lightbulb    screw_lightbulb_privileged    $SCREW_KEYS
+# submit screw_lightbulb    screw_lightbulb_privileged    $SCREW_KEYS
+submit soccer_push        soccer_push_privileged        $SOCCER_KEYS
+submit cup_pour           cup_pour_privileged           $CUP_POUR_KEYS

@@ -2,10 +2,19 @@
 # Submit rialto stage-2 PPO hyperparameter tuning jobs.
 # Each run trains for 100M steps on the bottle grasp task.
 #
-# Usage: bash submit_rialto_stage2_tuning.sh [gpu_type]
-#   gpu_type: l40s (default) or l40
+# Usage: bash submit_rialto_stage2_tuning.sh [gpu_type|ckpt]
+#   (default) a40 — gpu-a40 partition with --gres=gpu:a40:1
+#   ckpt       — ckpt partition with --gpus-per-node=a40:1
 
-GPU=${1:-a40}
+if [ "${1:-}" = "ckpt" ]; then
+    GPU=a40
+    PARTITION=ckpt
+    GPU_ARGS="--gpus-per-node=a40:1"
+else
+    GPU=${1:-a40}
+    PARTITION=gpu-${GPU}
+    GPU_ARGS="--gres=gpu:${GPU}:1"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -16,8 +25,6 @@ BC_CKPT=logs/rialto/bc/bc_0508_1320/bc_pretrained.pt
 DATA_PATH=data_storage/rialto/bottle_grasp
 TASK=UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-v0
 
-#--gres=gpu:${GPU}:1 \
-# gpu-${GPU} \
 submit() {
   local slug=$1; shift
   local extra_args="$@"
@@ -25,11 +32,11 @@ submit() {
   sbatch \
     --job-name="rialto_tune_${slug}" \
     --account=weirdlab \
-    --partition=ckpt \
+    --partition=${PARTITION} \
     --nodes=1 \
     --ntasks-per-node=1 \
     --cpus-per-task=8 \
-    --gpus-per-node=a40:1 \
+    ${GPU_ARGS} \
     --mem=128G \
     --time=20:00:00 \
     --output="${LOG_DIR}/rialto_tune_${slug}_%j.out" \

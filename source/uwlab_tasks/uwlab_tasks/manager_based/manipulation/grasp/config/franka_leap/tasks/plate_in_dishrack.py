@@ -376,3 +376,23 @@ class PlateInDishRackFrankaLeapJointAbsStateCfg(PlateInDishRackFrankaLeapJointAb
         self.metrics_spec = {
             "is_success": _plate_rew_success,
         }
+
+
+@configclass
+class PlateInDishRackFrankaLeapJointAbsStateCollectCfg(PlateInDishRackFrankaLeapJointAbsStateCfg):
+    """StateCfg with seg_pc re-enabled and dict obs for RL rollout collection."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        synth_pc = CachedSamplePC(
+            asset_name="robot",
+            object_names=["grasp_object", "plate_rack"],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[PLATE_OBJECT_NUM_POINTS, RACK_OBJECT_NUM_POINTS],
+            num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
+            pcd_noise=0.02,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+        self.observations.policy.concatenate_terms = False

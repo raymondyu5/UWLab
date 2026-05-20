@@ -1,0 +1,9 @@
+defaults:
+  - train_cfm_pcd_absjoint_h16_hist4_fast
+  - _self_
+
+dataset:
+  # RL rollout data saves a single flat 23D action (7 arm + 16 hand joint targets).
+  # The parent config's split [arm_joint_pos_target, hand_action] doesn't apply here.
+  action_key: actions
+  action_base_keys: null

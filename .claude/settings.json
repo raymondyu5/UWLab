@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import zarr; print\\(zarr.__version__\\)\")",
+      "Read(//gscratch/weirdlab/will/UWLab/source/uwlab/uwlab/policy/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/source/uwlab/uwlab/policy/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/scripts/reinforcement_learning/sb3/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/scripts/reinforcement_learning/sb3/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/source/uwlab/uwlab/eval/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/source/uwlab/uwlab/eval/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/scripts/reinforcement_learning/rialto/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/scripts/reinforcement_learning/rialto/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/grasp/config/franka_leap/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/source/uwlab_tasks/uwlab_tasks/manager_based/manipulation/grasp/config/franka_leap/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/scripts/imitation_learning/cfm_pcd/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/scripts/imitation_learning/cfm_pcd/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/scripts/imitation_learning/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/scripts/imitation_learning/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/scripts/eval/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/scripts/eval/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/commands/rl/rialto/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/commands/rl/rialto/**)",
+      "Read(//gscratch/weirdlab/will/UWLab/third_party/diffusion_policy/diffusion_policy/model/common/**)",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab/third_party/diffusion_policy/diffusion_policy/model/common/**)",
+      "Bash(python3 -c \"import inspect; import isaaclab\")",
+      "Read(//mmfs1/gscratch/weirdlab/will/UWLab_Docker/**)",
+      "Bash(find /mmfs1/gscratch/weirdlab -name \"manager_based_rl_env.py\" 2>/dev/null | head -3)",
+      "Read(//mmfs1/gscratch/weirdlab/**)",
+      "Bash(find /mmfs1/home/wph52 -name \"manager_based_rl_env.py\" 2>/dev/null | head -3)",
+      "Read(//mmfs1/home/wph52/**)"
+    ]
+  }
+}

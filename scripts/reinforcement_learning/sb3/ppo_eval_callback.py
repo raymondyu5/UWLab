@@ -197,6 +197,10 @@ class PPOEvalCallback(BaseCallback):
             self.model._last_episode_starts = np.ones((num_envs,), dtype=bool)
         self._prev_metrics.clear()
 
+    def _on_episode_reset(self) -> None:
+        """Hook called after each episode reset. Override in subclasses to reset stateful models."""
+        pass
+
     def _episode_horizon(self) -> int:
         """Steps per episode after warmup (from live episode counter)."""
         ep_buf = int(self._isaac_env.episode_length_buf[0].item())
@@ -216,6 +220,7 @@ class PPOEvalCallback(BaseCallback):
 
             # Reset and optionally set object/robot to spawn pose.
             obs_dict, _ = self._isaac_env.reset()
+            self._on_episode_reset()
             obs_np = self._extract_obs(obs_dict)
 
             episode_steps = self._episode_horizon()
@@ -302,6 +307,7 @@ class PPOEvalCallback(BaseCallback):
                 print(f"[PPOEvalCallback] eval random trial {trial_idx + 1}/{num_trials}", flush=True)
 
             obs_dict, _ = self._isaac_env.reset()
+            self._on_episode_reset()
             obs_np = self._extract_obs(obs_dict)
             episode_steps = self._episode_horizon()
 

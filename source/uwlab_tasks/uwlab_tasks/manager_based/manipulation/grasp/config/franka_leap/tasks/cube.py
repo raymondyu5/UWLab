@@ -334,6 +334,31 @@ class GraspCubeFrankaLeapJointAbsStateCfg(GraspCubeFrankaLeapJointAbsCfg):
 
 
 @configclass
+class GraspCubeFrankaLeapJointAbsStateCollectCfg(GraspCubeFrankaLeapJointAbsStateCfg):
+    """StateCfg with seg_pc re-enabled and dict obs for RL rollout collection.
+
+    Inherits the correct module-level obs functions from StateCfg (same as training),
+    then re-adds mesh-based seg_pc and switches to dict obs so the collection script
+    can feed the flat privileged-state input to the policy and save seg_pc separately.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        synth_pc = CachedSamplePC(
+            asset_name="robot",
+            object_names=["grasp_object"],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[CUBE_OBJECT_NUM_POINTS],
+            num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
+            pcd_noise=0.02,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+        self.observations.policy.concatenate_terms = False
+
+
+@configclass
 class GraspCubeFrankaLeapIkRelCfg(GraspCubeFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 

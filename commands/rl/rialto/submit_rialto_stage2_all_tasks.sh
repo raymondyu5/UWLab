@@ -7,10 +7,19 @@
 #
 # Submits 12 jobs: 6 tasks × 2 configs.
 #
-# Usage: bash submit_rialto_stage2_all_tasks.sh [gpu_type]
-#   gpu_type: a40 (default)
+# Usage: bash submit_rialto_stage2_all_tasks.sh [gpu_type|ckpt]
+#   (default) a40 — gpu-a40 partition with --gres=gpu:a40:1
+#   ckpt       — ckpt partition with --gpus-per-node=a40:1
 
-GPU=${1:-a40}
+if [ "${1:-}" = "ckpt" ]; then
+    GPU=a40
+    PARTITION=ckpt
+    GPU_ARGS="--gpus-per-node=a40:1"
+else
+    GPU=${1:-a40}
+    PARTITION=gpu-${GPU}
+    GPU_ARGS="--gres=gpu:${GPU}:1"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -25,11 +34,11 @@ submit() {
   sbatch \
     --job-name="rialto_${slug}" \
     --account=weirdlab \
-    --partition=gpu-${GPU} \
+    --partition=${PARTITION} \
     --nodes=1 \
     --ntasks-per-node=1 \
     --cpus-per-task=4 \
-    --gres=gpu:${GPU}:1 \
+    ${GPU_ARGS} \
     --mem=128G \
     --time=30:00:00 \
     --output="${LOG_DIR}/rialto_${slug}_%j.out" \
@@ -118,6 +127,16 @@ SCREW_DATA=data_storage/rialto/screw_lightbulb_privileged
 
 GRASP_OBS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose target_object_pose contact_obs object_in_tip"
 SCREW_OBS="--obs_keys arm_joint_pos hand_joint_pos object_pose rotate_angle contact_obs object_in_tip"
+SOCCER_OBS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose goal_pose ball_velocity"
+CUP_POUR_OBS="--obs_keys arm_joint_pos hand_joint_pos big_cup_pose ball_pose manipulated_object_pose ball_velocity"
+
+SOCCER_TASK=UW-FrankaLeap-SoccerPush-JointAbs-v0
+SOCCER_BC="logs/rialto/bc/soccer_push/bc_0517_1648/bc_best.pt"
+SOCCER_DATA=data_storage/rialto/soccer_push_privileged
+
+POUR_TASK=UW-FrankaLeap-CupPour-JointAbs-v0
+POUR_BC="logs/rialto/bc/cup_pour/bc_0517_1648/bc_best.pt"
+POUR_DATA=data_storage/rialto/cup_pour_privileged
 
 # ── Config 2: vf01_cw30 (vf_coef=0.1, critic_warmup=30) ─────────────────────
 VF01_CW30_ARGS="--n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1 --critic_warmup_rollouts 30"
@@ -128,4 +147,8 @@ VF01_CW30_ARGS="--n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1 --
 # submit cube_grasp_vf01_cw30        "$CUBE_TASK"   "$CUBE_BC"   "$CUBE_DATA"   $VF01_CW30_ARGS $GRASP_OBS
 # submit credit_card_grasp_vf01_cw30 "$CARD_TASK"   "$CARD_BC"   "$CARD_DATA"   $VF01_CW30_ARGS $GRASP_OBS
 # submit plate_dishrack_vf01_cw30    "$PLATE_TASK"  "$PLATE_BC"  "$PLATE_DATA"  $VF01_CW30_ARGS $GRASP_OBS
-submit screw_lightbulb_vf01_cw30   "$SCREW_TASK"  "$SCREW_BC"  "$SCREW_DATA"  $VF01_CW30_ARGS $SCREW_OBS
+# submit screw_lightbulb_vf01_cw30   "$SCREW_TASK"  "$SCREW_BC"  "$SCREW_DATA"  $VF01_CW30_ARGS $SCREW_OBS
+submit soccer_push_vf01_cw30       "$SOCCER_TASK" "$SOCCER_BC" "$SOCCER_DATA" $VF01_CW30_ARGS $SOCCER_OBS
+submit cup_pour_vf01_cw30          "$POUR_TASK"   "$POUR_BC"   "$POUR_DATA"   $VF01_CW30_ARGS $CUP_POUR_OBS
+
+

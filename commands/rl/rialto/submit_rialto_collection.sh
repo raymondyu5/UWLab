@@ -2,10 +2,19 @@
 # Submit rialto rollout collection jobs for all tasks.
 # Each job collects 1000 successful episodes (4h limit, l40s GPU).
 #
-# Usage: bash submit_rialto_collection.sh [gpu_type]
-#   gpu_type: l40s (default) or l40
+# Usage: bash submit_rialto_collection.sh [gpu_type|ckpt]
+#   (default) l40s — gpu-l40s partition with --gres=gpu:l40s:1
+#   ckpt        — ckpt partition with --gpus-per-node=a40:1
 
-GPU=${1:-l40s}
+if [ "${1:-}" = "ckpt" ]; then
+    GPU=a40
+    PARTITION=ckpt
+    GPU_ARGS="--gpus-per-node=a40:1"
+else
+    GPU=${1:-l40s}
+    PARTITION=gpu-${GPU}
+    GPU_ARGS="--gres=gpu:${GPU}:1"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -21,11 +30,11 @@ submit() {
   sbatch \
     --job-name="rialto_collect_${slug}" \
     --account=weirdlab \
-    --partition=ckpt \
+    --partition=${PARTITION} \
     --nodes=1 \
     --ntasks-per-node=1 \
     --cpus-per-task=8 \
-    --gpus-per-node=a40:1 \
+    ${GPU_ARGS} \
     --mem=128G \
     --time=8:00:00 \
     --output="${LOG_DIR}/rialto_${slug}_%j.out" \
@@ -83,44 +92,60 @@ GRASP_PRIV="--privileged_keys manipulated_object_pose target_object_pose contact
 SCREW_PRIV="--privileged_keys ee_pose object_pose rotate_angle contact_obs object_in_tip"
 
 # ── Grasp tasks (success = is_lifted) ─────────────────────────────────────────
-submit bottle_grasp \
-  UW-FrankaLeap-GraspBottleRandomResets-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_bourbon_0512_absjoint_h16_hist4_extnoise_fast \
-  bottle_grasp_privileged \
-  is_lifted $GRASP_PRIV
+# submit bottle_grasp \
+#   UW-FrankaLeap-GraspBottleRandomResets-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_bourbon_0512_absjoint_h16_hist4_extnoise_fast \
+#   bottle_grasp_privileged \
+#   is_lifted $GRASP_PRIV
 
-submit cup_grasp \
-  UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pick_0512_absjoint_h16_hist4_extnoise_fast \
-  cup_grasp_privileged \
-  is_lifted $GRASP_PRIV
+# submit cup_grasp \
+#   UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pick_0512_absjoint_h16_hist4_extnoise_fast \
+#   cup_grasp_privileged \
+#   is_lifted $GRASP_PRIV
 
-submit cube_grasp \
-  UW-FrankaLeap-GraspCubeRandomResets-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_cube_base70_retry40_0508_absjoint_h16_hist4_extnoise_fast \
-  cube_grasp_privileged \
-  is_lifted $GRASP_PRIV
+# submit cube_grasp \
+#   UW-FrankaLeap-GraspCubeRandomResets-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_cube_base70_retry40_0508_absjoint_h16_hist4_extnoise_fast \
+#   cube_grasp_privileged \
+#   is_lifted $GRASP_PRIV
 
-submit credit_card_grasp \
-  UW-FrankaLeap-GraspCreditCard-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_credit_card_0502_absjoint_h16_hist4_extnoise_fast \
-  credit_card_grasp_privileged \
-  is_lifted $GRASP_PRIV
+# submit credit_card_grasp \
+#   UW-FrankaLeap-GraspCreditCard-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_credit_card_0502_absjoint_h16_hist4_extnoise_fast \
+#   credit_card_grasp_privileged \
+#   is_lifted $GRASP_PRIV
 
-# # ── Plate in dishrack (success = is_success, ever-true) ───────────────────────
-submit plate_dishrack \
-  UW-FrankaLeap-PlateInDishRack-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_dishrack_plate_0501_absjoint_h16_hist4_extnoise_fast \
-  plate_dishrack_privileged \
-  is_success $GRASP_PRIV
+# # # ── Plate in dishrack (success = is_success, ever-true) ───────────────────────
+# submit plate_dishrack \
+#   UW-FrankaLeap-PlateInDishRack-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_dishrack_plate_0501_absjoint_h16_hist4_extnoise_fast \
+#   plate_dishrack_privileged \
+#   is_success $GRASP_PRIV
 
 
-# # ── Screw lightbulb (success = cumulative_rotation > 0, .bool() in script) ────
-submit screw_lightbulb \
-  UW-FrankaLeap-ScrewLightbulb-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_screw_lightbulb_0503_absjoint_h16_hist4_extnoise_fast \
-  screw_lightbulb_privileged \
-  cumulative_rotation $SCREW_PRIV
+# # # ── Screw lightbulb (success = cumulative_rotation > 0, .bool() in script) ────
+# submit screw_lightbulb \
+#   UW-FrankaLeap-ScrewLightbulb-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_screw_lightbulb_0503_absjoint_h16_hist4_extnoise_fast \
+#   screw_lightbulb_privileged \
+#   cumulative_rotation $SCREW_PRIV
+
+# ── Soccer push (success = is_success) ────────────────────────────────────────
+SOCCER_PRIV="--privileged_keys manipulated_object_pose goal_pose ball_velocity"
+submit soccer_push \
+  UW-FrankaLeap-SoccerPush-JointAbs-v0 \
+  ${RAYMOND_LOGS}/bc_cfm_pcd_soccer_goal_0514_absjoint_h16_hist4_extnoise_fast \
+  soccer_push_privileged \
+  is_success $SOCCER_PRIV
+
+# ── Cup pour (success = is_success) ───────────────────────────────────────────
+CUP_POUR_PRIV="--privileged_keys big_cup_pose ball_pose manipulated_object_pose ball_velocity"
+submit cup_pour \
+  UW-FrankaLeap-CupPour-JointAbs-v0 \
+  ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pour_0512_absjoint_h16_hist4_extnoise_fast \
+  cup_pour_privileged \
+  is_success $CUP_POUR_PRIV
 
 
 

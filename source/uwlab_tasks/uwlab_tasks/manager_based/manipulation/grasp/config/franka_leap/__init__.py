@@ -77,6 +77,15 @@ gym.register(
 )
 
 gym.register(
+    id="UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cup_grasp_random_resets:GraspPinkCupRandomResetsFrankaLeapJointAbsStateCollectCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
     id="UW-FrankaLeap-GraspPinkCupRandomResets7030-JointAbs-v0",
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
@@ -239,6 +248,15 @@ gym.register(
 )
 
 gym.register(
+    id="UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.cube:GraspCubeFrankaLeapJointAbsStateCollectCfg",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
     id="UW-FrankaLeap-GraspCube-IkRel-v0",
     entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
     kwargs={
@@ -275,6 +293,15 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapJointAbsStateCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.bottle_grasp_random_resets:GraspBottleRandomResetsFrankaLeapJointAbsStateCollectCfg",
     },
     disable_env_checker=True,
 )
@@ -443,6 +470,15 @@ gym.register(
     disable_env_checker=True,
 )
 
+gym.register(
+    id="UW-FrankaLeap-PlateInDishRack-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.plate_in_dishrack:PlateInDishRackFrankaLeapJointAbsStateCollectCfg",
+    },
+    disable_env_checker=True,
+)
+
 
 ########## Screw Lightbulb #########
 
@@ -462,6 +498,15 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapJointAbsStateCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-ScrewLightbulb-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.screw_lightbulb:ScrewLightbulbFrankaLeapJointAbsStateCollectCfg",
     },
     disable_env_checker=True,
 )
@@ -599,6 +644,15 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.tasks.credit_card_grasp:GraspCreditCardFrankaLeapJointAbsStateCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PourBottleJointAbsPPORunnerCfg",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="UW-FrankaLeap-GraspCreditCard-JointAbs-PPO-Collect-v0",
+    entry_point=f"{__name__}.grasp_franka_leap:FrankaLeapGraspEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tasks.credit_card_grasp:GraspCreditCardFrankaLeapJointAbsStateCollectCfg",
     },
     disable_env_checker=True,
 )

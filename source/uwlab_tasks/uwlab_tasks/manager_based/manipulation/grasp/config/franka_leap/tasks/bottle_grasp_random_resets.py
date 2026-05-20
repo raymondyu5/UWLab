@@ -18,9 +18,9 @@ from isaaclab.utils import configclass
 
 import uwlab_assets.robots.franka_leap as franka_leap
 
-from ....mdp import reset_robot_joints_from_poses
-from ..grasp_franka_leap import ARM_RESET, HAND_RESET
-from .bottle import BOTTLE_SPAWN_POS, BOTTLE_TARGET_POS, GraspBottleFrankaLeapCfg
+from ....mdp import CachedSamplePC, reset_robot_joints_from_poses
+from ..grasp_franka_leap import ARM_RESET, HAND_RESET, ARM_NUM_POINTS, HAND_NUM_POINTS
+from .bottle import BOTTLE_SPAWN_POS, BOTTLE_TARGET_POS, BOTTLE_OBJECT_NUM_POINTS, GraspBottleFrankaLeapCfg
 
 # ---------------------------------------------------------------------------
 # Standalone module-level obs/rew functions for Hydra-compatible PPO config.
@@ -172,6 +172,26 @@ class GraspBottleRandomResetsFrankaLeapJointAbsStateCfg(GraspBottleRandomResetsF
             "is_lifted": _grasp_rew_lifted,
             "is_grasped": _grasp_rew_grasped,
         }
+
+
+@configclass
+class GraspBottleRandomResetsFrankaLeapJointAbsStateCollectCfg(GraspBottleRandomResetsFrankaLeapJointAbsStateCfg):
+    """StateCfg with seg_pc re-enabled and dict obs for RL rollout collection."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        synth_pc = CachedSamplePC(
+            asset_name="robot",
+            object_names=["grasp_object"],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[BOTTLE_OBJECT_NUM_POINTS],
+            num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
+            pcd_noise=0.02,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+        self.observations.policy.concatenate_terms = False
 
 
 @configclass

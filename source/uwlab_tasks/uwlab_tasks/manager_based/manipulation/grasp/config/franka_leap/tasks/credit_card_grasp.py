@@ -361,6 +361,26 @@ class GraspCreditCardFrankaLeapJointAbsStateCfg(GraspCreditCardFrankaLeapJointAb
 
 
 @configclass
+class GraspCreditCardFrankaLeapJointAbsStateCollectCfg(GraspCreditCardFrankaLeapJointAbsStateCfg):
+    """StateCfg with seg_pc re-enabled and dict obs for RL rollout collection."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        synth_pc = CachedSamplePC(
+            asset_name="robot",
+            object_names=["grasp_object", "shelf_cube"],
+            num_arm_pcd=ARM_NUM_POINTS,
+            num_hand_pcd=HAND_NUM_POINTS,
+            num_object_pcd=[CARD_OBJECT_NUM_POINTS, 512],
+            num_downsample_points=2048,
+            pcd_crop_region=self.pcd_crop_region,
+            pcd_noise=0.02,
+        )
+        self.observations.policy.seg_pc = ObsTerm(func=synth_pc.get_seg_pc)
+        self.observations.policy.concatenate_terms = False
+
+
+@configclass
 class GraspCreditCardFrankaLeapIkRelCfg(GraspCreditCardFrankaLeapCfg):
     actions = franka_leap.FrankaLeapIkRelArmHandJointAction()
 
