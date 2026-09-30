@@ -72,6 +72,7 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1
@@ -148,7 +149,7 @@ VF01_CW30_ARGS="--n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1 --
 # submit credit_card_grasp_vf01_cw30 "$CARD_TASK"   "$CARD_BC"   "$CARD_DATA"   $VF01_CW30_ARGS $GRASP_OBS
 # submit plate_dishrack_vf01_cw30    "$PLATE_TASK"  "$PLATE_BC"  "$PLATE_DATA"  $VF01_CW30_ARGS $GRASP_OBS
 # submit screw_lightbulb_vf01_cw30   "$SCREW_TASK"  "$SCREW_BC"  "$SCREW_DATA"  $VF01_CW30_ARGS $SCREW_OBS
-submit soccer_push_vf01_cw30       "$SOCCER_TASK" "$SOCCER_BC" "$SOCCER_DATA" $VF01_CW30_ARGS $SOCCER_OBS
+# submit soccer_push_vf01_cw30       "$SOCCER_TASK" "$SOCCER_BC" "$SOCCER_DATA" $VF01_CW30_ARGS $SOCCER_OBS
 submit cup_pour_vf01_cw30          "$POUR_TASK"   "$POUR_BC"   "$POUR_DATA"   $VF01_CW30_ARGS $CUP_POUR_OBS
 
 

@@ -68,6 +68,7 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1

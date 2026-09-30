@@ -34,7 +34,7 @@ submit() {
     --partition=${PARTITION} \
     --nodes=1 \
     --ntasks-per-node=1 \
-    --cpus-per-task=4 \
+    --cpus-per-task=8 \
     ${GPU_ARGS} \
     --mem=32G \
     --time=24:00:00 \
@@ -53,18 +53,20 @@ apptainer exec --nv \\
   --bind /gscratch/weirdlab/will/UWLab/configs:/workspace/uwlab/configs \\
   --bind ${UWLAB_BASE}/logs:/workspace/uwlab/logs \\
   --bind ${UWLAB_BASE}/data_storage:/workspace/uwlab/data_storage \\
+  --bind /gscratch/scrubbed/wph52/rialto_rl:/workspace/uwlab/data_storage/rialto_rl \\
   --bind ${UWLAB_BASE}/tmp:/tmp \\
   --pwd /workspace/uwlab \\
   ${UWLAB_BASE}/uw-lab_latest.sif \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTHONUNBUFFERED=1
     ./uwlab.sh -p \\
       scripts/imitation_learning/cfm_pcd/train_cfm_pcd.py \\
-      --config-name train_cfm_pcd_absjoint_h16_hist4_fast \\
-      dataset.data_path=/workspace/uwlab/data_storage/rialto_rl/rl/${data_subdir} \\
+      --config-name train_cfm_pcd_absjoint_h16_hist4_fast_distillation \\
+      dataset.data_path=/workspace/uwlab/data_storage/rialto_rl/${data_subdir} \\
       ++dataset.noise_extrinsic=true \\
       training.use_wandb=true \\
       training.wandb_run_name=${run_name} \\
@@ -76,13 +78,18 @@ echo "End: \$(date)"
 SBATCH_SCRIPT
 }
 
+submit bc_tuning_100     cube_grasp_bc_tuning/bc100
+submit bc_tuning_10000   cube_grasp_bc_tuning/bc10000
+submit bc_tuning_100000  cube_grasp_bc_tuning/bc100000
+
 # ── Active tasks ───────────────────────────────────────────────────────────────
 #submit cube_grasp cube_grasp_rl_privileged
-#submit cup_grasp cup_grasp_rl_privileged
-submit bottle_grasp      bottle_grasp_rl_privileged
+# submit cup_grasp cup_grasp_rl_privileged
+# submit bottle_grasp      bottle_grasp_rl_privileged
 #submit credit_card_grasp credit_card_grasp_rl_privileged
+#submit plate_dishrack    plate_dishrack_rl_privileged
+#submit soccer_push       soccer_push_rl_privileged
 
-# submit plate_dishrack    plate_dishrack_rl_privileged
 # submit screw_lightbulb   screw_lightbulb_rl_privileged
-# submit soccer_push       soccer_push_rl_privileged
+
 # submit cup_pour          cup_pour_rl_privileged

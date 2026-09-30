@@ -22,6 +22,9 @@ With video + scatter plots (use small num_envs):
 """
 
 import argparse
+# from uwlab.utils.paths import setup_third_party_paths
+
+# setup_third_party_paths()
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(
@@ -239,7 +242,12 @@ def main():
         while n_success < args_cli.target_episodes:
             # ── Record pre-step obs for each env ─────────────────────────
             for i in range(num_envs):
-                for key in ("seg_pc", "arm_joint_pos", "hand_joint_pos"):
+                # seg_pc: env returns (B, 3, N); save as (N, 3) so zarr is (T, N, 3),
+                # which is what PCDSequenceSampler._load_pcd expects.
+                env_data[i]["seg_pc"].append(
+                    policy_obs["seg_pc"][i].permute(1, 0).cpu().numpy()
+                )
+                for key in ("arm_joint_pos", "hand_joint_pos"):
                     env_data[i][key].append(policy_obs[key][i].cpu().numpy())
 
             # ── Build flat policy input in training obs order ─────────────

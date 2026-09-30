@@ -648,12 +648,22 @@ def main():
     # ── 1. Optionally load zarr demonstrations ───────────────────────────
     demo_obs_np = demo_acts_np = None
     demo_obs_t = demo_acts_t = None
+    demo_val_obs_t = demo_val_acts_t = None
     if args_cli.data_path is not None:
         demo_obs_np, demo_acts_np = load_zarr_demos(
             args_cli.data_path, args_cli.obs_keys, args_cli.action_key
         )
-        demo_obs_t = torch.tensor(demo_obs_np, dtype=torch.float32)
-        demo_acts_t = torch.tensor(demo_acts_np, dtype=torch.float32)
+        n_total = len(demo_obs_np)
+        n_val = max(1, int(n_total * 0.2))
+        rng = np.random.default_rng(args_cli.seed)
+        val_idx = rng.choice(n_total, n_val, replace=False)
+        train_mask = np.ones(n_total, dtype=bool)
+        train_mask[val_idx] = False
+        print(f"[Stage2] Demo split: {train_mask.sum()} train / {n_val} val timesteps")
+        demo_obs_t = torch.tensor(demo_obs_np[train_mask], dtype=torch.float32)
+        demo_acts_t = torch.tensor(demo_acts_np[train_mask], dtype=torch.float32)
+        demo_val_obs_t = torch.tensor(demo_obs_np[val_idx], dtype=torch.float32)
+        demo_val_acts_t = torch.tensor(demo_acts_np[val_idx], dtype=torch.float32)
 
     # ── 2. Build / load BC model (skipped when resuming from PPO zip) ────
     net_arch = [512, 512, 512]
@@ -756,6 +766,8 @@ def main():
         bc_acts=demo_acts_t,
         bc_coef=args_cli.bc_coef,
         bc_batch_size=args_cli.bc_demo_batch_size,
+        bc_val_obs=demo_val_obs_t,
+        bc_val_acts=demo_val_acts_t,
         warmup_rollouts=args_cli.warmup_rollouts,
         critic_warmup_rollouts=args_cli.critic_warmup_rollouts,
     )

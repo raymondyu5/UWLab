@@ -66,6 +66,7 @@ apptainer exec --nv \\
   --bind ${UWLAB_BASE}/logs:/workspace/uwlab/logs \\
   --bind ${UWLAB_BASE}/outputs:/workspace/uwlab/outputs \\
   --bind ${UWLAB_BASE}/data_storage:/workspace/uwlab/data_storage \\
+  --bind /gscratch/scrubbed/wph52/rialto_rl:/workspace/uwlab/data_storage/rialto_rl \\
   --bind ${UWLAB_BASE}/tmp/isaaclab:/tmp/isaaclab \\
   --bind ${UWLAB_BASE}/tmp:/tmp \\
   --bind /gscratch/weirdlab/will/UWLab/configs:/workspace/uwlab/configs \\
@@ -74,6 +75,7 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1
@@ -81,7 +83,7 @@ apptainer exec --nv \\
       scripts/reinforcement_learning/rialto/collect_rl_rollouts.py \\
       --task ${task} \\
       --checkpoint ${checkpoint} \\
-      --output_dir data_storage/rialto_rl/rl/${out_subdir} \\
+      --output_dir data_storage/rialto_rl/${out_subdir} \\
       --target_episodes 2000 \\
       --num_envs 1024 \\
       --success_key ${success_key} \\
@@ -104,17 +106,19 @@ CUP_POUR_OBS="--obs_keys arm_joint_pos hand_joint_pos big_cup_pose ball_pose man
 # ── Checkpoint paths — edit these to point at the best model per task ─────────
 # Pattern: logs/rialto/stage2/<slug>/stage1_MMDD_HHMM/model_XXXXXX.zip
 CUBE_CKPT=logs/rialto/stage2/cube_grasp_vf01_cw30/stage1_0516_1537/model_000250.zip
-SCREW_CKPT=logs/rialto/stage2/screw_lightbulb_vf01_cw30/stage1_0516_2144/model_000150.zip
 BOTTLE_CKPT=logs/rialto/stage2/bottle_grasp_vf01_cw30/stage1_0516_1537/model_000900.zip
 CUP_CKPT=logs/rialto/stage2/cup_grasp_vf01_cw30/stage1_0516_1537/model_000150.zip
-CARD_CKPT=logs/rialto/stage2/credit_card_grasp_vf01_cw30/stage1_0514_1020/model_000850.zip
 
+
+# To collect
+CARD_CKPT=logs/rialto/stage2/credit_card_grasp_vf01_cw30/stage1_0514_1020/model_000850.zip
+SOCCER_CKPT=logs/rialto/stage2/soccer_push_vf01_cw30/stage1_0517_2051/model_000750.zip
 ## not certain abt this one
 PLATE_CKPT=logs/rialto/stage2/plate_dishrack_vf01_cw30/stage1_0516_1537/model_000100.zip
  
 # todo
-SOCCER_CKPT=logs/rialto/stage2/soccer_push_vf01_cw30/stage1_MMDD_HHMM/model_XXXXXX.zip
-POUR_CKPT=logs/rialto/stage2/cup_pour_vf01_cw30/stage1_MMDD_HHMM/model_XXXXXX.zip
+SCREW_CKPT=logs/rialto/stage2/screw_lightbulb_vf01_cw30/stage1_0516_2144/model_000300.zip
+POUR_CKPT=logs/rialto/stage2/cup_pour_vf01_cw30/stage1_0522_1152/model_000200.zip
 
 # ── Submit jobs (uncomment tasks whose checkpoints are ready) ─────────────────
 #
@@ -123,14 +127,15 @@ POUR_CKPT=logs/rialto/stage2/cup_pour_vf01_cw30/stage1_MMDD_HHMM/model_XXXXXX.zi
 
 # submit cube_grasp UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 "$CUBE_CKPT" cube_grasp_rl_privileged is_lifted $GRASP_OBS --record_video --enable_cameras --num_envs 32 --target_episodes 30
 
-# submit bottle_grasp \
-#   UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-Collect-v0 \
-#   "$BOTTLE_CKPT" bottle_grasp_rl_privileged is_lifted $GRASP_OBS \
-#   --record_video --enable_cameras --num_envs 8 --target_episodes 5
+submit bottle_grasp \
+  UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-Collect-v0 \
+  "$BOTTLE_CKPT" bottle_grasp_rl_privileged is_lifted $GRASP_OBS \
+  --record_video --enable_cameras --num_envs 8 --target_episodes 5
 
-submit cup_grasp \
-  UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-PPO-Collect-v0 \
-  "$CUP_CKPT" cup_grasp_rl_privileged is_lifted $GRASP_OBS
+# submit cup_grasp \
+#   UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-PPO-Collect-v0 \
+#   "$CUP_CKPT" cup_grasp_rl_privileged is_lifted $GRASP_OBS \
+#    --record_video --enable_cameras --num_envs 32 --target_episodes 5
 
 # submit credit_card_grasp \
 #   UW-FrankaLeap-GraspCreditCard-JointAbs-PPO-Collect-v0 \
@@ -138,14 +143,14 @@ submit cup_grasp \
 
 # submit screw_lightbulb \
 #   UW-FrankaLeap-ScrewLightbulb-JointAbs-PPO-Collect-v0 \
-#   "$SCREW_CKPT" screw_lightbulb_rl_privileged cumulative_rotation $SCREW_OBS
+#   "$SCREW_CKPT" screw_lightbulb_rl_privileged is_success $SCREW_OBS
 
 
 # submit plate_dishrack \
 #   UW-FrankaLeap-PlateInDishRack-JointAbs-PPO-Collect-v0 \
 #   "$PLATE_CKPT" plate_dishrack_rl_privileged is_success $GRASP_OBS
 
-# Soccer and cup_pour have no PPO variant — use the regular task (already has dict obs + seg_pc).
+# # Soccer and cup_pour have no PPO variant — use the regular task (already has dict obs + seg_pc).
 # submit soccer_push \
 #   UW-FrankaLeap-SoccerPush-JointAbs-v0 \
 #   "$SOCCER_CKPT" soccer_push_rl_privileged is_success $SOCCER_OBS
@@ -153,3 +158,4 @@ submit cup_grasp \
 # submit cup_pour \
 #   UW-FrankaLeap-CupPour-JointAbs-v0 \
 #   "$POUR_CKPT" cup_pour_rl_privileged is_success $CUP_POUR_OBS
+

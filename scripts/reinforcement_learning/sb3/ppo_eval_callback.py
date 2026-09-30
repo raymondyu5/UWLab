@@ -230,6 +230,7 @@ class PPOEvalCallback(BaseCallback):
             per_env_success_ever = [False] * num_envs
             per_env_extra: dict[str, list] = {}
             recorded = [False] * num_envs
+            done_steps: list[int | None] = [None] * num_envs
 
             last_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
             ever_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
@@ -267,6 +268,7 @@ class PPOEvalCallback(BaseCallback):
                         for key in ever_extra:
                             per_env_extra[key][i] = bool(ever_extra[key][i])
                         recorded[i] = True
+                        done_steps[i] = step_idx
 
                 # Log object pose for first env (trajectory tracking).
                 obj_pos = self._isaac_env.scene["grasp_object"].data.root_pos_w[0].cpu().numpy()
@@ -293,10 +295,13 @@ class PPOEvalCallback(BaseCallback):
             extra_metrics = {"n_success_ever": n_success_ever}
             for key, vals in per_env_extra.items():
                 extra_metrics[key] = int(sum(vals))
+            success_steps = [done_steps[i] for i in range(num_envs) if per_env_success_ever[i] and done_steps[i] is not None]
+            avg_steps = float(sum(success_steps) / len(success_steps)) if success_steps else None
             logger.end_episode(
                 n_success / num_envs,
                 n_success=n_success, n_total=num_envs,
                 n_success_ever=n_success_ever,
+                steps_to_first_success=avg_steps,
                 extra_metrics=extra_metrics,
             )
 
@@ -384,11 +389,14 @@ class PPOEvalCallback(BaseCallback):
             extra_metrics = {"n_success_ever": n_success_ever}
             for key, vals in per_env_extra.items():
                 extra_metrics[key] = int(sum(vals))
+            success_steps = [done_steps[i] for i in range(num_envs) if per_env_success_ever[i] and done_steps[i] is not None]
+            avg_steps = float(sum(success_steps) / len(success_steps)) if success_steps else None
 
             logger.end_episode(
                 n_success / num_envs,
                 n_success=n_success, n_total=num_envs,
                 n_success_ever=n_success_ever,
+                steps_to_first_success=avg_steps,
                 extra_metrics=extra_metrics,
             )
 

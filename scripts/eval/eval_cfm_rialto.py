@@ -43,6 +43,9 @@ parser.add_argument("--success_key", type=str, default="is_success",
 parser.add_argument("--wandb_project", type=str, default=None)
 parser.add_argument("--wandb_run_name", type=str, default=None)
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--chunk_len", type=int, default=1,
+                    help="Number of steps to execute open-loop before re-running CFM inference. "
+                         "Default 1 = infer every step.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -163,7 +166,7 @@ class CFMPolicyWrapper:
     that CFM inference only runs every `chunk_len` steps instead of every step.
     """
 
-    def __init__(self, policy, obs_keys, image_keys, downsample_points, device, n_obs_steps):
+    def __init__(self, policy, obs_keys, image_keys, downsample_points, device, n_obs_steps, chunk_len=1):
         self.policy = policy
         self.formatter = BCObsFormatter(
             obs_keys=obs_keys,
@@ -173,8 +176,7 @@ class CFMPolicyWrapper:
             n_obs_steps=n_obs_steps,
             action_dim=policy.action_dim if policy.use_action_history else 0,
         )
-        # Re-run inference every chunk_len steps (capped by horizon length)
-        self._chunk_len = min(policy.n_action_steps, policy.horizon)
+        self._chunk_len = chunk_len
         self._action_cache = None  # (B, horizon, A) tensor
         self._step = 0
 
@@ -236,7 +238,8 @@ def main():
     n_obs_steps = int(train_cfg["n_obs_steps"])
 
     print(f"[eval_cfm] obs_keys={obs_keys}  image_keys={image_keys}  "
-          f"n_obs_steps={n_obs_steps}  chunk_len={min(policy.n_action_steps, policy.horizon)}")
+          f"n_obs_steps={n_obs_steps}  chunk_len={args_cli.chunk_len}  "
+          f"(policy n_action_steps={policy.n_action_steps}, horizon={policy.horizon})")
 
     cfm_wrapper = CFMPolicyWrapper(
         policy=policy,
@@ -245,6 +248,7 @@ def main():
         downsample_points=downsample_points,
         device=device,
         n_obs_steps=n_obs_steps,
+        chunk_len=args_cli.chunk_len,
     )
 
     # ── Create Isaac Sim env ───────────────────────────────────────────────
@@ -332,3 +336,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    simulation_app.close()

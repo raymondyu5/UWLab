@@ -69,6 +69,7 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1
@@ -92,17 +93,17 @@ GRASP_PRIV="--privileged_keys manipulated_object_pose target_object_pose contact
 SCREW_PRIV="--privileged_keys ee_pose object_pose rotate_angle contact_obs object_in_tip"
 
 # ── Grasp tasks (success = is_lifted) ─────────────────────────────────────────
-# submit bottle_grasp \
-#   UW-FrankaLeap-GraspBottleRandomResets-JointAbs-v0 \
-#   ${RAYMOND_LOGS}/bc_cfm_pcd_bourbon_0512_absjoint_h16_hist4_extnoise_fast \
-#   bottle_grasp_privileged \
-#   is_lifted $GRASP_PRIV
+submit bottle_grasp \
+  UW-FrankaLeap-GraspBottleRandomResets-JointAbs-v0 \
+  ${RAYMOND_LOGS}/bc_cfm_pcd_bourbon_0512_absjoint_h16_hist4_extnoise_fast \
+  bottle_grasp_privileged \
+  is_lifted $GRASP_PRIV
 
-# submit cup_grasp \
-#   UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-v0 \
-#   ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pick_0512_absjoint_h16_hist4_extnoise_fast \
-#   cup_grasp_privileged \
-#   is_lifted $GRASP_PRIV
+submit cup_grasp \
+  UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-v0 \
+  ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pick_0512_absjoint_h16_hist4_extnoise_fast \
+  cup_grasp_privileged \
+  is_lifted $GRASP_PRIV
 
 # submit cube_grasp \
 #   UW-FrankaLeap-GraspCubeRandomResets-JointAbs-v0 \
@@ -132,36 +133,21 @@ SCREW_PRIV="--privileged_keys ee_pose object_pose rotate_angle contact_obs objec
 #   cumulative_rotation $SCREW_PRIV
 
 # ── Soccer push (success = is_success) ────────────────────────────────────────
-SOCCER_PRIV="--privileged_keys manipulated_object_pose goal_pose ball_velocity"
-submit soccer_push \
-  UW-FrankaLeap-SoccerPush-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_soccer_goal_0514_absjoint_h16_hist4_extnoise_fast \
-  soccer_push_privileged \
-  is_success $SOCCER_PRIV
+# SOCCER_PRIV="--privileged_keys manipulated_object_pose goal_pose ball_velocity"
+# submit soccer_push \
+#   UW-FrankaLeap-SoccerPush-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_soccer_goal_0514_absjoint_h16_hist4_extnoise_fast \
+#   soccer_push_privileged \
+#   is_success $SOCCER_PRIV
 
-# ── Cup pour (success = is_success) ───────────────────────────────────────────
-CUP_POUR_PRIV="--privileged_keys big_cup_pose ball_pose manipulated_object_pose ball_velocity"
-submit cup_pour \
-  UW-FrankaLeap-CupPour-JointAbs-v0 \
-  ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pour_0512_absjoint_h16_hist4_extnoise_fast \
-  cup_pour_privileged \
-  is_success $CUP_POUR_PRIV
-
-
+# # ── Cup pour (success = is_success) ───────────────────────────────────────────
+# CUP_POUR_PRIV="--privileged_keys big_cup_pose ball_pose manipulated_object_pose ball_velocity"
+# submit cup_pour \
+#   UW-FrankaLeap-CupPour-JointAbs-v0 \
+#   ${RAYMOND_LOGS}/bc_cfm_pcd_cup_pour_0512_absjoint_h16_hist4_extnoise_fast \
+#   cup_pour_privileged \
+#   is_success $CUP_POUR_PRIV
 
 
 
-############## DEPRECATED TASKS ##################
-# # ── Push cube (success = is_success, ever-true) ───────────────────────────────
-# submit cube_push \
-#   UW-FrankaLeap-PushCubeToPoptartRandomResets-JointAbs-v0 \
-#   ${RAYMOND_LOGS}/bc_cfm_pcd_cube_push_all_0416_absjoint_h16_hist4_noextnoise_fast \
-#   cube_push \
-#   is_success
 
-# # ── Bottle pour (success = is_near_miss) ──────────────────────────────────────
-# submit bottle_pour \
-#   UW-FrankaLeap-PourBottleRandomResets-JointAbs-v0 \
-#   ${RAYMOND_LOGS}/bc_cfm_pcd_bottle_pour_all_0414_absjoint_h16_hist4_noextnoise_fast \
-#   bottle_pour \
-#   is_near_miss

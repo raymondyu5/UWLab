@@ -25,9 +25,19 @@ mkdir -p "$LOG_DIR"
 UWLAB_BASE=/gscratch/weirdlab/will/UWLab_Docker
 
 # ── Set checkpoints here ───────────────────────────────────────────────────
-CUBE_CKPT=logs/rialto/distilled_policies/cfm_pcd_cube_grasp_rl_0518_absjoint_h16_hist4_extnoise_fast
-CUP_CKPT=logs/rialto/distilled_policies/cfm_pcd_cup_grasp_rl_0518_absjoint_h16_hist4_extnoise_fast
-BOTTLE_CKPT=logs/rialto/distilled_policies/cfm_pcd_bottle_grasp_rl_0518_absjoint_h16_hist4_extnoise_fast
+CUBE_CKPT=logs/rialto/distilled_policies/cfm_pcd_cube_grasp_rl_0520_absjoint_h16_hist4_extnoise_fast
+CUP_CKPT=logs/rialto/distilled_policies/cfm_pcd_cup_grasp_rl_0522_absjoint_h16_hist4_extnoise_fast
+BOTTLE_CKPT=logs/rialto/distilled_policies/cfm_pcd_bottle_grasp_rl_0522_absjoint_h16_hist4_extnoise_fast
+CREDIT_CARD_CKPT=logs/rialto/distilled_policies/cfm_pcd_credit_card_grasp_rl_0522_absjoint_h16_hist4_extnoise_fast
+SOCCER_CKPT=logs/rialto/distilled_policies/cfm_pcd_soccer_push_rl_0522_absjoint_h16_hist4_extnoise_fast
+PLATE_CKPT=logs/rialto/distilled_policies/cfm_pcd_plate_dishrack_rl_0522_absjoint_h16_hist4_extnoise_fast
+
+SCREW_CKPT=logs/rialto/distilled_policies/cfm_pcd_screw_lightbulb_rl_0523_absjoint_h16_hist4_extnoise_fast
+CUP_CKPT=logs/rialto/distilled_policies/cfm_pcd_cup_pour_rl_0523_absjoint_h16_hist4_extnoise_fast
+
+BC_TUNING_100_CKPT=logs/rialto/distilled_policies/cfm_pcd_bc_tuning_100_rl_0527_absjoint_h16_hist4_extnoise_fast
+BC_TUNING_10000_CKPT=logs/rialto/distilled_policies/cfm_pcd_bc_tuning_10000_rl_0527_absjoint_h16_hist4_extnoise_fast
+BC_TUNING_100000_CKPT=logs/rialto/distilled_policies/cfm_pcd_bc_tuning_100000_rl_0527_absjoint_h16_hist4_extnoise_fast
 # ──────────────────────────────────────────────────────────────────────────
 
 submit() {
@@ -75,6 +85,7 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1
@@ -83,7 +94,7 @@ apptainer exec --nv \\
       --task ${task} \\
       --checkpoint /workspace/uwlab/${checkpoint} \\
       --num_envs 256 \\
-      --num_trials 20 \\
+      --num_trials 5 \\
       --headless \\
       ${extra_args}
   "
@@ -93,29 +104,53 @@ SBATCH_SCRIPT
 }
 
 # ── Active evaluations ─────────────────────────────────────────────────────
-submit cube_grasp \
-  UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 \
-  ${CUBE_CKPT} \
-  "--record_video --enable_cameras --num_envs 8"
+# submit cube_grasp \
+#   UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 \
+#   ${CUBE_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
 
-submit cup_grasp \
-  UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-PPO-Collect-v0 \
-  ${CUP_CKPT} \
-  "--record_video --enable_cameras --num_envs 8"
+# submit cup_grasp \
+#   UW-FrankaLeap-GraspPinkCupRandomResets-JointAbs-PPO-Collect-v0 \
+#   ${CUP_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
 
-submit bottle_grasp \
-  UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-Collect-v0 \
-  ${BOTTLE_CKPT} \
-  "--record_video --enable_cameras --num_envs 8"
+# submit bottle_grasp \
+#   UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-Collect-v0 \
+#   ${BOTTLE_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
 
 # submit credit_card_grasp \
 #   UW-FrankaLeap-GraspCreditCard-JointAbs-PPO-Collect-v0 \
-#   ${CREDIT_CARD_CKPT}
+#   ${CREDIT_CARD_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
 
 # submit plate_dishrack \
 #   UW-FrankaLeap-PlateInDishRack-JointAbs-PPO-Collect-v0 \
-#   ${PLATE_CKPT}
+#   ${PLATE_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
+
+# submit soccer_push \
+#   UW-FrankaLeap-SoccerPush-JointAbs-v0 \
+#   ${SOCCER_CKPT} \
+#   "--record_video --enable_cameras --num_envs 8"
+
 
 # submit screw_lightbulb \
 #   UW-FrankaLeap-ScrewLightbulb-JointAbs-PPO-Collect-v0 \
 #   ${SCREW_CKPT}
+
+# submit cup_pour \
+#  UW-FrankaLeap-CupPour-JointAbs-v0 \
+#   ${CUP_CKPT}
+
+submit bc_tuning_100 \
+  UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 \
+  ${BC_TUNING_100_CKPT}
+
+submit bc_tuning_10000 \
+  UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 \
+  ${BC_TUNING_10000_CKPT}
+
+submit bc_tuning_100000 \
+  UW-FrankaLeap-GraspCube-JointAbs-PPO-Collect-v0 \
+  ${BC_TUNING_100000_CKPT}

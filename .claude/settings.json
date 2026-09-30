@@ -27,7 +27,9 @@
       "Bash(find /mmfs1/gscratch/weirdlab -name \"manager_based_rl_env.py\" 2>/dev/null | head -3)",
       "Read(//mmfs1/gscratch/weirdlab/**)",
       "Bash(find /mmfs1/home/wph52 -name \"manager_based_rl_env.py\" 2>/dev/null | head -3)",
-      "Read(//mmfs1/home/wph52/**)"
+      "Read(//mmfs1/home/wph52/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c 'import json; d=json.load\\(open\\('\\\\''/mmfs1/gscratch/weirdlab/will/UWLab_Docker/data_storage/rialto/cube_grasp_privileged/episode_0/episode_0.zarr/data/__TRACKED_VAR__/zarr.json'\\\\''\\)\\); print\\(d['\\\\''shape'\\\\'']\\)')"
     ]
   }
 }

@@ -20,10 +20,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
+
+# BC_CKPT=logs/rialto/bc/bc_0508_1320/bc_pretrained.pt
+# DATA_PATH=data_storage/rialto/bottle_grasp
+# TASK=UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-v0
+
 UWLAB_BASE=/gscratch/weirdlab/will/UWLab_Docker
-BC_CKPT=logs/rialto/bc/bc_0508_1320/bc_pretrained.pt
-DATA_PATH=data_storage/rialto/bottle_grasp
-TASK=UW-FrankaLeap-GraspBottleRandomResets-JointAbs-PPO-v0
+CUBE_TASK=UW-FrankaLeap-GraspCube-JointAbs-PPO-v0
+CUBE_BC=logs/rialto/bc/cube_grasp/bc_0515_0933/bc_best.pt
+CUBE_DATA=data_storage/rialto/cube_grasp_privileged
 
 submit() {
   local slug=$1; shift
@@ -70,14 +75,15 @@ apptainer exec --nv \\
   /bin/bash -c "
     unset CONDA_PREFIX
     unset CONDA_DEFAULT_ENV
+    unset VIRTUAL_ENV
     cd /workspace/uwlab
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     export PYTHONUNBUFFERED=1
     ./uwlab.sh -p \\
       scripts/reinforcement_learning/rialto/train_stage2_ppo.py \\
-      --task ${TASK} \\
-      --bc_checkpoint ${BC_CKPT} \\
-      --data_path ${DATA_PATH} \\
+      --task ${CUBE_TASK} \\
+      --bc_checkpoint ${CUBE_BC} \\
+      --data_path ${CUBE_DATA} \\
       --num_envs 4096 \\
       --n_timesteps 1000000000 \\
       --warmup_rollouts 0 \\
@@ -110,14 +116,27 @@ SBATCH_SCRIPT
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── 2×2 cross of the two key axes ────────────────────────────────────────────
-submit e1_bc1000_s3_vf001_cw60   --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01  --critic_warmup_rollouts 60
-submit e1_bc1000_s3_vf01_cw60    --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1   --critic_warmup_rollouts 60
-submit e1_bc1000_s3_vf001_cw30   --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01  --critic_warmup_rollouts 30
-submit e1_bc1000_s3_vf01_cw30    --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1   --critic_warmup_rollouts 30
+# submit e1_bc1000_s3_vf001_cw60   --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01  --critic_warmup_rollouts 60
+# submit e1_bc1000_s3_vf01_cw60    --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1   --critic_warmup_rollouts 60
+# submit e1_bc1000_s3_vf001_cw30   --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01  --critic_warmup_rollouts 30
+# submit e1_bc1000_s3_vf01_cw30    --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.1   --critic_warmup_rollouts 30
 
-# ── Boundary probes on each axis ──────────────────────────────────────────────
-submit e1_bc1000_s3_vf0001       --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.001
-submit e1_bc1000_s3_cw120        --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --critic_warmup_rollouts 120
+# # ── Boundary probes on each axis ──────────────────────────────────────────────
+# submit e1_bc1000_s3_vf0001       --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.001
+# submit e1_bc1000_s3_cw120        --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --critic_warmup_rollouts 120
 
-# ── Best cross + slower lr ────────────────────────────────────────────────────
-submit e1_bc1000_s3_vf001_cw60_lr3e5  --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01 --critic_warmup_rollouts 60 --ppo_lr 3e-5
+# # ── Best cross + slower lr ────────────────────────────────────────────────────
+# submit e1_bc1000_s3_vf001_cw60_lr3e5  --n_epochs 1 --bc_coef 1000 --log_std_init -3.0 --vf_coef 0.01 --critic_warmup_rollouts 60 --ppo_lr 3e-5
+
+
+CUBE_OBS="--obs_keys arm_joint_pos hand_joint_pos manipulated_object_pose target_object_pose contact_obs object_in_tip"
+VF01_CW30_ARGS="--n_epochs 1 --log_std_init -3.0 --vf_coef 0.1 --critic_warmup_rollouts 30 $CUBE_OBS"
+
+#submit bc10 --bc_coef 10 $VF01_CW30_ARGS
+# submit bc100 --bc_coef 100 $VF01_CW30_ARGS
+# submit bc10000 --bc_coef 10000 $VF01_CW30_ARGS
+#submit bc100000 --bc_coef 100000 $VF01_CW30_ARGS
+
+submit bc1000 --bc_coef 1000 $VF01_CW30_ARGS
+
+

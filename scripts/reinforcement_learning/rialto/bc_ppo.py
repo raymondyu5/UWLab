@@ -80,6 +80,8 @@ class BcPPO(OnPolicyAlgorithm):
         bc_acts: Optional[th.Tensor] = None,
         bc_coef: float = 0.0,
         bc_batch_size: int = 256,
+        bc_val_obs: Optional[th.Tensor] = None,
+        bc_val_acts: Optional[th.Tensor] = None,
         # Warmup: collect this many rollouts deterministically before enabling exploration.
         warmup_rollouts: int = 0,
         # Critic warmup: train only the value head for this many rollouts after
@@ -116,6 +118,8 @@ class BcPPO(OnPolicyAlgorithm):
         self.bc_acts = bc_acts
         self.bc_coef = bc_coef
         self.bc_batch_size = bc_batch_size
+        self.bc_val_obs = bc_val_obs
+        self.bc_val_acts = bc_val_acts
         self.warmup_rollouts = warmup_rollouts
         self._warmup_rollouts_done = 0
         self._buffer_has_warmup_data = False
@@ -196,6 +200,16 @@ class BcPPO(OnPolicyAlgorithm):
         dist = self.policy.get_distribution(obs_b)
         pred_mean = dist.distribution.mean
         return F.mse_loss(pred_mean, acts_b)
+
+    @th.no_grad()
+    def compute_bc_val_loss(self) -> float:
+        """MSE on the held-out validation demos — not used for training."""
+        if self.bc_val_obs is None:
+            return 0.0
+        obs = self.bc_val_obs.to(self.device)
+        acts = self.bc_val_acts.to(self.device)
+        dist = self.policy.get_distribution(obs)
+        return F.mse_loss(dist.distribution.mean, acts).item()
 
     def train(self) -> None:
         """Update policy using the currently gathered rollout buffer."""
@@ -306,11 +320,22 @@ class BcPPO(OnPolicyAlgorithm):
             self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten()
         )
 
+        bc_loss_mean = np.mean(bc_losses) if bc_losses else 0.0
+        entropy_loss_mean = np.mean(entropy_losses) if entropy_losses else 0.0
+        pg_loss_mean = np.mean(pg_losses) if pg_losses else 0.0
+        value_loss_mean = np.mean(value_losses)
+
         self.logger.record("train/in_critic_warmup", int(in_critic_warmup))
-        self.logger.record("train/bc_loss", np.mean(bc_losses) if bc_losses else 0.0)
-        self.logger.record("train/entropy_loss", np.mean(entropy_losses) if entropy_losses else 0.0)
-        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses) if pg_losses else 0.0)
-        self.logger.record("train/value_loss", np.mean(value_losses))
+        self.logger.record("train/bc_loss", bc_loss_mean)
+        self.logger.record("train/bc_val_loss", self.compute_bc_val_loss())
+        self.logger.record("train/entropy_loss", entropy_loss_mean)
+        self.logger.record("train/policy_gradient_loss", pg_loss_mean)
+        self.logger.record("train/value_loss", value_loss_mean)
+
+        self.logger.record("train_scaled/bc_loss", self.bc_coef * bc_loss_mean)
+        self.logger.record("train_scaled/entropy_loss", self.ent_coef * entropy_loss_mean)
+        self.logger.record("train_scaled/policy_gradient_loss", pg_loss_mean)
+        self.logger.record("train_scaled/value_loss", self.vf_coef * value_loss_mean)
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs) if approx_kl_divs else 0.0)
         self.logger.record("train/clip_fraction", np.mean(clip_fractions) if clip_fractions else 0.0)
         self.logger.record("train/loss", loss.item())
