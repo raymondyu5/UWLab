@@ -17,6 +17,16 @@ JOINT_POSITION: JointPositionActionCfg = JointPositionActionCfg(
     scale=0.1,
 )
 
+# Absolute joint-position action: raw action *is* the target joint position (no scale, no
+# default offset). Matches the Franka-LEAP JointAbs convention, so warmup/reset poses can be
+# passed straight through as the action.
+JOINT_POSITION_ABSOLUTE: JointPositionActionCfg = JointPositionActionCfg(
+    asset_name="robot",
+    joint_names=["panda_joint.*", "panda_finger_joint.*"],
+    scale=1.0,
+    use_default_offset=False,
+)
+
 JOINT_IKDELTA: DifferentialInverseKinematicsActionCfg = DifferentialInverseKinematicsActionCfg(
     asset_name="robot",
     joint_names=["panda_joint.*"],
@@ -46,6 +56,11 @@ BINARY_GRIPPER = BinaryJointPositionActionCfg(
 @configclass
 class JointPositionAction:
     jointpos = JOINT_POSITION
+
+
+@configclass
+class JointPositionAbsoluteAction:
+    jointpos = JOINT_POSITION_ABSOLUTE
 
 
 @configclass

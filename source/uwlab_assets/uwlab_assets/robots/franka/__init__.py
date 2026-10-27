@@ -4,4 +4,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from .action import *
+from .franka import *
 from .teleop import *

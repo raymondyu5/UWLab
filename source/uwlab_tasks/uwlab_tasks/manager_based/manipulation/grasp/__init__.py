@@ -7,3 +7,8 @@ try:
     from .config import franka_leap  # noqa: F401
 except (ModuleNotFoundError, ImportError):
     pass
+
+try:
+    from .config import franka  # noqa: F401
+except (ModuleNotFoundError, ImportError):
+    pass
