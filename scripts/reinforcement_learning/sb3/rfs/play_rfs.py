@@ -24,6 +24,7 @@ import os
 import sys
 
 from isaaclab.app import AppLauncher
+from uwlab.utils.paths import setup_third_party_paths
 
 parser = argparse.ArgumentParser(description="Eval RFS/DSRL noise-space PPO.")
 parser.add_argument("--task", type=str, required=True)
@@ -46,13 +47,11 @@ args_cli.headless = True
 if args_cli.record_video:
     args_cli.enable_cameras = True
 
+# Sibling modules (wrapper, eval_callback, ...) are imported by bare name.
 _RFS_DIR = os.path.dirname(os.path.abspath(__file__))
-_SB3_DIR = os.path.dirname(_RFS_DIR)
-_UWLAB_DIR = os.path.abspath(os.path.join(_RFS_DIR, "../../../../"))
-_PIP_PACKAGES = os.path.join(_UWLAB_DIR, "third_party", "pip_packages")
-for _p in [_RFS_DIR, _SB3_DIR, _PIP_PACKAGES]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if _RFS_DIR not in sys.path:
+    sys.path.insert(0, _RFS_DIR)
+setup_third_party_paths()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -70,7 +69,7 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import uwlab_tasks  # noqa: F401
 
-from wrapper import RFSWrapper
+from wrapper import RFSWrapper, parse_dims as _parse_dims
 from asymmetric_policy import AsymmetricActorCriticPolicy, resolve_asymmetric_ac
 from uwlab.eval.eval_logger import EvalLogger
 from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
@@ -79,14 +78,6 @@ from uwlab.eval.spawn import load_spawn_cfg, SpawnCfg
 def _load_cfg(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
-
-
-def _parse_dims(s: str):
-    s = s.strip()
-    if not s:
-        return None
-    start, _, end = s.partition(":")
-    return (int(start), int(end))
 
 
 def _to_numpy(obs_dict: dict) -> dict:
@@ -118,16 +109,13 @@ def main():
 
     asymmetric_ac = resolve_asymmetric_ac(args_cli.asymmetric_ac, rfs_cfg, args_cli.checkpoint)
 
-    rfs_env = RFSWrapper(
+    rfs_env = RFSWrapper.from_cfg(
         env,
         diffusion_path=args_cli.diffusion_path,
-        residual_step=rfs_cfg["residual_step"],
+        rfs_cfg=rfs_cfg,
+        gamma=0.99,
         noise_dims=noise_dims,
         residual_dims=residual_dims,
-        residual_scale=rfs_cfg["residual_scale"],
-        clip_actions=rfs_cfg["clip_actions"],
-        finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=asymmetric_ac,
         symmetric_pcd=args_cli.symmetric_pcd,
     )

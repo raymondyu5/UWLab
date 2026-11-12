@@ -20,23 +20,6 @@ Usage:
     sb3_env = Sb3VecEnvWrapper(rfs_env)
 """
 
-import os
-import sys
-
-import yaml
-
-# Ensure third_party packages (dill, diffusion_policy) are importable.
-# isaac-sim's python.sh resets PYTHONPATH so we inject the paths here.
-_RFS_DIR = os.path.dirname(os.path.abspath(__file__))
-_UWLAB_DIR = os.path.abspath(os.path.join(_RFS_DIR, "../../../../"))
-for _p in [
-    os.path.join(_UWLAB_DIR, "third_party", "pip_packages"),
-    os.path.join(_UWLAB_DIR, "third_party", "diffusion_policy"),
-]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-import dill
 from collections import deque
 from typing import List, Optional
 
@@ -44,181 +27,24 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-import torch.nn as nn
-from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
-
+try:  # imported as a package or as a bare module (rfs/ on sys.path)
+    from .cfm_loader import LPFilter, _load_cfm_checkpoint  # noqa: F401  (re-exported for callers)
+except ImportError:
+    from cfm_loader import LPFilter, _load_cfm_checkpoint  # noqa: F401
 from uwlab.eval.bc_obs_formatter import BCObsFormatter
-from uwlab.utils.checkpoint import extract_ckpt_metadata, format_ckpt_metadata
 
 
-class LPFilter(nn.Module):
-    def __init__(self, alpha: float):
-        super().__init__()
-        self.alpha = alpha
-        self.y = None
-
-    def reset(self):
-        self.y = None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.y is None:
-            self.y = x.clone()
-            return self.y.clone()
-        self.y = self.y + self.alpha * (x - self.y)
-        return self.y.clone()
-
-from uwlab.policy.backbone.multi_pcd_obs_encoder import MultiPCDObsEncoder
-from uwlab.policy.backbone.pcd.pointnet import PointNet
-from uwlab.policy.cfm_pcd_policy import CFMPCDPolicy
-
-
-def _resolve_hydra_refs(cfg: dict) -> dict:
-    """Resolve simple ${key} Hydra references using top-level scalar values."""
-    import re
-    lookup = {k: v for k, v in cfg.items() if isinstance(v, (int, float, str, bool))}
-
-    def resolve(val):
-        if isinstance(val, str):
-            def replacer(m):
-                key = m.group(1)
-                return str(lookup.get(key, m.group(0)))
-            return re.sub(r'\$\{(\w+)\}', replacer, val)
-        elif isinstance(val, dict):
-            return {k: resolve(v) for k, v in val.items()}
-        elif isinstance(val, list):
-            return [resolve(v) for v in val]
-        return val
-
-    return resolve(cfg)
-
-
-def _load_cfm_checkpoint(diffusion_path: str, device: torch.device):
-    ckpt_path = os.path.join(diffusion_path, "checkpoints", "best.ckpt")
-    if not os.path.isfile(ckpt_path):
-        ckpt_path = os.path.join(diffusion_path, "best.ckpt")
-    if not os.path.isfile(ckpt_path):
-        ckpt_path = os.path.join(diffusion_path, "checkpoints", "latest.ckpt")
-    if not os.path.isfile(ckpt_path):
-        raise FileNotFoundError(
-            f"Checkpoint not found. Looked for best.ckpt, checkpoints/best.ckpt, latest.ckpt in {diffusion_path}"
-        )
-
-    print(f"[RFSWrapper] Loading CFM checkpoint from {ckpt_path}")
-    resolved_ckpt_path = os.path.realpath(ckpt_path)
-    if resolved_ckpt_path != ckpt_path:
-        print(f"[RFSWrapper] Resolved checkpoint path: {resolved_ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False, pickle_module=dill)
-    ckpt_meta = extract_ckpt_metadata(ckpt)
-    print(f"[RFSWrapper] Checkpoint metadata: {format_ckpt_metadata(ckpt_meta)}")
-
-    if "state_dicts" in ckpt and "ema_model" in ckpt["state_dicts"]:
-        # Format A: state_dicts wrapper with OmegaConf cfg (older training code).
-        state_dict = ckpt["state_dicts"]["ema_model"]
-        cfg = ckpt["cfg"]
-        shape_meta = {
-            "action": {"shape": list(cfg.shape_meta.action.shape)},
-            "obs": {
-                "agent_pos": {"shape": list(cfg.shape_meta.obs.agent_pos.shape), "type": "low_dim"},
-                "seg_pc": {"shape": list(cfg.shape_meta.obs.seg_pc.shape), "type": "pcd"},
-            },
-        }
-        sigma = float(cfg.policy.noise_scheduler.sigma)
-        horizon = int(cfg.horizon)
-        n_action_steps = int(cfg.n_action_steps) + int(getattr(cfg, "n_latency_steps", 0))
-        n_obs_steps = int(cfg.n_obs_steps)
-        down_dims = tuple(cfg.policy.down_dims)
-        obs_keys = list(cfg.dataset.obs_keys)
-        image_keys = list(getattr(cfg.dataset, "image_keys", ["seg_pc"]))
-        downsample_points = int(getattr(cfg.dataset, "downsample_points", 2048))
-    else:
-        # Format B: flat checkpoint — cfg embedded in checkpoint or from config.yaml.
-        state_dict = ckpt["ema_model"]
-        if "cfg" in ckpt and isinstance(ckpt["cfg"], dict):
-            train_cfg = ckpt["cfg"]
-        else:
-            config_path = os.path.join(diffusion_path, "config.yaml")
-            if not os.path.isfile(config_path):
-                raise FileNotFoundError(
-                    f"BC checkpoint format detected but config.yaml not found at {config_path}"
-                )
-            with open(config_path) as f:
-                train_cfg = _resolve_hydra_refs(yaml.safe_load(f))
-        agent_pos_dim = int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
-        action_dim = int(state_dict["normalizer.params_dict.action.scale"].shape[0])
-        ds = train_cfg["dataset"]
-        pol = train_cfg["policy"]
-        downsample_points = int(ds.get("downsample_points", 2048))
-        obs_keys = ds.get("obs_keys", ds.get("obs_key", []))
-        image_keys = ds.get("image_keys", ["seg_pc"])
-        shape_meta = {
-            "action": {"shape": [action_dim]},
-            "obs": {
-                "agent_pos": {"shape": [agent_pos_dim], "type": "low_dim"},
-                "seg_pc": {"shape": [3, downsample_points], "type": "pcd"},
-            },
-        }
-        sigma = float(pol.get("sigma", 0.0))
-        horizon = int(train_cfg.get("horizon", 4))
-        n_action_steps = int(train_cfg.get("n_action_steps", 8))
-        n_obs_steps = int(train_cfg.get("n_obs_steps", 1))
-        down_dims = tuple(pol["down_dims"])
-        pnet_cfg = train_cfg.get("pointnet", {})
-
-    use_action_history = "normalizer.params_dict.past_actions.scale" in state_dict
-
-    # PointNet architecture: read from checkpoint cfg (Format B) with fallback to
-    # legacy hardcoded defaults so old checkpoints continue to load correctly.
-    _default_local  = (64, 64, 64, 128, 1024)
-    _default_global = (512, 256)
-    if "pnet_cfg" not in dir():
-        pnet_cfg = {}  # Format A checkpoint — use defaults
-    pcd_model = PointNet(
-        in_channels=3,
-        local_channels=tuple(pnet_cfg.get("local_channels", _default_local)),
-        global_channels=tuple(pnet_cfg.get("global_channels", _default_global)),
-        use_bn=bool(pnet_cfg.get("use_bn", False)),
-    )
-    obs_encoder = MultiPCDObsEncoder(shape_meta=shape_meta, pcd_model=pcd_model)
-    noise_scheduler = ConditionalFlowMatcher(sigma=sigma)
-
-    policy = CFMPCDPolicy(
-        shape_meta=shape_meta,
-        obs_encoder=obs_encoder,
-        noise_scheduler=noise_scheduler,
-        horizon=horizon,
-        n_action_steps=n_action_steps,
-        n_obs_steps=n_obs_steps,
-        num_inference_steps=5,
-        diffusion_step_embed_dim=256,
-        down_dims=down_dims,
-        kernel_size=5,
-        n_groups=8,
-        cond_predict_scale=True,
-        use_action_history=use_action_history,
-    )
-    policy.load_state_dict(state_dict, strict=False)
-    policy.to(device)
-    policy.eval()
-
-    # agent_pos_flat_dim = n_obs_steps * per_step_dim (total flat size of history tensor)
-    agent_pos_flat_dim = n_obs_steps * int(state_dict["normalizer.params_dict.agent_pos.scale"].shape[0])
-
-    metadata = {
-        "obs_keys": obs_keys,
-        "image_keys": image_keys,
-        "downsample_points": downsample_points,
-        "n_obs_steps": n_obs_steps,
-        "use_action_history": use_action_history,
-        "agent_pos_flat_dim": agent_pos_flat_dim,
-        "ckpt_path": ckpt_path,
-        "resolved_ckpt_path": resolved_ckpt_path,
-        "ckpt_meta": ckpt_meta,
-    }
-
-    print(f"[RFSWrapper] CFM policy loaded: horizon={policy.horizon}, "
-          f"action_dim={policy.action_dim}, n_obs_steps={n_obs_steps}, "
-          f"use_action_history={use_action_history}")
-    return policy, metadata
+def parse_dims(s):
+    """'start:end' -> (start, end); None/empty -> None; an existing tuple passes through."""
+    if s is None or isinstance(s, (tuple, list)):
+        return tuple(s) if s is not None else None
+    s = str(s).strip()
+    if not s:
+        return None
+    parts = s.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"Expected 'start:end', got: {s!r}")
+    return (int(parts[0]), int(parts[1]))
 
 
 class RFSWrapper:
@@ -257,10 +83,24 @@ class RFSWrapper:
         symmetric_pcd: bool = False,
         gamma: float = 0.99,
         ppo_history: bool = False,
+        cfm_autocast: bool = False,
+        cfm_num_steps: Optional[int] = None,
+        fast_substeps: bool = True,
+        skip_intermediate_obs: bool = False,
     ):
         self.env = env
         self.unwrapped = env.unwrapped
         self.device = env.unwrapped.device
+        if fast_substeps:  # default on (verified identical to baseline; set rfs.fast_substeps: false to disable): skip redundant per-substep sensor/actuator work (see grasp/mdp/fast_step.py)
+            from uwlab_tasks.manager_based.manipulation.grasp.mdp.fast_step import enable_fast_substeps
+
+            print(f"[RFSWrapper] fast_substeps: {enable_fast_substeps(env)}")
+        self._skip_intermediate_obs = skip_intermediate_obs
+        if skip_intermediate_obs:  # opt-in: only the last env step of a PPO step needs its observation computed
+            from uwlab_tasks.manager_based.manipulation.grasp.mdp.fast_step import enable_skippable_obs
+
+            enable_skippable_obs(env)
+            print("[RFSWrapper] skip_intermediate_obs enabled")
         self.num_envs = env.unwrapped.num_envs
         self.residual_step = residual_step
         self.clip_actions = clip_actions
@@ -310,6 +150,9 @@ class RFSWrapper:
 
         self.policy, metadata = _load_cfm_checkpoint(diffusion_path, self.device)
         self.policy.model = torch.compile(self.policy.model)
+        if cfm_num_steps is not None:  # opt-in: fewer RK2 integration steps (changes the policy; needs a quality check)
+            self.policy.num_inference_steps = int(cfm_num_steps)
+        self.policy.autocast_bf16 = cfm_autocast  # opt-in bf16 CFM inference (rfs.cfm_autocast)
         self.policy_horizon = self.policy.horizon
         self.cfm_action_dim = self.policy.action_dim
 
@@ -406,6 +249,30 @@ class RFSWrapper:
         self._pcd_terms: list = []  # CachedSamplePC instances, set by train.py when profiling
 
     _SKIP_PPO_KEYS = {"seg_pc", "rgb"}
+
+    @classmethod
+    def from_cfg(cls, env, diffusion_path: str, rfs_cfg: dict, gamma: float, noise_dims=None, residual_dims=None, **kwargs):
+        """Build from the ``rfs:`` section of an RFS yaml. ``noise_dims``/``residual_dims`` ('start:end' or tuple)
+        override the yaml; extra kwargs (asymmetric_ac, symmetric_pcd, ...) go straight to the constructor."""
+        return cls(
+            env,
+            diffusion_path=diffusion_path,
+            residual_step=rfs_cfg["residual_step"],
+            noise_dims=parse_dims(noise_dims if noise_dims is not None else rfs_cfg.get("noise_dims")),
+            residual_dims=parse_dims(residual_dims if residual_dims is not None else rfs_cfg.get("residual_dims")),
+            residual_scale=rfs_cfg["residual_scale"],
+            clip_actions=rfs_cfg["clip_actions"],
+            finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
+            finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
+            num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
+            gamma=float(gamma),
+            ppo_history=rfs_cfg.get("ppo_history", False),
+            cfm_autocast=rfs_cfg.get("cfm_autocast", False),
+            cfm_num_steps=rfs_cfg.get("cfm_num_steps"),
+            fast_substeps=rfs_cfg.get("fast_substeps", True),
+            skip_intermediate_obs=rfs_cfg.get("skip_intermediate_obs", False),
+            **kwargs,
+        )
 
     @property
     def _needs_pcd_embedding(self) -> bool:
@@ -891,11 +758,12 @@ class RFSWrapper:
                 action[:, self.finger_start_dim:] = self.finger_filter(action[:, self.finger_start_dim:])
 
             if metrics_seen is not None:
-                metrics_np = self.unwrapped.metrics.get_metrics()
-                for k in metric_keys:
-                    metrics_seen[k] |= torch.from_numpy(metrics_np[k]).to(self.device).bool()
+                for k, v in self.unwrapped.metrics.get_metrics_tensors().items():
+                    metrics_seen[k] |= v
 
             self.last_action = action.detach()
+            if self._skip_intermediate_obs:
+                self.unwrapped._skip_obs_compute = substep < self.residual_step - 1
             obs, step_rewards, terminated, truncated, info = self.env.step(action)
             if self._collect_substep_frames:
                 self.last_substep_frames.append(self.env.render())
@@ -903,6 +771,8 @@ class RFSWrapper:
             discount *= self.gamma
             self.last_obs = obs
             any_reset |= terminated | truncated
+        if self._skip_intermediate_obs:
+            self.unwrapped._skip_obs_compute = False
         if profiling:
             e_physics_end = self._evt()
             mem_physics_peak = torch.cuda.max_memory_allocated() * _mb
@@ -913,7 +783,8 @@ class RFSWrapper:
 
         # Reset formatter history for envs that auto-reset during this PPO step.
         # Use zeros for their past_actions update to match episode-start behavior.
-        if any_reset.any():
+        has_reset = bool(any_reset.any())  # single GPU->CPU sync, reused below
+        if has_reset:
             self.formatter.reset_envs(any_reset, self.last_obs["policy"])
             masked_action = self.last_action.clone()
             masked_action[any_reset] = 0.0
@@ -931,7 +802,7 @@ class RFSWrapper:
         if self._use_ppo_history:
             self._update_ppo_history(self.last_obs["policy"])
             ppo_action = self.last_action
-            if any_reset.any():
+            if has_reset:
                 ppo_action = self.last_action.clone()
                 ppo_action[any_reset] = 0.0
             self._update_ppo_past_actions(ppo_action)
@@ -951,13 +822,14 @@ class RFSWrapper:
         # resets, but this is the standard frame-skip approximation and far better than
         # silently dropping completed episodes from ep_rew_mean.
         log_done = any_reset | terminated | truncated
-        if log_done.any():
+        if has_reset or bool(log_done.any()):
             if not isinstance(info, list):
                 info = [{} for _ in range(self.num_envs)]
-            for i in range(self.num_envs):
-                if log_done[i]:
-                    info[i]["episode"] = {"r": self._ep_rewards[i].item(), "l": 0}
-                    self._ep_rewards[i] = 0.0
+            done_idx = log_done.nonzero(as_tuple=True)[0]
+            done_rewards = self._ep_rewards[done_idx].cpu().tolist()  # one transfer, not one .item() per env
+            for i, r in zip(done_idx.cpu().tolist(), done_rewards):
+                info[i]["episode"] = {"r": r, "l": 0}
+            self._ep_rewards[done_idx] = 0.0
 
         # Ensure termination flags align with any mid-chunk resets.
         terminated = any_reset

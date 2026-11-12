@@ -19,7 +19,7 @@ export EXTRA_APPTAINER_BINDS="--bind /tmp/$SLURM_JOB_ID:/tmp \
   --bind /gscratch/weirdlab/will:/gscratch/weirdlab/will"
 
 /mmfs1/gscratch/weirdlab/raymond/commands/uwlab/run_in_container.sh '
-  ./uwlab.sh -p scripts/reinforcement_learning/sb3/rfs/play_rfs.py \
+  ./uwlab.sh -p scripts/legacy/rfs_eval/play_rfs.py \
     --task UW-FrankaLeap-PourBottle-JointAbs-v0 \
     --diffusion_path /gscratch/weirdlab/will/UWLab_Docker/logs/bc_cfm_pcd_bourbon_0324_absjoint_h16_hist4_extnoise \
     --checkpoint /gscratch/weirdlab/will/UWLab_Docker/logs/rfs/PourBottle-JointAbs_0326_2312_28e64e/model_000600.zip \

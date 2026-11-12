@@ -57,41 +57,30 @@ class EnvMetrics:
             raise RuntimeError("EnvMetrics env reference is no longer valid.")
         return env
 
-    def get_metrics(self, env: Any | None = None) -> dict[str, np.ndarray]:
-        """Compute all metrics and return them as NumPy arrays on CPU."""
+    def get_metrics_tensors(self, env: Any | None = None) -> dict[str, torch.Tensor]:
+        """Compute all metrics as flat boolean tensors on the env device (no GPU->CPU sync)."""
         if env is None:
             env = self._get_env()
-
         if not self._specs:
             raise RuntimeError(
                 "EnvMetrics has no metrics_spec attached to this env. "
                 "Set `metrics_spec` in the task config (e.g. bottle_pour.py)."
             )
-
-        out: dict[str, np.ndarray] = {}
+        out: dict[str, torch.Tensor] = {}
         for name, spec in self._specs.items():
             t = spec.fn(env)
             if not isinstance(t, torch.Tensor):
                 raise TypeError(f"Metric {name!r} must return a torch.Tensor, got {type(t)}")
-
-            t = t.detach().cpu()
+            t = t.detach().reshape(-1)
             if t.numel() == 0:
                 raise ValueError(f"Metric {name!r} returned an empty tensor")
-
-            t = t.reshape(-1)
-            if t.dim() != 1:
-                raise ValueError(
-                    f"Metric {name!r} expected shape (num_envs,), got {tuple(t.shape)}"
-                )
-
             # Most eval metrics are boolean-ish ("is_*"). Convert numeric masks into bools.
-            if t.dtype == torch.bool:
-                arr = t.numpy().astype(bool, copy=False)
-            elif t.dtype in (torch.int32, torch.int64, torch.uint8):
-                arr = (t.numpy().astype(np.int64, copy=False) != 0)
-            else:
-                arr = (t.numpy() > 0.5)
-
-            out[name] = arr
+            if t.dtype != torch.bool:
+                t = (t != 0) if t.dtype in (torch.int32, torch.int64, torch.uint8) else (t > 0.5)
+            out[name] = t
         return out
+
+    def get_metrics(self, env: Any | None = None) -> dict[str, np.ndarray]:
+        """Compute all metrics and return them as NumPy bool arrays on CPU."""
+        return {k: v.cpu().numpy() for k, v in self.get_metrics_tensors(env).items()}
 

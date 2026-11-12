@@ -5,6 +5,7 @@
 
 from dataclasses import MISSING
 
+import os
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.sensors import CameraCfg
@@ -24,8 +25,10 @@ from isaaclab.utils import configclass
 from . import mdp
 
 DEFAULT_GRASP_HORIZON = 100
-DEFAULT_GRASP_DECIMATION = 6
-DEFAULT_GRASP_PHYSICS_HZ = 60.0
+# Defaults define the dynamics the policies were trained with. The env vars exist only for speed/quality experiments
+# (e.g. UWLAB_GRASP_PHYSICS_HZ=30 UWLAB_GRASP_DECIMATION=3 keeps the 10 Hz control rate with a coarser physics step).
+DEFAULT_GRASP_DECIMATION = int(os.environ.get("UWLAB_GRASP_DECIMATION", 6))
+DEFAULT_GRASP_PHYSICS_HZ = float(os.environ.get("UWLAB_GRASP_PHYSICS_HZ", 60.0))
 
 @configclass
 class GraspSceneCfg(InteractiveSceneCfg):

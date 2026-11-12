@@ -218,7 +218,7 @@ class SoccerPushFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         # Observations
         self.observations.policy.manipulated_object_pose = ObsTerm(func=obs_manipulated_object_pose)
         self.observations.policy.goal_pose = ObsTerm(func=obs_goal_pose)
-        self.observations.policy.ball_velocity = ObsTerm(func=obs_ball_velocity)
+        # ball_velocity obs (obs_ball_velocity) disabled: RFS checkpoints were trained without it.
 
         self.distill_include_entity_names = ("robot", "grasp_object", "goal")
 

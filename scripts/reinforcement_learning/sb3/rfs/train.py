@@ -31,6 +31,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from isaaclab.app import AppLauncher
+from uwlab.utils.paths import setup_third_party_paths
+
+_RFS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _RFS_DIR not in sys.path:
+    sys.path.insert(0, _RFS_DIR)
+from speed_args import add_speed_args, apply_speed_overrides  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Train RFS policy with PPO.")
 
@@ -55,7 +61,10 @@ parser.add_argument("--eval_interval", type=int, default=None,
                     help="Override eval.interval.")
 parser.add_argument("--eval_spawn", type=str, default=None,
                     help="Override eval.spawn config name.")
-parser.add_argument("--no_eval_video", action="store_true", default=False) # default to including video
+add_speed_args(parser)
+parser.add_argument("--no_eval_at_start", action="store_true", default=False,
+                    help="Skip the eval round at training start (useful for profiling).")
+parser.add_argument("--no_eval_video", action="store_true", default=False)
 parser.add_argument("--eval_plots", action="store_true", default=False,
                     help="Legacy alias for --eval_debug_plots.")
 parser.add_argument("--eval_debug_plots", action="store_true", default=False,
@@ -83,16 +92,8 @@ if args_cli.video:
 
 sys.argv = [sys.argv[0]] + hydra_args
 
-#TODO cleanup this so we don't have to do it anymore
-# Ensure rfs/ dir is on sys.path so sibling modules are importable.
-# isaac-sim's python.sh resets PYTHONPATH, so this is necessary.
-_RFS_DIR = os.path.dirname(os.path.abspath(__file__))
-_SB3_DIR = os.path.dirname(_RFS_DIR)
-_UWLAB_DIR = os.path.abspath(os.path.join(_RFS_DIR, "../../../../"))
-_PIP_PACKAGES = os.path.join(_UWLAB_DIR, "third_party", "pip_packages")
-for _p in [_RFS_DIR, _SB3_DIR, _PIP_PACKAGES]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# Sibling modules (wrapper, eval_callback, ...) are imported by bare name.
+setup_third_party_paths()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -111,7 +112,6 @@ signal.signal(signal.SIGINT, cleanup_pbar)
 """Rest everything follows."""
 
 import gymnasium as gym
-import numpy as np
 import torch
 import torch.nn as nn
 import wandb
@@ -126,7 +126,7 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import uwlab_tasks  # noqa: F401
 
-from wrapper import RFSWrapper
+from wrapper import RFSWrapper, parse_dims as _parse_dims
 from gpu_vec_env import GpuSb3VecEnvWrapper
 from eval_callback import RFSEvalCallback
 from callbacks import WandbNoisePredCallback, WandbRewardTermCallback, WandbOutputFormat
@@ -154,18 +154,6 @@ if args_cli.distributed:
 
 
 _ACT_FNS = {"elu": nn.ELU, "tanh": nn.Tanh, "relu": nn.ReLU}
-
-
-def _parse_dims(s: str):
-    if s is None:
-        return None
-    s = s.strip()
-    if not s:
-        return None
-    parts = s.split(":")
-    if len(parts) != 2:
-        raise ValueError(f"Expected 'start:end', got: {s!r}")
-    return (int(parts[0]), int(parts[1]))
 
 
 def _load_cfg(path: str) -> dict:
@@ -197,10 +185,27 @@ def _format_ckpt_meta(meta: dict | None) -> str:
     return ", ".join(parts) if parts else "unavailable"
 
 
+def _enable_pcd_timing(env, rfs_env):
+    """Turn on CachedSamplePC benchmarking for every observation term that supports it."""
+    pcd_terms = []
+    try:
+        for group_terms in env.unwrapped.observation_manager._group_obs_term_cfgs.values():
+            for term_cfg in group_terms:
+                obj = getattr(term_cfg.func, "__self__", None)
+                if obj is not None and hasattr(obj, "do_benchmark"):
+                    obj.do_benchmark = True
+                    pcd_terms.append(obj)
+                    print(f"[PROFILE] Enabled CachedSamplePC timing on {type(obj).__name__}")
+    except Exception as e:
+        print(f"[PROFILE] Could not auto-enable CachedSamplePC timing: {e}")
+    rfs_env._pcd_terms = pcd_terms
+
+
 def main():
     cfg = _load_cfg(args_cli.cfg)
     ppo_cfg = cfg["ppo"]
     rfs_cfg = cfg["rfs"]
+    apply_speed_overrides(rfs_cfg, args_cli)
     eval_cfg = cfg["eval"]
     reg_cfg = cfg.get("reg", None)
     use_gpu_buffer = cfg.get("gpu_buffer", True)
@@ -251,9 +256,7 @@ def main():
 
     need_render = args_cli.video or (eval_cfg["record_video"] and not args_cli.no_eval_video)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if need_render else None)
-
-
-    control_hz = 1 / (env_cfg.sim.dt * env_cfg.decimation) 
+    control_hz = 1 / (env_cfg.sim.dt * env_cfg.decimation)
     if args_cli.video:
         env = gym.wrappers.RecordVideo(env, **{
             "video_folder": os.path.join(log_dir, "videos", "train"),
@@ -263,40 +266,20 @@ def main():
             "fps": control_hz
         })
 
-    rfs_env = RFSWrapper(
+    rfs_env = RFSWrapper.from_cfg(
         env,
         diffusion_path=args_cli.diffusion_path,
-        residual_step=rfs_cfg["residual_step"],
+        rfs_cfg=rfs_cfg,
+        gamma=ppo_cfg["gamma"],
         noise_dims=noise_dims,
         residual_dims=residual_dims,
-        residual_scale=rfs_cfg["residual_scale"],
-        clip_actions=rfs_cfg["clip_actions"],
-        finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
-        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=args_cli.asymmetric_ac,
         symmetric_pcd=args_cli.symmetric_pcd,
-        gamma=ppo_cfg["gamma"],
-        ppo_history=rfs_cfg.get("ppo_history", False),
     )
-    rfs_env.enable_metrics_cache = True
+    rfs_env.enable_metrics_cache = True  # RFSEvalCallback._on_step logs train success from it
     if args_cli.profile_interval > 0:
         rfs_env.profile_interval = args_cli.profile_interval
-        # Walk observation term callables looking for CachedSamplePC instances.
-        try:
-            pcd_terms = []
-            obs_mgr = env.unwrapped.observation_manager
-            for group_terms in obs_mgr._group_obs_term_cfgs.values():
-                for term_cfg in group_terms:
-                    fn = term_cfg.func
-                    obj = getattr(fn, "__self__", None)
-                    if obj is not None and hasattr(obj, "do_benchmark"):
-                        obj.do_benchmark = True
-                        pcd_terms.append(obj)
-                        print(f"[PROFILE] Enabled CachedSamplePC timing on {type(obj).__name__}")
-            rfs_env._pcd_terms = pcd_terms
-        except Exception as _e:
-            print(f"[PROFILE] Could not auto-enable CachedSamplePC timing: {_e}")
+        _enable_pcd_timing(env, rfs_env)
 
     ckpt_path = getattr(rfs_env, "diffusion_ckpt_path", None)
     ckpt_resolved_path = getattr(rfs_env, "diffusion_ckpt_resolved_path", None)
@@ -400,9 +383,6 @@ def main():
     agent.set_logger(sb3_logger)
 
     spawn_cfg = load_spawn_cfg(eval_spawn, "configs/eval/spawns")
-    horizon = getattr(env_cfg, "horizon", 200)
-    
-    residual_step = rfs_cfg["residual_step"]
 
     eval_cb = RFSEvalCallback(
         rfs_env=rfs_env,
@@ -413,6 +393,7 @@ def main():
         record_scatter=True,
         record_debug_plots=(args_cli.eval_debug_plots or args_cli.eval_plots),
         verbose=1,
+        eval_at_start=not args_cli.no_eval_at_start,
     )
     reward_term_cb = WandbRewardTermCallback(env)
     noise_pred_cb = WandbNoisePredCallback(rfs_env)

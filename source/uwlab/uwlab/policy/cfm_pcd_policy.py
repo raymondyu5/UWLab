@@ -105,6 +105,7 @@ class CFMPCDPolicy(BaseImagePolicy):
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.num_inference_steps = num_inference_steps
+        self.autocast_bf16 = False
         self.use_action_history = use_action_history
 
     def _encode_obs(self, nobs: dict, batch_size: int) -> torch.Tensor:
@@ -167,13 +168,16 @@ class CFMPCDPolicy(BaseImagePolicy):
                 dtype=self.dtype,
             )
 
-        trajectory = _rk2(
-            self.model,
-            self.num_inference_steps,
-            trajectory,
-            local_cond=None,
-            global_cond=global_cond,
-        )
+        # Opt-in bf16 autocast for the flow-field UNet (set `autocast_bf16 = True`); default keeps fp32 numerics.
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.autocast_bf16):
+            trajectory = _rk2(
+                self.model,
+                self.num_inference_steps,
+                trajectory,
+                local_cond=None,
+                global_cond=global_cond,
+            )
+        trajectory = trajectory.to(self.dtype)
 
         if do_profile:
             _e2 = torch.cuda.Event(enable_timing=True); _e2.record()

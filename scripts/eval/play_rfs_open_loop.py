@@ -117,7 +117,7 @@ from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.grasp_frank
 )
 from uwlab_tasks.manager_based.manipulation.grasp.mdp.events import reset_robot_joints
 from uwlab_tasks.utils.trajectory_utils import load_real_episode
-from wrapper import RFSWrapper
+from wrapper import RFSWrapper, parse_dims as _parse_dims
 
 
 def _load_eval_cfg(path: str, overrides: list) -> dict:
@@ -162,18 +162,6 @@ def _load_yaml(path: str) -> dict:
     p = path if os.path.isabs(path) else os.path.join(_UWLAB_DIR, path)
     with open(p) as f:
         return yaml.safe_load(f)
-
-
-def _parse_dims(s: str | None):
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-    parts = s.split(":")
-    if len(parts) != 2:
-        raise ValueError(f"Expected 'start:end', got: {s!r}")
-    return (int(parts[0]), int(parts[1]))
 
 
 # --- Trajectory / reset helpers (same as play_bc_open_loop; do not import that module). ---
@@ -714,20 +702,14 @@ def main():
 
     asymmetric_ac = resolve_asymmetric_ac(args_cli.asymmetric_ac, rfs_cfg, args_cli.rfs_checkpoint)
 
-    rfs_env = RFSWrapper(
+    rfs_env = RFSWrapper.from_cfg(
         base_env,
         diffusion_path=diffusion_path,
-        residual_step=rfs_cfg["residual_step"],
+        rfs_cfg=rfs_cfg,
+        gamma=ppo_cfg["gamma"],
         noise_dims=noise_dims,
         residual_dims=residual_dims,
-        residual_scale=rfs_cfg["residual_scale"],
-        clip_actions=rfs_cfg["clip_actions"],
-        finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
-        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=asymmetric_ac,
-        gamma=float(ppo_cfg["gamma"]),
-        ppo_history=rfs_cfg.get("ppo_history", False),
     )
 
     if rfs_env.residual_step != 1:

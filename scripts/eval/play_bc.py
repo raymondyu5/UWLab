@@ -691,15 +691,21 @@ def main():
                 metrics = isaac_env.metrics.get_metrics()
                 last_success[active] = torch.from_numpy(metrics["is_success"]).to(device)[active]
                 last_grasped[active] = torch.from_numpy(metrics["is_grasped"]).to(device)[active]
-                last_lifted[active] = torch.from_numpy(metrics["is_healthy_z"]).to(device)[active]
-                last_near_miss[active] = torch.from_numpy(metrics["is_near_miss"]).to(device)[active]
+                lifted_key = "is_healthy_z" if "is_healthy_z" in metrics else "is_lifted"
+                if lifted_key in metrics:
+                    last_lifted[active] = torch.from_numpy(metrics[lifted_key]).to(device)[active]
+                if "is_near_miss" in metrics:  # pour-only metric
+                    last_near_miss[active] = torch.from_numpy(metrics["is_near_miss"]).to(device)[active]
 
                 # Record pre-step state so post-reset snapshots are never logged.
                 ee_pose = isaac_env.cfg.observations.policy.ee_pose.func(
                     isaac_env, **isaac_env.cfg.observations.policy.ee_pose.params)
                 obj = _get_object_asset(env)
                 obj_pose = obj.data.root_pos_w - isaac_env.scene.env_origins  # (B, 3)
-                bottle_pos, tip_pos, cup_pos = compute_tip_pos(isaac_env)
+                try:
+                    bottle_pos, tip_pos, cup_pos = compute_tip_pos(isaac_env)
+                except KeyError:  # task has no cup (e.g. cube grasp): skip pour debug plots
+                    bottle_pos = tip_pos = cup_pos = obj_pose
                 ee_pos_traj.append(ee_pose[:, :3].detach().cpu().numpy())
                 bottle_pos_traj.append(bottle_pos.detach().cpu().numpy())
                 tip_pos_traj.append(tip_pos.detach().cpu().numpy())
@@ -750,7 +756,7 @@ def main():
             n_near_miss = int(last_near_miss.sum())
             logger.end_episode(n_success / num_envs, n_success=n_success, n_total=num_envs,
                                extra_metrics={"n_grasped": n_grasped, "n_lifted": n_lifted, "n_near_miss": n_near_miss})
-            if len(bottle_pos_traj) > 0 and args_cli.sim_type == "eval":
+            if len(bottle_pos_traj) > 0 and args_cli.sim_type == "eval" and "pink_cup" in isaac_env.scene.keys():
                 _plot_debug_poses(
                     ee_traj=np.stack(ee_pos_traj, axis=0),
                     bottle_traj=np.stack(bottle_pos_traj, axis=0),

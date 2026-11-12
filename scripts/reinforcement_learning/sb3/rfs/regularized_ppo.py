@@ -143,12 +143,12 @@ class RegularizedPPO(PPO):
             # Populate ep_info_buffer for done envs so SB3's _dump_logs works correctly.
             ep_info = infos["episode"]
             reset_mask = ep_info["mask"]
-            if reset_mask.any():
-                for idx in reset_mask.nonzero(as_tuple=True)[0]:
-                    self.ep_info_buffer.extend([{
-                        "r": ep_info["r"][idx].item(),
-                        "l": int(ep_info["l"][idx].item()),
-                    }])
+            done_idx = reset_mask.nonzero(as_tuple=True)[0]
+            if done_idx.numel() > 0:
+                # one GPU->CPU transfer for all finished episodes (not two .item() syncs per env)
+                ep_r = ep_info["r"][done_idx].cpu().tolist()
+                ep_l = ep_info["l"][done_idx].cpu().tolist()
+                self.ep_info_buffer.extend([{"r": r, "l": int(l)} for r, l in zip(ep_r, ep_l)])
 
             n_steps += 1
 

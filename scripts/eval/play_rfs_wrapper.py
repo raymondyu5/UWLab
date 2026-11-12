@@ -26,6 +26,9 @@ setup_third_party_paths()
 
 from isaaclab.app import AppLauncher
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../scripts/reinforcement_learning/sb3/rfs"))
+from speed_args import add_speed_args, apply_speed_overrides  # noqa: E402
+
 parser = argparse.ArgumentParser(description="RFS eval via RFSEvalCallback (PPO or Gaussian noise).")
 parser.add_argument("--eval_cfg", type=str, required=True, help="YAML with task_id, spawn, device, etc.")
 parser.add_argument(
@@ -55,6 +58,7 @@ parser.add_argument(
     help="eval/distill/rl → env parse mode.",
 )
 parser.add_argument("--seed", type=int, default=42)
+add_speed_args(parser)
 parser.add_argument("--output_dir", type=str, default=None, help="Eval logs / videos root.")
 parser.add_argument(
     "--asymmetric_ac",
@@ -111,24 +115,9 @@ import uwlab_tasks  # noqa: F401  registers gym envs
 
 _UWLAB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 _SPAWNS_DIR = os.path.join(_UWLAB_DIR, "configs/eval/spawns")
-_RFS_DIR = os.path.join(_UWLAB_DIR, "scripts/reinforcement_learning/sb3/rfs")
-if _RFS_DIR not in sys.path:
-    sys.path.insert(0, _RFS_DIR)
 
 from asymmetric_policy import AsymmetricActorCriticPolicy, resolve_asymmetric_ac
-from wrapper import RFSWrapper
-
-
-def _parse_dims(s: str | None):
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-    parts = s.split(":")
-    if len(parts) != 2:
-        raise ValueError(f"Expected 'start:end', got: {s!r}")
-    return (int(parts[0]), int(parts[1]))
+from wrapper import RFSWrapper, parse_dims as _parse_dims
 
 
 def _load_yaml(path: str) -> dict:
@@ -166,6 +155,8 @@ class GaussianNoisePolicy:
 
 def main():
     eval_cfg = _load_eval_cfg(args_cli.eval_cfg, args_cli.overrides)
+    if not args_cli.rfs_checkpoint:
+        args_cli.rfs_checkpoint = eval_cfg.get("rfs_checkpoint")
 
     diffusion_path = args_cli.diffusion_path or eval_cfg.get("diffusion_path") or eval_cfg.get("checkpoint")
     if diffusion_path is None:
@@ -178,6 +169,7 @@ def main():
     cfg = _load_yaml(rfs_yaml_path)
     ppo_cfg = cfg["ppo"]
     rfs_cfg = cfg["rfs"]
+    apply_speed_overrides(rfs_cfg, args_cli)
 
     noise_dims = _parse_dims(args_cli.noise_dims or rfs_cfg["noise_dims"])
     residual_dims = _parse_dims(args_cli.residual_dims or rfs_cfg.get("residual_dims") or "")
@@ -208,20 +200,14 @@ def main():
 
     asymmetric_ac = resolve_asymmetric_ac(args_cli.asymmetric_ac, rfs_cfg, args_cli.rfs_checkpoint)
 
-    rfs_env = RFSWrapper(
+    rfs_env = RFSWrapper.from_cfg(
         env,
         diffusion_path=diffusion_path,
-        residual_step=rfs_cfg["residual_step"],
+        rfs_cfg=rfs_cfg,
+        gamma=ppo_cfg["gamma"],
         noise_dims=noise_dims,
         residual_dims=residual_dims,
-        residual_scale=rfs_cfg["residual_scale"],
-        clip_actions=rfs_cfg["clip_actions"],
-        finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
-        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
         asymmetric_ac=asymmetric_ac,
-        gamma=float(ppo_cfg["gamma"]),
-        ppo_history=rfs_cfg.get("ppo_history", False),
     )
 
     sb3_env = Sb3VecEnvWrapper(rfs_env)

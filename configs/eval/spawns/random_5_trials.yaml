@@ -1,0 +1,2 @@
+poses: []   # empty = use env default random reset
+num_trials: 5

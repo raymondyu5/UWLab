@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
+from uwlab.utils.paths import setup_third_party_paths
 
 parser = argparse.ArgumentParser(description="Evaluate a trained RFS PPO checkpoint.")
 
@@ -45,13 +46,11 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
 
+# Sibling modules (wrapper, eval_callback, ...) are imported by bare name.
 _RFS_DIR = os.path.dirname(os.path.abspath(__file__))
-_SB3_DIR = os.path.dirname(_RFS_DIR)
-_UWLAB_DIR = os.path.abspath(os.path.join(_RFS_DIR, "../../../../"))
-_PIP_PACKAGES = os.path.join(_UWLAB_DIR, "third_party", "pip_packages")
-for _p in [_RFS_DIR, _SB3_DIR, _PIP_PACKAGES]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if _RFS_DIR not in sys.path:
+    sys.path.insert(0, _RFS_DIR)
+setup_third_party_paths()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -70,7 +69,7 @@ from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import uwlab_tasks  # noqa: F401
 
-from wrapper import RFSWrapper
+from wrapper import RFSWrapper, parse_dims as _parse_dims
 from gpu_vec_env import GpuSb3VecEnvWrapper
 from eval_callback import RFSEvalCallback
 from callbacks import WandbOutputFormat
@@ -78,14 +77,6 @@ from asymmetric_policy import AsymmetricActorCriticPolicy
 from regularized_ppo import RegularizedPPO
 from buffers import GpuDictRolloutBuffer
 from uwlab.eval.spawn import load_spawn_cfg
-
-
-def _parse_dims(s: str):
-    s = s.strip()
-    parts = s.split(":")
-    if len(parts) != 2:
-        raise ValueError(f"Expected 'start:end', got: {s!r}")
-    return (int(parts[0]), int(parts[1]))
 
 
 def _load_cfg(path: str) -> dict:
@@ -123,20 +114,13 @@ def main():
     need_render = eval_cfg["record_video"] and not args_cli.no_eval_video
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if need_render else None)
 
-    rfs_env = RFSWrapper(
+    rfs_env = RFSWrapper.from_cfg(
         env,
         diffusion_path=args_cli.diffusion_path,
-        residual_step=rfs_cfg["residual_step"],
-        noise_dims=_parse_dims(rfs_cfg["noise_dims"]),
-        residual_dims=residual_dims,
-        residual_scale=rfs_cfg["residual_scale"],
-        clip_actions=rfs_cfg["clip_actions"],
-        finger_smooth_alpha=rfs_cfg["finger_smooth_alpha"],
-        finger_start_dim=rfs_cfg.get("finger_start_dim", 6),
-        num_warmup_steps=rfs_cfg.get("num_warmup_steps", 0),
-        asymmetric_ac=args_cli.asymmetric_ac,
+        rfs_cfg=rfs_cfg,
         gamma=cfg["ppo"]["gamma"],
-        ppo_history=rfs_cfg.get("ppo_history", False),
+        residual_dims=residual_dims,
+        asymmetric_ac=args_cli.asymmetric_ac,
     )
 
     sb3_env = GpuSb3VecEnvWrapper(rfs_env) if use_gpu_buffer else Sb3VecEnvWrapper(rfs_env)

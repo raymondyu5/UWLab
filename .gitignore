@@ -79,3 +79,7 @@ data/
 .uw-lab-docker-history
 assets/
 third_party/pip_packages/
+
+commands/**/*.out
+commands/**/*.err
+.claude/settings.local.json

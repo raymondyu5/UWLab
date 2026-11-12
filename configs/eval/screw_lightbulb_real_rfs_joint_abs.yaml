@@ -1,0 +1,8 @@
+task_id: UW-FrankaLeap-ScrewLightbulb-RealLightbulb-JointAbs-v0
+diffusion_path: logs/base/bc_cfm_pcd_screw_lightbulb_0503_absjoint_h16_hist4_extnoise_fast
+rfs_checkpoint: logs/rfs/ScrewLightbulb-RealLightbulb-JointAbs_0507_2200_06f859/model_000150.zip
+device: cuda:0
+num_envs: 64
+spawn: random_5_trials
+record_video: true
+record_plots: false

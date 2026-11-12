@@ -1,0 +1,8 @@
+task_id: UW-FrankaLeap-GraspCube-JointAbs-v0
+diffusion_path: logs/base/bc_cfm_pcd_cube_base70_retry40_0508_absjoint_h16_hist4_extnoise_fast
+rfs_checkpoint: logs/rfs/GraspCube-JointAbs_0509_0950_e7765f/model_000150.zip
+device: cuda:0
+num_envs: 64
+spawn: random_5_trials
+record_video: true
+record_plots: false

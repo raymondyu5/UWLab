@@ -11,255 +11,16 @@ import os
 
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
 import wandb
 from stable_baselines3.common.callbacks import BaseCallback
 
 from uwlab.eval.eval_logger import EvalLogger
-from uwlab.eval.spawn import SpawnCfg, SpawnPose
+from uwlab.eval.spawn import SpawnCfg
+try:  # imported as a package (scripts.reinforcement_learning.sb3.rfs) or as a bare module (rfs/ on sys.path)
+    from .eval_plots import _plot_debug_poses, _plot_debug_rewards
+except ImportError:
+    from eval_plots import _plot_debug_poses, _plot_debug_rewards
 from uwlab_tasks.manager_based.manipulation.grasp.config.franka_leap.tasks.rewards.pour_rewards import compute_tip_pos
-
-
-def _plot_debug_poses(
-    ee_traj: np.ndarray,
-    bottle_traj: np.ndarray,
-    tip_traj: np.ndarray,
-    cup_traj: np.ndarray,
-    output_dir: str,
-    episode_idx: int,
-    done_steps: list[int | None] | None = None,
-):
-    """Save per-env debug plots for XY trajectories and Z-over-time."""
-    num_envs = bottle_traj.shape[1]
-    n_cols = min(4, num_envs)
-    n_rows = int(np.ceil(num_envs / n_cols))
-
-    bottle_color = "#8B4513"  # saddle brown
-    tip_color = "#000000"  # black
-    cup_color = "#FFC0CB"  # pink
-    ee_color = "#2E8B57"  # sea green
-
-    t_total = bottle_traj.shape[0]
-
-    # XY trajectories
-    fig_xy, axes_xy = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4.2 * n_rows), squeeze=False)
-    for env_id in range(num_envs):
-        t_end = t_total
-        if done_steps is not None and done_steps[env_id] is not None:
-            t_end = int(done_steps[env_id]) + 1
-
-        r, c = divmod(env_id, n_cols)
-        ax = axes_xy[r][c]
-
-        b_xy = bottle_traj[:t_end, env_id, :2]
-        t_xy = tip_traj[:t_end, env_id, :2]
-        c_xy = cup_traj[:t_end, env_id, :2]
-        ee_xy = ee_traj[:t_end, env_id, :2]
-
-        ax.plot(ee_xy[:, 0], ee_xy[:, 1], color=ee_color, linewidth=1.6, alpha=0.9)
-        ax.scatter(ee_xy[0, 0], ee_xy[0, 1], color=ee_color, s=30, marker="o")
-        ax.scatter(ee_xy[-1, 0], ee_xy[-1, 1], color=ee_color, s=40, marker="x")
-
-        ax.plot(b_xy[:, 0], b_xy[:, 1], color=bottle_color, linewidth=1.6, alpha=0.9)
-        ax.scatter(b_xy[0, 0], b_xy[0, 1], color=bottle_color, s=30, marker="o")
-        ax.scatter(b_xy[-1, 0], b_xy[-1, 1], color=bottle_color, s=40, marker="x")
-
-        ax.plot(t_xy[:, 0], t_xy[:, 1], color=tip_color, linewidth=1.6, alpha=0.9)
-        ax.scatter(t_xy[0, 0], t_xy[0, 1], color=tip_color, s=30, marker="o")
-        ax.scatter(t_xy[-1, 0], t_xy[-1, 1], color=tip_color, s=40, marker="x")
-
-        ax.scatter(c_xy[:, 0], c_xy[:, 1], color=cup_color, s=12, alpha=0.45)
-        ax.scatter(c_xy[0, 0], c_xy[0, 1], color=cup_color, s=30, marker="o")
-        ax.scatter(c_xy[-1, 0], c_xy[-1, 1], color=cup_color, s=40, marker="x")
-
-        ax.set_title(f"env {env_id}")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.grid(alpha=0.25)
-        ax.axis("equal")
-
-    for env_id in range(num_envs, n_rows * n_cols):
-        r, c = divmod(env_id, n_cols)
-        axes_xy[r][c].axis("off")
-
-    fig_xy.tight_layout()
-    xy_path = os.path.join(output_dir, f"debug_pose_xy_ep{episode_idx + 1:03d}.png")
-    fig_xy.savefig(xy_path, dpi=180)
-    plt.close(fig_xy)
-
-    # Z over time
-    fig_z, axes_z = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 3.6 * n_rows), squeeze=False)
-    for env_id in range(num_envs):
-        t_end = t_total
-        if done_steps is not None and done_steps[env_id] is not None:
-            t_end = int(done_steps[env_id]) + 1
-
-        r, c = divmod(env_id, n_cols)
-        ax = axes_z[r][c]
-
-        b_z = tip_traj[:t_end, env_id, 2]
-        c_z = cup_traj[:t_end, env_id, 2]
-        step_idx = np.arange(b_z.shape[0])
-
-        ax.plot(step_idx, b_z, color=bottle_color, linewidth=1.8, label="bottle z")
-        ax.plot(step_idx, c_z, color=cup_color, linewidth=1.8, label="cup z")
-
-        ax.set_title(f"env {env_id}")
-        ax.set_xlabel("step")
-        ax.set_ylabel("z")
-        ax.grid(alpha=0.25)
-        ax.legend(loc="best", fontsize=8)
-
-    for env_id in range(num_envs, n_rows * n_cols):
-        r, c = divmod(env_id, n_cols)
-        axes_z[r][c].axis("off")
-
-    fig_z.tight_layout()
-    z_path = os.path.join(output_dir, f"debug_pose_z_ep{episode_idx + 1:03d}.png")
-    fig_z.savefig(z_path, dpi=180)
-    plt.close(fig_z)
-
-
-def _plot_debug_bottle_motion(
-    bottle_traj: np.ndarray,
-    output_dir: str,
-    episode_idx: int,
-    done_steps: list[int | None] | None = None,
-):
-    """
-    Save per-env debug plots for bottle XY trajectories.
-
-    Mirrors `scripts/eval/play_bc.py` style (n_rows/n_cols, markers, dpi/fig sizes).
-    """
-    num_envs = bottle_traj.shape[1]
-    n_cols = min(4, num_envs)
-    n_rows = int(np.ceil(num_envs / n_cols))
-
-    bottle_color = "#8B4513"  # saddle brown
-
-    fig_xy, axes_xy = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(4.5 * n_cols, 4.2 * n_rows),
-        squeeze=False,
-    )
-    t_total = bottle_traj.shape[0]
-    for env_id in range(num_envs):
-        t_end = t_total
-        if done_steps is not None and done_steps[env_id] is not None:
-            t_end = int(done_steps[env_id]) + 1
-        r, c = divmod(env_id, n_cols)
-        ax = axes_xy[r][c]
-
-        b_xy = bottle_traj[:t_end, env_id, :2]  # (t_end, 2)
-        ax.plot(b_xy[:, 0], b_xy[:, 1], color=bottle_color, linewidth=1.6, alpha=0.9)
-        ax.scatter(b_xy[0, 0], b_xy[0, 1], color=bottle_color, s=30, marker="o")
-        ax.scatter(b_xy[-1, 0], b_xy[-1, 1], color=bottle_color, s=40, marker="x")
-
-        ax.set_title(f"env {env_id}")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.grid(alpha=0.25)
-        ax.axis("equal")
-
-    for env_id in range(num_envs, n_rows * n_cols):
-        r, c = divmod(env_id, n_cols)
-        axes_xy[r][c].axis("off")
-
-    fig_xy.tight_layout()
-    xy_path = os.path.join(output_dir, f"debug_pose_xy_ep{episode_idx + 1:03d}.png")
-    fig_xy.savefig(xy_path, dpi=180)
-    plt.close(fig_xy)
-
-
-def _plot_debug_object_z(
-    bottle_traj: np.ndarray,
-    output_dir: str,
-    episode_idx: int,
-    done_steps: list[int | None] | None = None,
-):
-    """Save per-env debug plots for bottle/object z over time."""
-    num_envs = bottle_traj.shape[1]
-    n_cols = min(4, num_envs)
-    n_rows = int(np.ceil(num_envs / n_cols))
-
-    bottle_color = "#8B4513"  # saddle brown
-
-    fig_z, axes_z = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(4.5 * n_cols, 3.6 * n_rows),
-        squeeze=False,
-    )
-    t_total = bottle_traj.shape[0]
-    for env_id in range(num_envs):
-        t_end = t_total
-        if done_steps is not None and done_steps[env_id] is not None:
-            t_end = int(done_steps[env_id]) + 1
-        r, c = divmod(env_id, n_cols)
-        ax = axes_z[r][c]
-
-        b_z = bottle_traj[:t_end, env_id, 2]
-        step_idx = np.arange(b_z.shape[0])
-        ax.plot(step_idx, b_z, color=bottle_color, linewidth=1.8, label="object z")
-
-        ax.set_title(f"env {env_id}")
-        ax.set_xlabel("step")
-        ax.set_ylabel("z")
-        ax.grid(alpha=0.25)
-        ax.legend(loc="best", fontsize=8)
-
-    for env_id in range(num_envs, n_rows * n_cols):
-        r, c = divmod(env_id, n_cols)
-        axes_z[r][c].axis("off")
-
-    fig_z.tight_layout()
-    z_path = os.path.join(output_dir, f"debug_object_z_ep{episode_idx + 1:03d}.png")
-    fig_z.savefig(z_path, dpi=180)
-    plt.close(fig_z)
-
-
-def _plot_debug_rewards(
-    reward_traj: np.ndarray,
-    output_dir: str,
-    episode_idx: int,
-    done_steps: list[int | None] | None = None,
-):
-    """Save per-env reward-over-time debug plots."""
-    num_envs = reward_traj.shape[1]
-    n_cols = min(4, num_envs)
-    n_rows = int(np.ceil(num_envs / n_cols))
-
-    fig_rew, axes_rew = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(4.5 * n_cols, 3.6 * n_rows),
-        squeeze=False,
-    )
-    t_total = reward_traj.shape[0]
-    for env_id in range(num_envs):
-        t_end = t_total
-        if done_steps is not None and done_steps[env_id] is not None:
-            t_end = int(done_steps[env_id]) + 1
-        r, c = divmod(env_id, n_cols)
-        ax = axes_rew[r][c]
-
-        rew = reward_traj[:t_end, env_id]
-        step_idx = np.arange(rew.shape[0])
-        ax.plot(step_idx, rew, color="#1F77B4", linewidth=1.8)
-        ax.set_title(f"env {env_id}")
-        ax.set_xlabel("step")
-        ax.set_ylabel("reward")
-        ax.grid(alpha=0.25)
-
-    for env_id in range(num_envs, n_rows * n_cols):
-        r, c = divmod(env_id, n_cols)
-        axes_rew[r][c].axis("off")
-
-    fig_rew.tight_layout()
-    rew_path = os.path.join(output_dir, f"debug_reward_ep{episode_idx + 1:03d}.png")
-    fig_rew.savefig(rew_path, dpi=180)
-    plt.close(fig_rew)
 
 
 def _sb3_process_obs(obs_dict: dict) -> dict:
@@ -307,8 +68,10 @@ class RFSEvalCallback(BaseCallback):
         record_scatter: bool = True,
         record_debug_plots: bool = False,
         verbose: int = 0,
+        eval_at_start: bool = True,
     ):
         super().__init__(verbose=verbose)
+        self.eval_at_start = eval_at_start
         self.rfs_env = rfs_env
         self.spawn_cfg = spawn_cfg
 
@@ -324,10 +87,6 @@ class RFSEvalCallback(BaseCallback):
         self._steps_to_success_buffer = collections.deque(maxlen=400)
         # Extra metric buffers keyed by metric name — populated lazily from env's metrics_spec.
         self._extra_buffers: dict[str, collections.deque] = {}
-        self._last_extra: dict[str, list] = {}
-        self._last_success = [False] * rfs_env.num_envs
-        self._last_grasped = [False] * rfs_env.num_envs
-        self._cache_initialized = [False] * rfs_env.num_envs
         self._ep_step_count = [0] * rfs_env.num_envs
         self._first_success_step = [None] * rfs_env.num_envs
         self._rollout_count = 0
@@ -345,7 +104,8 @@ class RFSEvalCallback(BaseCallback):
         return max(1, (max_ep - ep_buf) // self.rfs_env.residual_step)
 
     def _on_training_start(self) -> None:
-        self._run_eval()
+        if self.eval_at_start:
+            self._run_eval()
 
     def _on_rollout_end(self) -> None:
         self._rollout_count += 1
@@ -365,11 +125,14 @@ class RFSEvalCallback(BaseCallback):
             metrics_seen = getattr(self.rfs_env, "_metrics_seen", None)
             if metrics_seen is None:
                 return True
+            # One stacked GPU->CPU transfer instead of a sync per (env, metric) scalar read below.
+            keys = list(metrics_seen)
+            stacked = torch.stack([metrics_seen[k] for k in keys]).cpu().numpy()
+            metrics_seen = dict(zip(keys, stacked))
             # Lazily create extra buffers for any metrics beyond is_success / is_grasped.
             for key in metrics_seen:
                 if key not in ("is_success", "is_grasped") and key not in self._extra_buffers:
                     self._extra_buffers[key] = collections.deque(maxlen=400)
-                    self._last_extra[key] = [False] * self.rfs_env.num_envs
             for i, done in enumerate(dones):
                 if done:
                     self._success_buffer.append(float(metrics_seen["is_success"][i]))
@@ -378,21 +141,12 @@ class RFSEvalCallback(BaseCallback):
                         self._steps_to_success_buffer.append(self._first_success_step[i])
                     for key, buf in self._extra_buffers.items():
                         buf.append(float(metrics_seen[key][i]))
-                        self._last_extra[key][i] = False
-                    self._last_success[i] = False
-                    self._last_grasped[i] = False
-                    self._cache_initialized[i] = False
                     self._ep_step_count[i] = 0
                     self._first_success_step[i] = None
                 else:
                     self._ep_step_count[i] += 1
-                    self._last_success[i] = float(metrics_seen["is_success"][i])
-                    self._last_grasped[i] = float(metrics_seen["is_grasped"][i])
                     if self._first_success_step[i] is None and metrics_seen["is_success"][i]:
                         self._first_success_step[i] = self._ep_step_count[i]
-                    for key in self._extra_buffers:
-                        self._last_extra[key][i] = float(metrics_seen[key][i])
-                    self._cache_initialized[i] = True
             if len(self._success_buffer) == self._success_buffer.maxlen:
                 log_dict = {
                     "train/success_rate": sum(self._success_buffer) / len(self._success_buffer),

@@ -1,0 +1,9 @@
+task_id: UW-FrankaLeap-GraspCube-JointAbs-v0
+checkpoint: logs/final_bc_checkpoints/bc_cfm_pcd_cube_grasp_normal_only_0412_absjoint_h16_hist4_noextnoise_fast
+device: cuda:0
+num_envs: 1
+action_horizon: 8   # steps to execute before re-querying policy
+num_warmup_steps: 5
+spawn: random_5_trials
+record_video: true
+record_plots: true

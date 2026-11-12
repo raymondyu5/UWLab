@@ -77,6 +77,15 @@ def obs_manipulated_object_pose(env) -> torch.Tensor:
     return obj_pose
 
 
+def obs_target_object_pose(env) -> torch.Tensor:
+    """PLACEHOLDER (zeros, 7D): the original term the RFS CupPour ckpts were trained with is lost.
+
+    Critic-only obs; exists so eval of those ckpts passes the observation-space check.
+    Do not rely on its values for training.
+    """
+    return torch.zeros(env.num_envs, 7, device=env.device)
+
+
 def obs_ball_velocity(env) -> torch.Tensor:
     ball_vel = env.scene["ping_pong_ball"]._data.root_state_w[:, 7:13]
     return ball_vel
@@ -218,7 +227,8 @@ class CupPourFrankaLeapCfg(grasp_franka_leap.FrankaLeapGraspEnvCfg):
         self.observations.policy.big_cup_pose = ObsTerm(func=obs_big_cup_pose)
         self.observations.policy.ball_pose = ObsTerm(func=obs_ball_pose)
         self.observations.policy.manipulated_object_pose = ObsTerm(func=obs_manipulated_object_pose)
-        self.observations.policy.ball_velocity = ObsTerm(func=obs_ball_velocity)
+        self.observations.policy.target_object_pose = ObsTerm(func=obs_target_object_pose)  # placeholder, see func
+        # ball_velocity obs (obs_ball_velocity) disabled: RFS checkpoints were trained without it.
 
         synth_pc = CachedSamplePC(
             asset_name="robot",
